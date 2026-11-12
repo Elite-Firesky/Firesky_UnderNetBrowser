@@ -195,6 +195,7 @@ struct CompositionBrowser::Impl {
     std::mutex frameMutex;
     ID3D11Texture2D* latest = nullptr; // AddRef'd
     UINT cW=0,cH=0,tW=0,tH=0; DXGI_FORMAT fmt=DXGI_FORMAT_UNKNOWN; uint64_t seq=0,copied=0;
+    uint64_t lastFullDiagBuildMs = 0; // throttle expensive per-frame diag string rebuilds
 
     // blit
     ID3D11VertexShader* vs=nullptr; ID3D11PixelShader* ps=nullptr; ID3D11SamplerState* samp=nullptr; ID3D11Buffer* cb=nullptr; ID3D11BlendState* blend=nullptr; ID3D11RasterizerState* rs=nullptr; bool blitReady=false;
@@ -1959,78 +1960,88 @@ bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D*
             m_impl->tFirstUnityBlitMs.compare_exchange_strong(e, s? (int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed);
         }
     }
-    char info[1024]; sprintf_s(info, "comp blit ok | content=%ux%u tex=%ux%u srcFmt=%d dstFmt=%d dst=%ux%u | in: focusReq=%llu focusApp=%llu keyQ=%llu keyPost=%llu textQ=%llu textInj=%llu scriptQ=%llu scriptExec=%llu md=%llu mu=%llu mw=%llu lastKey=%u/%llu nativeBlocked=%llu | audio: known=%d playing=%d muted=%d",
-        cW,cH,srcDesc.Width,srcDesc.Height,(int)srcDesc.Format,(int)dstDesc.Format,dstDesc.Width,dstDesc.Height,
-        (unsigned long long)m_impl->diagFocusReqSet.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagFocusApplied.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagKeysQueued.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagKeysPosted.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagTextQueued.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagTextInjected.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagScriptQueued.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagScriptExec.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagMouseDownQueued.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagMouseUpQueued.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagMouseWheelQueued.load(std::memory_order_relaxed),
-        (unsigned)m_impl->diagLastKeyMsg.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagLastKeyWParam.load(std::memory_order_relaxed),
-        (unsigned long long)m_impl->diagNativeBlockedRequests.load(std::memory_order_relaxed),
-        m_impl->diagAudioStateKnown.load(std::memory_order_relaxed),
-        m_impl->diagDocumentPlayingAudio.load(std::memory_order_relaxed),
-        m_impl->diagIsMuted.load(std::memory_order_relaxed));
-    std::string spatial;
-    {
-        std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-        spatial = m_impl->spatialDiag;
+    // Throttle expensive diag string formatting/storage (runs on render thread after every copied frame).
+    // Keep a lightweight "comp blit ok" diag between refreshes so managed first-frame detection remains reliable.
+    uint64_t nowDiagMs = GetTickCount64();
+    bool buildFullDiag = (m_impl->lastFullDiagBuildMs == 0) || (nowDiagMs - m_impl->lastFullDiagBuildMs >= 250);
+    if (!buildFullDiag) {
+        outDiag = "comp blit ok";
+        SetDiag(outDiag);
+    } else {
+        m_impl->lastFullDiagBuildMs = nowDiagMs;
+        char info[1024]; sprintf_s(info, "comp blit ok | content=%ux%u tex=%ux%u srcFmt=%d dstFmt=%d dst=%ux%u | in: focusReq=%llu focusApp=%llu keyQ=%llu keyPost=%llu textQ=%llu textInj=%llu scriptQ=%llu scriptExec=%llu md=%llu mu=%llu mw=%llu lastKey=%u/%llu nativeBlocked=%llu | audio: known=%d playing=%d muted=%d",
+            cW,cH,srcDesc.Width,srcDesc.Height,(int)srcDesc.Format,(int)dstDesc.Format,dstDesc.Width,dstDesc.Height,
+            (unsigned long long)m_impl->diagFocusReqSet.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagFocusApplied.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagKeysQueued.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagKeysPosted.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagTextQueued.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagTextInjected.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagScriptQueued.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagScriptExec.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagMouseDownQueued.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagMouseUpQueued.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagMouseWheelQueued.load(std::memory_order_relaxed),
+            (unsigned)m_impl->diagLastKeyMsg.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagLastKeyWParam.load(std::memory_order_relaxed),
+            (unsigned long long)m_impl->diagNativeBlockedRequests.load(std::memory_order_relaxed),
+            m_impl->diagAudioStateKnown.load(std::memory_order_relaxed),
+            m_impl->diagDocumentPlayingAudio.load(std::memory_order_relaxed),
+            m_impl->diagIsMuted.load(std::memory_order_relaxed));
+        std::string spatial;
+        {
+            std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
+            spatial = m_impl->spatialDiag;
+        }
+        if (!spatial.empty()) {
+            // Append compact spatial PoC diagnostics (Gate A instrumentation). No behavior change.
+            char sfx[320];
+            sprintf_s(sfx, " | %s st=%d pid=%u pk=%llu fr=%llu by=%llu und=%llu err=%llu fmt=%u/%uch",
+                spatial.c_str(),
+                m_impl->spatialCaptureStatus.load(std::memory_order_relaxed),
+                (unsigned)m_impl->spatialTargetPid.load(std::memory_order_relaxed),
+                (unsigned long long)m_impl->spatialPackets.load(std::memory_order_relaxed),
+                (unsigned long long)m_impl->spatialFrames.load(std::memory_order_relaxed),
+                (unsigned long long)m_impl->spatialBytes.load(std::memory_order_relaxed),
+                (unsigned long long)m_impl->spatialUnderruns.load(std::memory_order_relaxed),
+                (unsigned long long)m_impl->spatialErrors.load(std::memory_order_relaxed),
+                (unsigned)m_impl->spatialSampleRate.load(std::memory_order_relaxed),
+                (unsigned)m_impl->spatialChannels.load(std::memory_order_relaxed));
+            strncat_s(info, sfx, _TRUNCATE);
+        }
+        std::string full = info;
+        if (m_impl) {
+            char st[440];
+            sprintf_s(st, " | startup: envReq=%lld envCb=%lld ctrlReq=%lld ctrlCb=%lld visual=%lld capStart=%lld navReq=%lld navStart=%lld content=%lld dom=%lld navDone=%lld navSt=%lld firstFrame=%lld firstStore=%lld firstBlit=%lld extGetReq=%lld extGetCb=%lld extPass=%lld initTotal=%lld",
+                (long long)m_impl->tEnvReqMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tEnvCbMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tCtrlReqMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tCtrlCbMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tVisualDoneMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tCaptureStartMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tNavReqMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tNavStartingMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tContentLoadingMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tDomContentLoadedMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tNavCompletedMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tNavCompletedStatus.load(std::memory_order_relaxed),
+                (long long)m_impl->tFirstFrameArrivedMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tFirstFrameStoredMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tFirstUnityBlitMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tExtGetReqMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tExtGetCbMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tExtInstallPassDoneMs.load(std::memory_order_relaxed),
+                (long long)m_impl->tInitTotalMs.load(std::memory_order_relaxed));
+            full += st;
+        }
+        if (m_impl && !m_impl->initTimingSummary.empty()) { full += " | init: "; full += m_impl->initTimingSummary; }
+        if (m_impl) {
+            std::string ext;
+            try { std::lock_guard<std::mutex> lk(m_impl->extDiagMutex); ext = m_impl->extDiag; } catch (...) {}
+            if (!ext.empty()) { full += " | ext: "; full += ext; }
+        }
+        outDiag = full; SetDiag(outDiag);
     }
-    if (!spatial.empty()) {
-        // Append compact spatial PoC diagnostics (Gate A instrumentation). No behavior change.
-        char sfx[320];
-        sprintf_s(sfx, " | %s st=%d pid=%u pk=%llu fr=%llu by=%llu und=%llu err=%llu fmt=%u/%uch",
-            spatial.c_str(),
-            m_impl->spatialCaptureStatus.load(std::memory_order_relaxed),
-            (unsigned)m_impl->spatialTargetPid.load(std::memory_order_relaxed),
-            (unsigned long long)m_impl->spatialPackets.load(std::memory_order_relaxed),
-            (unsigned long long)m_impl->spatialFrames.load(std::memory_order_relaxed),
-            (unsigned long long)m_impl->spatialBytes.load(std::memory_order_relaxed),
-            (unsigned long long)m_impl->spatialUnderruns.load(std::memory_order_relaxed),
-            (unsigned long long)m_impl->spatialErrors.load(std::memory_order_relaxed),
-            (unsigned)m_impl->spatialSampleRate.load(std::memory_order_relaxed),
-            (unsigned)m_impl->spatialChannels.load(std::memory_order_relaxed));
-        strncat_s(info, sfx, _TRUNCATE);
-    }
-    std::string full = info;
-    if (m_impl) {
-        char st[440];
-        sprintf_s(st, " | startup: envReq=%lld envCb=%lld ctrlReq=%lld ctrlCb=%lld visual=%lld capStart=%lld navReq=%lld navStart=%lld content=%lld dom=%lld navDone=%lld navSt=%lld firstFrame=%lld firstStore=%lld firstBlit=%lld extGetReq=%lld extGetCb=%lld extPass=%lld initTotal=%lld",
-            (long long)m_impl->tEnvReqMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tEnvCbMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tCtrlReqMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tCtrlCbMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tVisualDoneMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tCaptureStartMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tNavReqMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tNavStartingMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tContentLoadingMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tDomContentLoadedMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tNavCompletedMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tNavCompletedStatus.load(std::memory_order_relaxed),
-            (long long)m_impl->tFirstFrameArrivedMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tFirstFrameStoredMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tFirstUnityBlitMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tExtGetReqMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tExtGetCbMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tExtInstallPassDoneMs.load(std::memory_order_relaxed),
-            (long long)m_impl->tInitTotalMs.load(std::memory_order_relaxed));
-        full += st;
-    }
-    if (m_impl && !m_impl->initTimingSummary.empty()) { full += " | init: "; full += m_impl->initTimingSummary; }
-    if (m_impl) {
-        std::string ext;
-        try { std::lock_guard<std::mutex> lk(m_impl->extDiagMutex); ext = m_impl->extDiag; } catch (...) {}
-        if (!ext.empty()) { full += " | ext: "; full += ext; }
-    }
-    outDiag = full; SetDiag(outDiag);
     return true;
 }
 

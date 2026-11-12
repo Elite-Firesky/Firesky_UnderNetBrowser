@@ -701,6 +701,8 @@ namespace Firesky.UnderNetBrowser
             return ResolveNavigationTarget(home);
         }
 
+        private static bool _homePageEnsuredThisSession;
+
         private string GetOrCreateHomepageUrl()
         {
             try
@@ -708,7 +710,27 @@ namespace Firesky.UnderNetBrowser
                 var dir = Path.Combine(GetUserDataRoot(), "Home");
                 Directory.CreateDirectory(dir);
                 var path = Path.Combine(dir, "home.html");
-                File.WriteAllText(path, BuildHomepageHtml());
+                var html = BuildHomepageHtml();
+                if (!_homePageEnsuredThisSession || !File.Exists(path))
+                {
+                    bool needsWrite = true;
+                    try
+                    {
+                        if (File.Exists(path))
+                        {
+                            // Avoid unnecessary disk writes on every open; still update if template/content changes.
+                            var existing = File.ReadAllText(path);
+                            needsWrite = !string.Equals(existing, html, StringComparison.Ordinal);
+                        }
+                    }
+                    catch { needsWrite = true; }
+
+                    if (needsWrite)
+                    {
+                        File.WriteAllText(path, html);
+                    }
+                    _homePageEnsuredThisSession = true;
+                }
                 return new Uri(path).AbsoluteUri;
             }
             catch (Exception ex)
@@ -730,57 +752,69 @@ namespace Firesky.UnderNetBrowser
             return Path.Combine(AppContext.BaseDirectory, "FireskyUnderNetBrowser");
         }
 
+        private static string? _cachedDefaultExtensionSourceDir;
+
         private static void EnsureDefaultBrowserExtensionDeployed(string compositionUserDataRoot)
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(compositionUserDataRoot)) return;
                 // Deploy default browser extension (uBlock Origin Lite) automatically if missing.
-                // Source locations (best-effort): alongside mod DLL and common mod subfolders.
                 const string extensionFolderName = "uBlockOriginLite";
-                string? asmLoc = null;
-                try { asmLoc = typeof(UnderNetBrowserApp).Assembly.Location; } catch { asmLoc = null; }
-                var asmDir = string.IsNullOrWhiteSpace(asmLoc) ? null : Path.GetDirectoryName(asmLoc);
-                var candidates = new List<string>();
-                void Add(string? dir, params string[] parts)
-                {
-                    try
-                    {
-                        if (string.IsNullOrWhiteSpace(dir)) return;
-                        var p = dir;
-                        for (int i = 0; i < parts.Length; i++) p = Path.Combine(p, parts[i]);
-                        candidates.Add(p);
-                    }
-                    catch { }
-                }
-                Add(asmDir, "BrowserExtensions", extensionFolderName);
-                Add(asmDir, "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName);
-                try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "BrowserExtensions", extensionFolderName); } catch { }
-                try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName); } catch { }
-                try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "BrowserExtensions", extensionFolderName); } catch { }
-                try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName); } catch { }
+                var dst = Path.Combine(compositionUserDataRoot, "Extensions", extensionFolderName);
+                if (File.Exists(Path.Combine(dst, "manifest.json"))) return; // fast path: already deployed
 
-                string? sourceDir = null;
-                for (int i = 0; i < candidates.Count; i++)
+                // Resolve source (best-effort), cached per session to avoid repeated filesystem probing.
+                string? sourceDir = _cachedDefaultExtensionSourceDir;
+                if (!string.IsNullOrWhiteSpace(sourceDir) && !File.Exists(Path.Combine(sourceDir, "manifest.json")))
+                    sourceDir = null;
+
+                if (string.IsNullOrWhiteSpace(sourceDir))
                 {
-                    try
+                    string? asmLoc = null;
+                    try { asmLoc = typeof(UnderNetBrowserApp).Assembly.Location; } catch { asmLoc = null; }
+                    var asmDir = string.IsNullOrWhiteSpace(asmLoc) ? null : Path.GetDirectoryName(asmLoc);
+                    var candidates = new List<string>(8);
+                    void Add(string? dir, params string[] parts)
                     {
-                        var c = candidates[i];
-                        if (!string.IsNullOrWhiteSpace(c) && File.Exists(Path.Combine(c, "manifest.json")))
+                        try
                         {
-                            sourceDir = c;
-                            break;
+                            if (string.IsNullOrWhiteSpace(dir)) return;
+                            var p = dir;
+                            for (int i = 0; i < parts.Length; i++) p = Path.Combine(p, parts[i]);
+                            candidates.Add(p);
                         }
+                        catch { }
                     }
-                    catch { }
+                    Add(asmDir, "BrowserExtensions", extensionFolderName);
+                    Add(asmDir, "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName);
+                    try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "BrowserExtensions", extensionFolderName); } catch { }
+                    try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName); } catch { }
+                    try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "BrowserExtensions", extensionFolderName); } catch { }
+                    try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "FireskyUnderNetBrowser", "BrowserExtensions", extensionFolderName); } catch { }
+
+                    for (int i = 0; i < candidates.Count; i++)
+                    {
+                        try
+                        {
+                            var c = candidates[i];
+                            if (!string.IsNullOrWhiteSpace(c) && File.Exists(Path.Combine(c, "manifest.json")))
+                            {
+                                sourceDir = c;
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                    _cachedDefaultExtensionSourceDir = sourceDir;
                 }
+
                 if (string.IsNullOrWhiteSpace(sourceDir)) return;
 
                 // Deploy only to the active WebView2 composition profile to avoid redundant duplicate copies in UserData.
                 try
                 {
-                    var dst = Path.Combine(compositionUserDataRoot, "Extensions", extensionFolderName);
-                    if (!string.IsNullOrWhiteSpace(dst) && !File.Exists(Path.Combine(dst, "manifest.json")))
+                    if (!File.Exists(Path.Combine(dst, "manifest.json")))
                     {
                         CopyDirectoryRecursive(sourceDir, dst);
                         UnderNetBrowserConfig.Log($"[UnderNetBrowser] Auto-deployed default browser extension to '{dst}'.");
@@ -828,6 +862,7 @@ namespace Firesky.UnderNetBrowser
         {
             // Self-contained, polished Schedule I / UnderNet-themed dark homepage with preset shortcuts.
             return @"<!DOCTYPE html>
+<!-- UnderNetBrowser-Home-v1 -->
 <html lang=""en"">
 <head>
 <meta charset=""utf-8"" />
