@@ -177,7 +177,7 @@ namespace Firesky.UnderNetBrowser
         public static extern void CompGetFrameSize(out int width, out int height);
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSendMouse")]
-        public static extern void CompSendMouse(int kind, int vk, uint data, int x, int y);
+        public static extern void CompSendMouse(int kind, int vk, uint data, int x, int y); // kind: 0 move,1 left down,2 left up,3 wheel,4 right down,5 right up (vk bitmask move: 1=left,2=right)
 
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, EntryPoint = "UnGpu_CompGetCurrentUrl")]
         public static extern void CompGetCurrentUrl([Out] char[] buffer, int bufferChars);

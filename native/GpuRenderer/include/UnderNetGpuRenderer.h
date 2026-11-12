@@ -72,7 +72,7 @@ UN_EXPORT void __stdcall UnGpu_CompReload();
 UN_EXPORT int32_t __stdcall UnGpu_CompGetStatus(); // 0=stopped, 1=running, negative=error
 UN_EXPORT void __stdcall UnGpu_CompGetDiag(char* buffer, int32_t bufferSize);
 UN_EXPORT void __stdcall UnGpu_CompGetFrameSize(int32_t* outWidth, int32_t* outHeight);
-UN_EXPORT void __stdcall UnGpu_CompSendMouse(int32_t kind, int32_t vk, uint32_t data, int32_t x, int32_t y); // kind: 0 move,1 down,2 up,3 wheel
+UN_EXPORT void __stdcall UnGpu_CompSendMouse(int32_t kind, int32_t vk, uint32_t data, int32_t x, int32_t y); // kind: 0 move,1 left down,2 left up,3 wheel,4 right down,5 right up (vk bitmask for move: 1=left,2=right)
 UN_EXPORT void __stdcall UnGpu_CompGetCurrentUrl(wchar_t* buffer, int32_t bufferChars);
 UN_EXPORT int32_t __stdcall UnGpu_CompIsFullscreen(); // 1=fullscreen, 0=not, -1=unavailable
 UN_EXPORT void __stdcall UnGpu_CompShutdown();

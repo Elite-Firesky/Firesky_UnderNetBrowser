@@ -1932,12 +1932,15 @@ bool CompositionBrowser::IsFullscreen() const {
     return m_impl->isFullscreen.load(std::memory_order_relaxed);
 }
 
-void CompositionBrowser::SendMouseMove(int x,int y,bool leftButton){
+void CompositionBrowser::SendMouseMove(int x,int y,bool leftButton,bool rightButton){
     if(!m_impl) return;
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
     Impl::MouseEvent e{};
     e.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE;
-    e.vk = leftButton ? COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_LEFT_BUTTON : COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+    uint32_t vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+    if (leftButton) vk |= COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_LEFT_BUTTON;
+    if (rightButton) vk |= COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON;
+    e.vk = (COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS)vk;
     e.data = 0; e.x = x; e.y = y;
     // Coalesce consecutive moves to reduce input latency/flooding.
     if (!m_impl->mouseQueue.empty() && m_impl->mouseQueue.back().kind == COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE) {
@@ -1946,23 +1949,30 @@ void CompositionBrowser::SendMouseMove(int x,int y,bool leftButton){
         m_impl->mouseQueue.push_back(e);
     }
 }
-void CompositionBrowser::SendMouseDown(int x,int y){
+void CompositionBrowser::SendMouseDown(int x,int y,bool rightButton){
     if(!m_impl) return;
     // Do not force host/controller focus on every click: repeated SetFocus/MoveFocus(PROGRAMMATIC)
     // can dismiss web popups/menus (e.g. YouTube settings/quality). Managed side requests focus on
     // explicit focus transitions when needed.
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
-    // Position first with no button pressed, then deliver button-down.
-    Impl::MouseEvent m{}; m.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; m.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE; m.data=0; m.x=x; m.y=y; m_impl->mouseQueue.push_back(m);
-    Impl::MouseEvent e{}; e.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN; e.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_LEFT_BUTTON; e.data=0; e.x=x; e.y=y; m_impl->mouseQueue.push_back(e);
+    // Position first, then deliver button-down.
+    uint32_t moveVk = rightButton ? COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON : COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+    Impl::MouseEvent m{}; m.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; m.vk = (COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS)moveVk; m.data=0; m.x=x; m.y=y; m_impl->mouseQueue.push_back(m);
+    Impl::MouseEvent e{};
+    e.kind = rightButton ? COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN : COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN;
+    e.vk = (COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS)(rightButton ? COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON : COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_LEFT_BUTTON);
+    e.data=0; e.x=x; e.y=y; m_impl->mouseQueue.push_back(e);
     m_impl->diagMouseDownQueued.fetch_add(1, std::memory_order_relaxed);
 }
-void CompositionBrowser::SendMouseUp(int x,int y){
+void CompositionBrowser::SendMouseUp(int x,int y,bool rightButton){
     if(!m_impl) return;
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
     // Position first, then deliver button-up (button no longer pressed).
     Impl::MouseEvent m{}; m.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; m.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE; m.data=0; m.x=x; m.y=y; m_impl->mouseQueue.push_back(m);
-    Impl::MouseEvent e{}; e.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP; e.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE; e.data=0; e.x=x; e.y=y; m_impl->mouseQueue.push_back(e);
+    Impl::MouseEvent e{};
+    e.kind = rightButton ? COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP : COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP;
+    e.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+    e.data=0; e.x=x; e.y=y; m_impl->mouseQueue.push_back(e);
     m_impl->diagMouseUpQueued.fetch_add(1, std::memory_order_relaxed);
 }
 void CompositionBrowser::SendMouseWheel(int x,int y,int delta){

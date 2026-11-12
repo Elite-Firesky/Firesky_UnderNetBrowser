@@ -38,9 +38,9 @@ public:
     void GetContentSize(UINT& w, UINT& h) const;
 
     // Input forwarding (thread-safe; queued and processed on browser thread)
-    void SendMouseMove(int x, int y, bool leftButton);
-    void SendMouseDown(int x, int y);
-    void SendMouseUp(int x, int y);
+    void SendMouseMove(int x, int y, bool leftButton, bool rightButton = false);
+    void SendMouseDown(int x, int y, bool rightButton = false);
+    void SendMouseUp(int x, int y, bool rightButton = false);
     void SendMouseWheel(int x, int y, int delta);
     void SendKey(uint32_t msg, uint64_t wParam, uint64_t lParam);
     // Injects text into the currently focused DOM element via script (fallback for composition keyboard delivery issues).

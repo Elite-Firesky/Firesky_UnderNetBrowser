@@ -144,6 +144,36 @@ namespace Firesky.UnderNetBrowser
         {
             // Stage 4 diagnostics: lightweight periodic sampling + frame-time accumulation (no-op when disabled).
             try { UnderNetBrowserDiagnostics.OnFrame(); } catch { }
+
+            // Global cursor toggle (works outside TV/app as well).
+            try
+            {
+                var key = UnderNetBrowserConfig.GetKey(KeyCode.F3, UnderNetBrowserConfig.KeyToggleCursor);
+                if (Input.GetKeyDown(key))
+                {
+                    ToggleCursorVisibility();
+                }
+            }
+            catch { }
+        }
+
+        internal static void ToggleCursorVisibility()
+        {
+            try
+            {
+                bool visibleNow = Cursor.visible && Cursor.lockState != CursorLockMode.Locked;
+                if (visibleNow)
+                {
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
+                else
+                {
+                    Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible = true;
+                }
+            }
+            catch { }
         }
 
         public override void OnApplicationQuit()

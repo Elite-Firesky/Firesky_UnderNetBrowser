@@ -625,11 +625,12 @@ UN_EXPORT void __stdcall UnGpu_CompReload() { std::lock_guard<std::mutex> lock(g
 
 UN_EXPORT void __stdcall UnGpu_CompSendMouse(int32_t kind, int32_t vk, uint32_t data, int32_t x, int32_t y) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    (void)vk;
-    if (kind == 1) g_comp.SendMouseDown(x, y);
-    else if (kind == 2) g_comp.SendMouseUp(x, y);
+    if (kind == 1) g_comp.SendMouseDown(x, y, (vk & 0x2) != 0);
+    else if (kind == 2) g_comp.SendMouseUp(x, y, (vk & 0x2) != 0);
     else if (kind == 3) g_comp.SendMouseWheel(x, y, (int32_t)data);
-    else g_comp.SendMouseMove(x, y, (vk & 0x1) != 0);
+    else if (kind == 4) g_comp.SendMouseDown(x, y, true);
+    else if (kind == 5) g_comp.SendMouseUp(x, y, true);
+    else g_comp.SendMouseMove(x, y, (vk & 0x1) != 0, (vk & 0x2) != 0);
 }
 
 UN_EXPORT void __stdcall UnGpu_CompGetCurrentUrl(wchar_t* buffer, int32_t bufferChars) {

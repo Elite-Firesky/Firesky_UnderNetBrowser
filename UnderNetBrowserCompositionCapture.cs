@@ -17,6 +17,7 @@ namespace Firesky.UnderNetBrowser
         private bool _createIssued;
         private bool _disposed;
         private float _lastLog;
+        private float _lastNoFrameLogTime;
         private int _lastStatus = int.MinValue;
         private int _lastReady = -1;
         private bool _startRequested;
@@ -108,9 +109,9 @@ namespace Firesky.UnderNetBrowser
         public void GoForward() { try { UnderNetBrowserGpuNative.CompGoForward(); } catch { } }
         public void Reload() { try { UnderNetBrowserGpuNative.CompReload(); } catch { } }
 
-        public void SendMouseMove(int x, int y, bool leftButton) { try { UnderNetBrowserGpuNative.CompSendMouse(0, leftButton ? 1 : 0, 0, x, y); } catch { } }
-        public void SendMouseDown(int x, int y) { try { UnderNetBrowserGpuNative.CompSendMouse(1, 1, 0, x, y); } catch { } }
-        public void SendMouseUp(int x, int y) { try { UnderNetBrowserGpuNative.CompSendMouse(2, 0, 0, x, y); } catch { } }
+        public void SendMouseMove(int x, int y, bool leftButton, bool rightButton = false) { try { UnderNetBrowserGpuNative.CompSendMouse(0, (leftButton ? 1 : 0) | (rightButton ? 2 : 0), 0, x, y); } catch { } }
+        public void SendMouseDown(int x, int y, bool rightButton = false) { try { UnderNetBrowserGpuNative.CompSendMouse(rightButton ? 4 : 1, rightButton ? 2 : 1, 0, x, y); } catch { } }
+        public void SendMouseUp(int x, int y, bool rightButton = false) { try { UnderNetBrowserGpuNative.CompSendMouse(rightButton ? 5 : 2, 0, 0, x, y); } catch { } }
         public void SendMouseWheel(int x, int y, int delta) { try { UnderNetBrowserGpuNative.CompSendMouse(3, 0, unchecked((uint)delta), x, y); } catch { } }
         private bool _compSendKeyErrorLogged;
         private int _compSendKeySuccessCount;
@@ -182,8 +183,15 @@ namespace Firesky.UnderNetBrowser
                     var diag = "";
                     try { diag = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
                     string msg = $"[GPU-Comp] status={status} targetReady={targetReady} deviceReady={devReady} comp={compStatus} gfx={SystemInfo.graphicsDeviceType} err='{err}' diag='{diag}'";
-                    if (changed || compStatus < 0 || compStatus == 2) MelonLogger.Msg($"[Firesky UnderNet Browser] {msg}");
-                    else UnderNetBrowserConfig.Log(msg);
+                    bool isNoFrameYet = diag.IndexOf("no frame yet", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool canLogNoFrame = !isNoFrameYet || changed || (Time.realtimeSinceStartup - _lastNoFrameLogTime >= 5f);
+                    if (isNoFrameYet && canLogNoFrame) _lastNoFrameLogTime = Time.realtimeSinceStartup;
+
+                    if (changed || compStatus < 0 || (compStatus == 2 && canLogNoFrame))
+                        MelonLogger.Msg($"[Firesky UnderNet Browser] {msg}");
+                    else if (!(compStatus == 2 && isNoFrameYet))
+                        UnderNetBrowserConfig.Log(msg);
+
                     if (compStatus < 0)
                     {
                         string compErr = "";

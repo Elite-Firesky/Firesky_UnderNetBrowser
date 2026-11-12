@@ -1,4 +1,5 @@
-﻿using MelonLoader;
+﻿using System;
+using MelonLoader;
 
 namespace Firesky.UnderNetBrowser
 {
@@ -23,6 +24,11 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<int>? GpuCompositionRenderWidth { get; private set; }
         public static MelonPreferences_Entry<int>? GpuCompositionRenderHeight { get; private set; }
 
+        // Keybinds (configurable). Stored as KeyCode names (e.g. F3, F5, F6).
+        public static MelonPreferences_Entry<string>? KeyToggleCursor { get; private set; }
+        public static MelonPreferences_Entry<string>? KeyReload { get; private set; }
+        public static MelonPreferences_Entry<string>? KeyGameInputMode { get; private set; }
+
         // Stage 4 diagnostics (lightweight, opt-in). No rebuild required to enable/disable.
         public static MelonPreferences_Entry<bool>? PerformanceDiagnosticsEnabled { get; private set; }
         public static MelonPreferences_Entry<float>? DiagnosticsSampleIntervalSeconds { get; private set; }
@@ -42,6 +48,11 @@ namespace Firesky.UnderNetBrowser
             // UnderNet now runs in WebView2 Composition mode only (GPU composition browser).
             GpuCompositionRenderWidth = _category.CreateEntry("GpuCompositionRenderWidth", 1920, "Composition browser internal render width (e.g. 1280/1920). Restart/reopen may be required.");
             GpuCompositionRenderHeight = _category.CreateEntry("GpuCompositionRenderHeight", 1080, "Composition browser internal render height (e.g. 720/1080). Restart/reopen may be required.");
+
+            // Keybinds
+            KeyToggleCursor = _category.CreateEntry("KeyToggleCursor", "F3", "Toggle cursor visibility/lock (works globally, including outside TV). Unity KeyCode name.");
+            KeyReload = _category.CreateEntry("KeyReload", "F5", "Reload current page while browser/TV app is active. Unity KeyCode name.");
+            KeyGameInputMode = _category.CreateEntry("KeyGameInputMode", "F6", "Toggle Game Input Mode while browser/TV app is active. Unity KeyCode name.");
 
             // Stage 4 diagnostics (opt-in, low overhead). Samples periodically and records phase markers (A-F).
             PerformanceDiagnosticsEnabled = _category.CreateEntry("PerformanceDiagnosticsEnabled", false, "Enable Stage 4 performance/memory diagnostics logging (opt-in, low overhead).");
@@ -79,6 +90,18 @@ namespace Firesky.UnderNetBrowser
         public static void LogError(string message)
         {
             MelonLogger.Error($"[Firesky UnderNet Browser] {message}");
+        }
+
+        public static UnityEngine.KeyCode GetKey(UnityEngine.KeyCode fallback, MelonPreferences_Entry<string>? entry)
+        {
+            try
+            {
+                string? name = entry?.Value;
+                if (!string.IsNullOrWhiteSpace(name) && Enum.TryParse<UnityEngine.KeyCode>(name.Trim(), true, out var kc))
+                    return kc;
+            }
+            catch { }
+            return fallback;
         }
     }
 }
