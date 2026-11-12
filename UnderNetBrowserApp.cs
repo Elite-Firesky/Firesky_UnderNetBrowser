@@ -5874,10 +5874,11 @@ namespace Firesky.UnderNetBrowser
             {
                 if (_gpuCompositionCapture != null) return;
                 _gpuCompositionMode = false;
-                // Reuse existing startup path by simulating open/init through existing fields? call the same logic used in OnOpened/start
+                // Reuse same composition profile/path as normal startup to avoid creating a duplicate WebView2 user data folder.
                 var home = GetResolvedHomeUrl();
                 string compUserData = "";
-                try { compUserData = Path.Combine(GetUserDataRoot(), "WebView2", "UserData"); } catch { compUserData = ""; }
+                try { compUserData = Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
+                try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
                 _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
                 int compW = 1920, compH = 1080;
                 try { compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560); } catch { }
