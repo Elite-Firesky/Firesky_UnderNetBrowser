@@ -34,6 +34,8 @@ namespace Firesky.UnderNetBrowser
         private Button? _reloadButton;
         private Button? _homeButton;
         private Button? _closeButton;
+        private Text? _gameModeIndicatorText;
+        private GameObject? _gameModeIndicatorRoot;
         private Text? _hintText;
         private string _hintBaseMessage = "";
         private float _hintAnimTime;
@@ -64,9 +66,21 @@ namespace Firesky.UnderNetBrowser
         private bool _gpuCompositionMode;
         private bool _compositionWebFocused;
         private bool _compositionFocusPrimed;
+
+        // External window mirror mode (e.g. Discord window capture via WGC)
+        private UnderNetBrowserGpuCapture? _externalWindowCapture;
+        private IntPtr _externalMirrorHwnd = IntPtr.Zero;
+        private bool _externalMirrorMode;
+        private string _externalMirrorLabel = "";
+        private float _lastExternalMirrorAttemptTime;
         private int _lastSentPointerX = -1;
         private int _lastSentPointerY = -1;
         private float _lastPointerMoveSendTime;
+        private bool _gameMouseCaptured;
+        private float _gameVirtualMouseX;
+        private float _gameVirtualMouseY;
+        private float _lastGameModeFocusNudge = -999f;
+        private string? _externalMirrorReturnUrl;
         // Stage 3/4 PoC: spatial audio playback from captured WebView2 process-loopback PCM (dev-only, behind config)
         private GameObject? _spatialAudioGo;
         private AudioSource? _spatialAudioSource;
@@ -174,7 +188,8 @@ namespace Firesky.UnderNetBrowser
 
             try
             {
-                bool hadCapture = _gpuCompositionCapture != null;
+                try { StopExternalWindowMirror("shutdown:" + reason); } catch { }
+                bool hadCapture = _gpuCompositionCapture != null || _externalMirrorMode;
                 if (hadCapture)
                     UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Shutting down browser/composition ({reason}).");
 
@@ -187,6 +202,7 @@ namespace Firesky.UnderNetBrowser
 
                 // Always attempt native shutdown even if managed capture reference was already cleared.
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+                try { UnderNetBrowserGpuNative.ClearTargetTexture(); } catch { }
             }
             catch { }
 
@@ -342,15 +358,33 @@ namespace Firesky.UnderNetBrowser
             _browserPointerRightDown = false;
             try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
             try { UnderNetBrowserInputHooks.LogDiagnostics(force: true); } catch { }
-            // Explicit/normal close: stop media and park browser for fast warm reopen (avoid ~12s controller recreation).
-            // Full native shutdown remains in ShutdownBrowserRuntime/world unload.
-            try { StopSpatialAudioPlayback("closed"); } catch { }
-            try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
-            try { ReleaseAllGameKeys("close_navigate_blank"); } catch { }
-            try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
-            try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = true; } catch { }
-            // Keep composition/WebView2 session warm for faster next open.
-            _gpuCompositionMode = _gpuCompositionCapture != null;
+            bool explicitXClose = _explicitCloseRequested;
+            if (explicitXClose)
+            {
+                // Explicit app close (X): fully shut down browser/WebView2 to avoid lingering processes.
+                try { StopExternalWindowMirror("closed_x"); } catch { }
+                try { StopSpatialAudioPlayback("closed_x"); } catch { }
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
+                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
+                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                _gpuCompositionCapture = null;
+                try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+                _gpuCompositionMode = false;
+                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Browser runtime fully shut down (X close).");
+            }
+            else
+            {
+                // Normal/framework close path: stop media and park browser for fast warm reopen (avoid ~12s controller recreation).
+                // Full native shutdown remains in ShutdownBrowserRuntime/world unload.
+                try { StopSpatialAudioPlayback("closed"); } catch { }
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
+                try { ReleaseAllGameKeys("close_navigate_blank"); } catch { }
+                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
+                try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = true; } catch { }
+                // Keep composition/WebView2 session warm for faster next open.
+                _gpuCompositionMode = _gpuCompositionCapture != null;
+            }
+
             _compositionWebFocused = false;
             _compositionFocusPrimed = false;
             _hotbarSlotAccessorResolved = false;
@@ -434,7 +468,8 @@ namespace Firesky.UnderNetBrowser
                             // Keep composition/browser running in background (no visual pause), but do not process TV/browser interaction input.
                             // If feasible, allow basic media controls (arrows) to reach the browser while off-TV/video keeps playing.
                             try { HandleDetachedBrowserMediaKeys(); } catch { }
-                            try { _gpuCompositionCapture?.Tick(); } catch { }
+                            try { UpdateExternalMirrorTick(); } catch { }
+                            if (!_externalMirrorMode) { try { _gpuCompositionCapture?.Tick(); } catch { } }
                             try { MaintainDetachedAppVisualState(); } catch { }
                             try { UnderNetBrowserInputHooks.LogDiagnostics(); } catch { }
                             return;
@@ -505,10 +540,14 @@ namespace Firesky.UnderNetBrowser
                 // Animate loading hint (simple spinner/dots) when visible
                 if (_hintText != null && _hintText.enabled && !string.IsNullOrEmpty(_hintBaseMessage))
                 {
-                    _hintAnimTime += Time.unscaledDeltaTime;
-                    int dots = ((int)(_hintAnimTime * 2f) % 4);
-                    string spinner = new[] { "◜", "◠", "◝", "◞", "◡", "◟" }[((int)(_hintAnimTime * 8f) % 6)];
-                    _hintText.text = $"{_hintBaseMessage}\n\n<color=#7CFF6B>{spinner}</color>  <color=#DFFFE3>Connecting</color>{new string('.', dots)}";
+                    bool gameModeHint = _hintBaseMessage.StartsWith("Game Input ON", StringComparison.Ordinal);
+                    if (!gameModeHint)
+                    {
+                        _hintAnimTime += Time.unscaledDeltaTime;
+                        int dots = ((int)(_hintAnimTime * 2f) % 4);
+                        string spinner = new[] { "◜", "◠", "◝", "◞", "◡", "◟" }[((int)(_hintAnimTime * 8f) % 6)];
+                        _hintText.text = $"{_hintBaseMessage}\n\n<color=#7CFF6B>{spinner}</color>  <color=#DFFFE3>Connecting</color>{new string('.', dots)}";
+                    }
                 }
 
                 if (Time.realtimeSinceStartup - _lastRepairCheck >= 1.0f)
@@ -518,7 +557,33 @@ namespace Firesky.UnderNetBrowser
                     if (diagGo != null) RepairS1APICanvasState(diagGo, "OnUpdate");
                 }
 
-                if (_gpuCompositionCapture != null)
+                try { UpdateExternalMirrorTick(); } catch { }
+                if (_externalMirrorMode)
+                {
+                    // External mirror (e.g. Discord window capture) is active; browser composition is paused/stopped.
+                    try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; _hintText.text = ""; } } catch { }
+                }
+                else if (_gpuCompositionCapture != null)
+                {
+                    // If user navigates (via in-page shortcut/link) to Discord Web and Discord is running, switch to window mirror.
+                    try
+                    {
+                        var cur = _gpuCompositionCapture.CurrentUrl;
+                        if (IsDiscordMirrorRequestUrl(cur) && Time.realtimeSinceStartup - _lastExternalMirrorAttemptTime > 1.5f)
+                        {
+                            // Try mirror; if it fails, stay on web Discord (avoid tight retry loop by updating attempt time inside TryStart)
+                            if (TryStartDiscordMirror(cur))
+                                return;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (_externalMirrorMode)
+                {
+                    // already handled above
+                }
+                else if (_gpuCompositionCapture != null)
                 {
                     _gpuCompositionCapture.Tick();
                     try { UpdateSpatialAudioPlayback(); } catch { }
@@ -541,8 +606,8 @@ namespace Firesky.UnderNetBrowser
                             bool hasFrame = compDiag.IndexOf("comp blit ok", StringComparison.OrdinalIgnoreCase) >= 0
                                 || compDiag.IndexOf("running (async init complete)", StringComparison.OrdinalIgnoreCase) >= 0;
                             if (hasFrame) { try { UnderNetBrowserDiagnostics.OnFirstRenderedFrame(); } catch { } }
-                            if (hasFrame && _hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; }
-                            else if (_hintText != null && _hintText.enabled && string.IsNullOrEmpty(_hintBaseMessage))
+                            if (hasFrame && _hintText != null && !_gameInputMode) { _hintBaseMessage = ""; _hintText.enabled = false; }
+                            else if (_hintText != null && _hintText.enabled && string.IsNullOrEmpty(_hintBaseMessage) && !_gameInputMode)
                                 SetHint("Loading page...");
                         }
                     }
@@ -864,6 +929,7 @@ namespace Firesky.UnderNetBrowser
   .icon.yt{background:linear-gradient(180deg,#ff9696,#ff3b3b);color:#fff}
   .icon.gg{background:linear-gradient(180deg,#ecff9a,#7cff6b);color:#0a1710}
   .icon.nfs{background:linear-gradient(180deg,#7fdcff,#1f7fff);color:#061018}
+  .icon.dc{background:linear-gradient(180deg,#8ea1ff,#5865f2);color:#fff}
   .meta{min-width:0}
   .meta .name{margin:0 0 3px;font-size:18px;font-weight:700;letter-spacing:.2px}
   .meta .desc{margin:0;font-size:12px;color:var(--muted);line-height:1.35}
@@ -931,6 +997,14 @@ namespace Firesky.UnderNetBrowser
               <p class=""url"">nfsu2.xyz</p>
             </div>
           </a>
+          <a class=""card"" href=""https://discord.com/app"">
+            <div class=""icon dc"">D</div>
+            <div class=""meta"">
+              <p class=""name"">Discord</p>
+              <p class=""desc"">Mirror Discord if running, or open Discord Web.</p>
+              <p class=""url"">discord.com/app</p>
+            </div>
+          </a>
         </div>
       </section>
 
@@ -967,13 +1041,33 @@ namespace Firesky.UnderNetBrowser
         private void SetUrl(string? input)
         {
             var raw = (input ?? string.Empty).Trim();
+            var normalizedRaw = NormalizeUrl(raw);
             var url = ResolveNavigationTarget(raw);
+
+            // External window mirror (Discord): if requested and Discord is running, mirror its window; else fall back to Discord Web.
+            if (IsDiscordMirrorRequestUrl(raw) || IsDiscordMirrorRequestUrl(normalizedRaw) || IsDiscordMirrorRequestUrl(url))
+            {
+                if (_urlInput != null) _urlInput.text = "https://discord.com/app";
+                if (TryStartDiscordMirror(url))
+                    return;
+                // Fallback to web Discord in browser
+                url = "https://discord.com/app";
+                try { SetUrlDisplayText(url); } catch { }
+            }
+            else if (_externalMirrorMode)
+            {
+                // Leaving mirror mode to browse normally
+                var ret = _externalMirrorReturnUrl;
+                StopExternalWindowMirror("navigate_away");
+                EnsureCompositionBrowserStarted();
+            }
+
             // Keep address bar friendly for home token
             if (_urlInput != null)
             {
                 if (raw.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) || raw.Equals("about:home", StringComparison.OrdinalIgnoreCase))
                     _urlInput.text = "undernet:home";
-                else
+                else if (!(IsDiscordMirrorRequestUrl(raw) || IsDiscordMirrorRequestUrl(normalizedRaw)))
                     _urlInput.text = raw.Length == 0 ? "undernet:home" : NormalizeUrl(raw);
             }
 
@@ -986,13 +1080,18 @@ namespace Firesky.UnderNetBrowser
             }
             else
             {
+                if (_externalMirrorMode) return;
                 SetHint("Composition browser not available.");
             }
         }
 
         private void SetGameInputMode(bool enabled, string reason)
         {
-            if (_gameInputMode == enabled) return;
+            if (_gameInputMode == enabled)
+            {
+                try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(_gameInputMode); } catch { }
+                return;
+            }
             _gameInputMode = enabled;
             if (!enabled)
             {
@@ -1006,21 +1105,22 @@ namespace Firesky.UnderNetBrowser
                     _gameInputMode = false;
                     ReleaseAllGameKeys("mode_blocked_url_focus:" + reason);
                     SetHint("Game Input: click the web view first (URL bar is focused)");
+                    try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
                     return;
                 }
                 _compositionWebFocused = true;
                 try { if (_urlInput != null && _urlInput.isFocused) UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
                 try { _gpuCompositionCapture?.RequestFocus(); } catch { }
+                // Best-effort: focus canvas/document for browser games when enabling game input (retry briefly for async pages).
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; function f(){try{var c=d.querySelector('canvas'); if(c){try{c.tabIndex=c.tabIndex||-1; if(c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus();}catch(_){} try{c.click&&c.click();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} try{d.body&&d.body.focus&&d.body.focus();}catch(_){}}catch(_){}} f(); setTimeout(f,50); setTimeout(f,200); setTimeout(f,600);}catch(_){}})();"); } catch { }
+                try { _lastGameModeFocusNudge = -999f; } catch { }
                 UpdateInputOwnershipState();
             }
+            try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(_gameInputMode); } catch { }
             try
             {
-                if (enabled)
-                {
-                    _hintBaseMessage = "Game Input ON (F6 to exit). Right-click/Esc sent to game.";
-                    if (_hintText != null) { _hintText.enabled = true; _hintText.text = _hintBaseMessage; }
-                }
-                else if (_hintText != null && !string.IsNullOrEmpty(_hintBaseMessage) && _hintBaseMessage.StartsWith("Game Input ON", StringComparison.Ordinal))
+                // Keep hint area unobtrusive in game mode (chrome indicator is primary); do not force big overlay text.
+                if (!_gameInputMode && _hintText != null && !string.IsNullOrEmpty(_hintBaseMessage) && _hintBaseMessage.StartsWith("Game Input ON", StringComparison.Ordinal))
                 {
                     _hintBaseMessage = "";
                     _hintText.enabled = false;
@@ -1039,11 +1139,71 @@ namespace Firesky.UnderNetBrowser
                 foreach (var vk in _gameKeysHeld)
                 {
                     try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, 0); } catch { }
+                    try { TrySendGameInputDomKeyUpByVk(vk); } catch { }
                 }
                 _gameKeysHeld.Clear();
                 UnderNetBrowserConfig.Log($"[UnderNetBrowser] Released all game keys ({reason}).");
             }
             catch { _gameKeysHeld.Clear(); }
+        }
+
+        private void TrySendGameInputDomKeyUpByVk(int vk)
+        {
+            try
+            {
+                if (_gpuCompositionCapture == null) return;
+                if (!TryGetJsKeyEventPropsFromVk(vk, out var jsKey, out var jsCode, out var keyCode, out var location)) return;
+                string script =
+                    "(function(){try{var d=document;var tgt=d.activeElement||d.querySelector('canvas')||d.body||d.documentElement; var evInit={key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,composed:true,repeat:false}; var targets=[]; if(tgt) targets.push(tgt); if(d) targets.push(d); if(window) targets.push(window); for(var i=0;i<targets.length;i++){try{targets[i].dispatchEvent(new KeyboardEvent('keyup',evInit));}catch(_){}} }catch(_){}})();";
+                _gpuCompositionCapture.ExecuteScript(script);
+            }
+            catch { }
+        }
+
+        private static bool TryGetJsKeyEventPropsFromVk(int vk, out string key, out string code, out int keyCode, out int location)
+        {
+            key = ""; code = ""; keyCode = vk; location = 0;
+            if (vk >= 0x41 && vk <= 0x5A) { char c = (char)vk; code = "Key" + c; key = ((char)(c - 'A' + 'a')).ToString(); keyCode = vk; return true; }
+            if (vk >= 0x30 && vk <= 0x39) { char c = (char)vk; code = "Digit" + c; key = c.ToString(); keyCode = vk; return true; }
+            if (vk >= 0x60 && vk <= 0x69) { int d = vk - 0x60; code = "Numpad" + d; key = d.ToString(); keyCode = vk; location = 3; return true; }
+            if (vk >= 0x70 && vk <= 0x7B) { int n = vk - 0x70 + 1; code = "F" + n; key = "F" + n; keyCode = vk; return true; }
+            switch (vk)
+            {
+                case 0x25: key = "ArrowLeft"; code = "ArrowLeft"; keyCode = 37; return true;
+                case 0x26: key = "ArrowUp"; code = "ArrowUp"; keyCode = 38; return true;
+                case 0x27: key = "ArrowRight"; code = "ArrowRight"; keyCode = 39; return true;
+                case 0x28: key = "ArrowDown"; code = "ArrowDown"; keyCode = 40; return true;
+                case 0x20: key = " "; code = "Space"; keyCode = 32; return true;
+                case 0x0D: key = "Enter"; code = "Enter"; keyCode = 13; return true;
+                case 0x09: key = "Tab"; code = "Tab"; keyCode = 9; return true;
+                case 0x1B: key = "Escape"; code = "Escape"; keyCode = 27; return true;
+                case 0x08: key = "Backspace"; code = "Backspace"; keyCode = 8; return true;
+                case 0x2E: key = "Delete"; code = "Delete"; keyCode = 46; return true;
+                case 0x2D: key = "Insert"; code = "Insert"; keyCode = 45; return true;
+                case 0x24: key = "Home"; code = "Home"; keyCode = 36; return true;
+                case 0x23: key = "End"; code = "End"; keyCode = 35; return true;
+                case 0x21: key = "PageUp"; code = "PageUp"; keyCode = 33; return true;
+                case 0x22: key = "PageDown"; code = "PageDown"; keyCode = 34; return true;
+                case 0xA0: key = "Shift"; code = "ShiftLeft"; keyCode = 16; location = 1; return true;
+                case 0xA1: key = "Shift"; code = "ShiftRight"; keyCode = 16; location = 2; return true;
+                case 0xA2: key = "Control"; code = "ControlLeft"; keyCode = 17; location = 1; return true;
+                case 0xA3: key = "Control"; code = "ControlRight"; keyCode = 17; location = 2; return true;
+                case 0xA4: key = "Alt"; code = "AltLeft"; keyCode = 18; location = 1; return true;
+                case 0xA5: key = "Alt"; code = "AltRight"; keyCode = 18; location = 2; return true;
+                case 0x14: key = "CapsLock"; code = "CapsLock"; keyCode = 20; return true;
+                case 0xDB: key = "["; code = "BracketLeft"; keyCode = 219; return true;
+                case 0xDD: key = "]"; code = "BracketRight"; keyCode = 221; return true;
+                case 0xDC: key = "\\\\"; code = "Backslash"; keyCode = 220; return true;
+                case 0xBA: key = ";"; code = "Semicolon"; keyCode = 186; return true;
+                case 0xDE: key = "'"; code = "Quote"; keyCode = 222; return true;
+                case 0xBC: key = ","; code = "Comma"; keyCode = 188; return true;
+                case 0xBE: key = "."; code = "Period"; keyCode = 190; return true;
+                case 0xBF: key = "/"; code = "Slash"; keyCode = 191; return true;
+                case 0xC0: key = "`"; code = "Backquote"; keyCode = 192; return true;
+                case 0xBD: key = "-"; code = "Minus"; keyCode = 189; return true;
+                case 0xBB: key = "="; code = "Equal"; keyCode = 187; return true;
+                default: return false;
+            }
         }
 
         private static bool TryGetGameInputVk(KeyCode kc, out int vk)
@@ -1147,6 +1307,18 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
 
+                // Periodic focus nudge for browser games (some pages/canvas lose focus after load or internal transitions).
+                try
+                {
+                    if (Time.unscaledTime - _lastGameModeFocusNudge > 0.75f)
+                    {
+                        _lastGameModeFocusNudge = Time.unscaledTime;
+                        try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                        try { _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus();}catch(_){}} }catch(_){}})();"); } catch { }
+                    }
+                }
+                catch { }
+
                 const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_CHAR = 0x0102;
                 foreach (var kc in s_gameInputTrackedKeys)
                 {
@@ -1163,15 +1335,114 @@ namespace Firesky.UnderNetBrowser
                             char ch = vk == 0x20 ? ' ' : (vk >= 0x41 && vk <= 0x5A ? (char)('a' + (vk - 0x41)) : (char)vk);
                             try { _gpuCompositionCapture.SendKey(WM_CHAR, ch, 0); } catch { }
                         }
+                        // Browser games (WebGL/Emscripten) often rely on DOM KeyboardEvents/focus; inject events as a compatibility path.
+                        TrySendGameInputDomKeyEvent(kc, vk, true);
                     }
                     else if (!down && wasHeld)
                     {
                         _gameKeysHeld.Remove(vk);
                         try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, 0); } catch { }
+                        TrySendGameInputDomKeyEvent(kc, vk, false);
                     }
                 }
             }
             catch { }
+        }
+
+        private void TrySendGameInputDomKeyEvent(KeyCode kc, int vk, bool down)
+        {
+            try
+            {
+                if (_gpuCompositionCapture == null) return;
+                if (!TryGetJsKeyEventProps(kc, vk, out var jsKey, out var jsCode, out var keyCode, out var location)) return;
+                string type = down ? "keydown" : "keyup";
+                // Dispatch to focused/canvas targets and window to maximize compatibility with browser games.
+                // Do not prevent default globally except we let page handle; some games need default prevented for arrows/space - emulate common behavior via event options is limited,
+                // but dispatching proper KeyboardEvents is often sufficient.
+                string script =
+                    "(function(){try{var d=document;var tgt=d.activeElement;if(!tgt||tgt===d.body||tgt===d.documentElement){var c=d.querySelector('canvas'); if(c){try{if(typeof c.focus==='function') c.focus();}catch(_){} tgt=c;}} if(!tgt)tgt=d.body||d.documentElement; var evInit={key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,composed:true,repeat:false}; var targets=[]; if(tgt) targets.push(tgt); if(d) targets.push(d); if(window) targets.push(window); for(var i=0;i<targets.length;i++){try{targets[i].dispatchEvent(new KeyboardEvent('" + type + "',evInit));}catch(_){}} }catch(_){}})();";
+                _gpuCompositionCapture.ExecuteScript(script);
+            }
+            catch { }
+        }
+
+        private static bool TryGetJsKeyEventProps(KeyCode kc, int vk, out string key, out string code, out int keyCode, out int location)
+        {
+            key = ""; code = ""; keyCode = vk; location = 0;
+            // Letters
+            if (kc >= KeyCode.A && kc <= KeyCode.Z)
+            {
+                char c = (char)('A' + (kc - KeyCode.A));
+                code = "Key" + c;
+                key = ((char)('a' + (kc - KeyCode.A))).ToString();
+                keyCode = 'A' + (kc - KeyCode.A);
+                return true;
+            }
+            // Digits
+            if (kc >= KeyCode.Alpha0 && kc <= KeyCode.Alpha9)
+            {
+                int d = kc - KeyCode.Alpha0;
+                code = "Digit" + d;
+                key = d.ToString();
+                keyCode = '0' + d;
+                return true;
+            }
+            if (kc >= KeyCode.Keypad0 && kc <= KeyCode.Keypad9)
+            {
+                int d = kc - KeyCode.Keypad0;
+                code = "Numpad" + d;
+                key = d.ToString();
+                keyCode = 96 + d; // VK_NUMPAD0+
+                location = 3;
+                return true;
+            }
+            if (kc >= KeyCode.F1 && kc <= KeyCode.F12)
+            {
+                int n = 1 + (kc - KeyCode.F1);
+                code = "F" + n; key = "F" + n; keyCode = 0x70 + (n - 1);
+                return true;
+            }
+            switch (kc)
+            {
+                case KeyCode.LeftArrow: key = "ArrowLeft"; code = "ArrowLeft"; keyCode = 37; return true;
+                case KeyCode.UpArrow: key = "ArrowUp"; code = "ArrowUp"; keyCode = 38; return true;
+                case KeyCode.RightArrow: key = "ArrowRight"; code = "ArrowRight"; keyCode = 39; return true;
+                case KeyCode.DownArrow: key = "ArrowDown"; code = "ArrowDown"; keyCode = 40; return true;
+                case KeyCode.Space: key = " "; code = "Space"; keyCode = 32; return true;
+                case KeyCode.Return:
+                case KeyCode.KeypadEnter: key = "Enter"; code = kc == KeyCode.KeypadEnter ? "NumpadEnter" : "Enter"; keyCode = 13; location = kc == KeyCode.KeypadEnter ? 3 : 0; return true;
+                case KeyCode.Tab: key = "Tab"; code = "Tab"; keyCode = 9; return true;
+                case KeyCode.Escape: key = "Escape"; code = "Escape"; keyCode = 27; return true;
+                case KeyCode.Backspace: key = "Backspace"; code = "Backspace"; keyCode = 8; return true;
+                case KeyCode.Delete: key = "Delete"; code = "Delete"; keyCode = 46; return true;
+                case KeyCode.Insert: key = "Insert"; code = "Insert"; keyCode = 45; return true;
+                case KeyCode.Home: key = "Home"; code = "Home"; keyCode = 36; return true;
+                case KeyCode.End: key = "End"; code = "End"; keyCode = 35; return true;
+                case KeyCode.PageUp: key = "PageUp"; code = "PageUp"; keyCode = 33; return true;
+                case KeyCode.PageDown: key = "PageDown"; code = "PageDown"; keyCode = 34; return true;
+                case KeyCode.LeftShift: key = "Shift"; code = "ShiftLeft"; keyCode = 16; location = 1; return true;
+                case KeyCode.RightShift: key = "Shift"; code = "ShiftRight"; keyCode = 16; location = 2; return true;
+                case KeyCode.LeftControl: key = "Control"; code = "ControlLeft"; keyCode = 17; location = 1; return true;
+                case KeyCode.RightControl: key = "Control"; code = "ControlRight"; keyCode = 17; location = 2; return true;
+                case KeyCode.LeftAlt: key = "Alt"; code = "AltLeft"; keyCode = 18; location = 1; return true;
+                case KeyCode.RightAlt: key = "Alt"; code = "AltRight"; keyCode = 18; location = 2; return true;
+                case KeyCode.CapsLock: key = "CapsLock"; code = "CapsLock"; keyCode = 20; return true;
+                case KeyCode.LeftBracket: key = "["; code = "BracketLeft"; keyCode = 219; return true;
+                case KeyCode.RightBracket: key = "]"; code = "BracketRight"; keyCode = 221; return true;
+                case KeyCode.Backslash: key = "\\\\"; code = "Backslash"; keyCode = 220; return true;
+                case KeyCode.Semicolon: key = ";"; code = "Semicolon"; keyCode = 186; return true;
+                case KeyCode.Quote: key = "'"; code = "Quote"; keyCode = 222; return true;
+                case KeyCode.Comma: key = ","; code = "Comma"; keyCode = 188; return true;
+                case KeyCode.Period: key = "."; code = "Period"; keyCode = 190; return true;
+                case KeyCode.Slash: key = "/"; code = "Slash"; keyCode = 191; return true;
+                case KeyCode.BackQuote: key = "`"; code = "Backquote"; keyCode = 192; return true;
+                case KeyCode.Minus: key = "-"; code = "Minus"; keyCode = 189; return true;
+                case KeyCode.Equals: key = "="; code = "Equal"; keyCode = 187; return true;
+                default:
+                    // Fallback: use vk where possible
+                    if (vk > 0) { key = ""; code = ""; keyCode = vk; return true; }
+                    return false;
+            }
         }
 
         private void HandleCompositionKeyboardInput()
@@ -1397,9 +1668,17 @@ namespace Firesky.UnderNetBrowser
                     }
                     else
                     {
-                        // ESC while in app: mimic right-click detach (restore gameplay, keep app running/background, leave TV on lock/home screen).
-                        // (Not used in Game Input Mode; F6 is the reliable exit and Esc is forwarded to the game.)
-                        try { TryDetachToGameplayKeepAppOpen(); } catch { }
+                        if (_gameInputMode)
+                        {
+                            // In Game Input Mode, keep ESC for the browser game/page (e.g. in-game menus). Do not detach/close.
+                            try { SuppressAppCloseBriefly(2.5f); } catch { }
+                            try { UnderNetBrowserConfig.Log("[UnderNetBrowser] ESC in Game Input Mode: forwarded to page (app close/detach suppressed)."); } catch { }
+                        }
+                        else
+                        {
+                            // ESC while in app (non-fullscreen, normal mode): mimic right-click detach (restore gameplay, keep app running/background).
+                            try { TryDetachToGameplayKeepAppOpen(); } catch { }
+                        }
                     }
                 }
                 if (Input.GetKeyDown(KeyCode.LeftArrow)) { SendVk(0x25); try { SendArrowMediaKeyFallback("left"); } catch { } }
@@ -1700,6 +1979,7 @@ namespace Firesky.UnderNetBrowser
             {
                 _browserPointerDown = false;
                 _browserPointerRightDown = false;
+                if (_gameMouseCaptured) { try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { } _gameMouseCaptured = false; }
                 return;
             }
             try
@@ -1720,8 +2000,12 @@ namespace Firesky.UnderNetBrowser
                 int vw = Math.Max(1, _gpuCompositionCapture.ViewWidth);
                 int vh = Math.Max(1, _gpuCompositionCapture.ViewHeight);
 
+                bool urlFocusedNowChk = _urlInput != null && _urlInput.isFocused;
+                bool gameModeActive = _gameInputMode && _compositionWebFocused && !urlFocusedNowChk;
+
                 if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, Input.mousePosition, cam, out var local))
                 {
+                    if (_gameMouseCaptured) { try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { } _gameMouseCaptured = false; }
                     if (mouseDown)
                     {
                         if (_compositionWebFocused) LogCompositionTypingDiag("webFocus cleared by click outside video rect");
@@ -1755,6 +2039,14 @@ namespace Firesky.UnderNetBrowser
                 bool inside = nx >= 0f && nx <= 1f && ny >= 0f && ny <= 1f;
                 int px = Mathf.Clamp(Mathf.RoundToInt(nx * (vw - 1)), 0, vw - 1);
                 int py = Mathf.Clamp(Mathf.RoundToInt(ny * (vh - 1)), 0, vh - 1);
+
+                // In game mode, avoid Unity cursor locking/virtual-mouse capture (can conflict with in-page cursors/pointer lock).
+                // Keep normal absolute pointer mapping so the website/game can handle its own cursor behavior.
+                if (_gameMouseCaptured)
+                {
+                    try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { }
+                    _gameMouseCaptured = false;
+                }
                 if (!inside)
                 {
                     // Click outside web content (e.g. chrome/address bar): allow UI interaction and stop routing keyboard to web.
@@ -1789,6 +2081,15 @@ namespace Firesky.UnderNetBrowser
                     if (!wasWebFocused)
                     {
                         try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                    }
+                    // In game mode, help focus the actual game canvas/element so keyboard events reach it.
+                    if (_gameInputMode)
+                    {
+                        try
+                        {
+                            _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{c.tabIndex=c.tabIndex||0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{d.body&&d.body.focus&&d.body.focus();}catch(_){} }catch(_){}})();");
+                        }
+                        catch { }
                     }
                     _gpuCompositionCapture.SendMouseMove(px, py, false, _browserPointerRightDown && rHeld);
                     _gpuCompositionCapture.SendMouseDown(px, py, false);
@@ -1967,6 +2268,34 @@ namespace Firesky.UnderNetBrowser
             // Do not navigate on end-edit/focus loss (e.g. clicking into the web page) - that would auto-submit the URL.
             // Navigation is explicit via Enter/submit or the Go/home/reload UI actions.
             try { EventHelper.AddListener((string _) => SetUrl(_urlInput?.text), _urlInput.onSubmit); } catch { }
+
+            // Visual indicator for Game Input Mode (F6)
+            try
+            {
+                _gameModeIndicatorRoot = new GameObject("UnderNetBrowser_GameModeIndicator");
+                _gameModeIndicatorRoot.transform.SetParent(_chromeRoot.transform, false);
+                var irt = _gameModeIndicatorRoot.AddComponent<RectTransform>();
+                irt.sizeDelta = new Vector2(120, 24);
+                var ile = _gameModeIndicatorRoot.AddComponent<LayoutElement>();
+                ile.preferredWidth = 120; ile.minWidth = 110; ile.preferredHeight = 24; ile.minHeight = 24; ile.flexibleWidth = 0; ile.flexibleHeight = 0;
+                var ibg = _gameModeIndicatorRoot.AddComponent<Image>();
+                ibg.color = new Color(0.18f, 0.55f, 0.24f, 0.95f);
+                ibg.raycastTarget = false;
+                var igo = new GameObject("Text");
+                igo.transform.SetParent(_gameModeIndicatorRoot.transform, false);
+                var itrt = igo.AddComponent<RectTransform>();
+                itrt.anchorMin = Vector2.zero; itrt.anchorMax = Vector2.one; itrt.offsetMin = new Vector2(6, 1); itrt.offsetMax = new Vector2(-6, -1);
+                _gameModeIndicatorText = igo.AddComponent<Text>();
+                _gameModeIndicatorText.font = GetUIFont();
+                _gameModeIndicatorText.fontSize = 12;
+                _gameModeIndicatorText.color = Color.white;
+                _gameModeIndicatorText.alignment = TextAnchor.MiddleCenter;
+                _gameModeIndicatorText.supportRichText = false;
+                _gameModeIndicatorText.raycastTarget = false;
+                _gameModeIndicatorText.text = "GAME INPUT (F6)";
+                _gameModeIndicatorRoot.SetActive(false);
+            }
+            catch { }
 
             _closeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_CloseBtn", "X", new Vector2(30, 26), new Color(0.45f, 0.16f, 0.18f, 1f), CloseAppToTvHome, 15);
 
@@ -2149,7 +2478,9 @@ namespace Firesky.UnderNetBrowser
                     }
                     catch { }
 
-                    // Heuristic: ESC while page is fullscreen should exit fullscreen, not close app (even if key handler didn't run first).
+                    // Heuristic: prevent ESC from closing the app when it should be handled by web content.
+                    // - Game Input Mode: games/pages need ESC for menus (do not close/detach).
+                    // - Page fullscreen: ESC must exit fullscreen (stay in app), preserve existing behavior.
                     try
                     {
                         bool esc = false;
@@ -2158,17 +2489,17 @@ namespace Firesky.UnderNetBrowser
                         {
                             bool fs = app._isPageFullscreen;
                             try { fs = fs || (app._gpuCompositionCapture != null && app._gpuCompositionCapture.IsFullscreen); } catch { }
-                            if (fs)
+                            if (app._gameInputMode || fs)
                             {
                                 SuppressAppCloseBriefly(2.5f);
                                 try
                                 {
                                     app._gpuCompositionCapture?.SendKey(0x0100, 0x1B, 0);
                                     app._gpuCompositionCapture?.SendKey(0x0101, 0x1B, 0);
-                                    app._gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; var fs=d.fullscreenElement||d.webkitFullscreenElement||d.mozFullScreenElement||d.msFullscreenElement; if(fs){try{(d.exitFullscreen||d.webkitExitFullscreen||d.mozCancelFullScreen||d.msExitFullscreen||function(){}).call(d);}catch(_){} try{if(fs.exitFullscreen)fs.exitFullscreen();}catch(_){} } var k={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true,composed:true}; try{(d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keydown',k)); (d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
+                                    app._gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; var fs=d.fullscreenElement||d.webkitFullscreenElement||d.mozFullScreenElement||d.msFullscreenElement; if(fs){try{(d.exitFullscreen||d.webkitExitFullscreen||d.mozCancelFullScreen||d.msExitFullscreen||function(){}).call(d);}catch(_){} try{if(fs.exitFullscreen)fs.exitFullscreen();}catch(_){} } var k={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true,composed:true}; try{(d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keydown',k)); (d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{window.dispatchEvent(new KeyboardEvent('keydown',k)); window.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} try{var c=d.querySelector('canvas'); if(c){c.dispatchEvent(new KeyboardEvent('keydown',k)); c.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
                                 }
                                 catch { }
-                                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose on ESC during fullscreen (prefix heuristic).");
+                                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose on ESC (gameMode=" + app._gameInputMode + ", fs=" + fs + ").");
                                 return false;
                             }
                         }
@@ -4992,6 +5323,39 @@ namespace Firesky.UnderNetBrowser
             try { return Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch { return null!; }
         }
 
+        private Sprite? LoadOrCreateIcon()
+        {
+            try
+            {
+                var asmPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                var asmDir = string.IsNullOrEmpty(asmPath) ? "" : System.IO.Path.GetDirectoryName(asmPath);
+                string[] candidates = new[]
+                {
+                    string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "UnderNetIcon.png"),
+                    string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "..", "UnderNetIcon.png"),
+                    string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "..", "..", "UnderNetIcon.png"),
+                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? "", "Mods", "UnderNetIcon.png"),
+                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? "", "UnderNetIcon.png")
+                };
+                foreach (var p in candidates)
+                {
+                    try
+                    {
+                        if (string.IsNullOrWhiteSpace(p) || !System.IO.File.Exists(p)) continue;
+                        var bytes = System.IO.File.ReadAllBytes(p);
+                        var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                        if (!ImageConversion.LoadImage(tex, bytes, false)) { UnityEngine.Object.Destroy(tex); continue; }
+                        tex.filterMode = FilterMode.Bilinear;
+                        tex.wrapMode = TextureWrapMode.Clamp;
+                        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return CreateDefaultIcon();
+        }
+
         private Sprite? CreateDefaultIcon()
         {
             try
@@ -5276,5 +5640,300 @@ namespace Firesky.UnderNetBrowser
         {
             // Streaming ring-buffer source: position resets are not meaningful; ignore.
         }
+
+
+        private void HandleExternalMirrorPointerInput()
+        {
+            if (_videoDisplay == null || !IsOpen || !_externalMirrorMode || _externalMirrorHwnd == IntPtr.Zero)
+            {
+                _browserPointerDown = false;
+                _browserPointerRightDown = false;
+                return;
+            }
+            try
+            {
+                var rt = _videoDisplay.rectTransform;
+                if (rt == null) return;
+                var canvas = _videoDisplay.canvas;
+                var cam = canvas != null ? canvas.worldCamera : null;
+                if (cam == null) cam = Camera.main;
+
+                bool mouseHeld = Input.GetMouseButton(0);
+                bool mouseDown = Input.GetMouseButtonDown(0);
+                bool mouseUp = Input.GetMouseButtonUp(0);
+                bool rHeld = Input.GetMouseButton(1);
+                bool rDown = Input.GetMouseButtonDown(1);
+                bool rUp = Input.GetMouseButtonUp(1);
+
+                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, Input.mousePosition, cam, out var local))
+                {
+                    if (mouseDown) { _compositionWebFocused = false; UpdateInputOwnershipState(); }
+                    if (_browserPointerDown && mouseUp) _browserPointerDown = false; else if (!mouseHeld) _browserPointerDown = false;
+                    if (_browserPointerRightDown && rUp) _browserPointerRightDown = false; else if (!rHeld) _browserPointerRightDown = false;
+                    return;
+                }
+                var rect = rt.rect;
+                if (rect.width <= 0.01f || rect.height <= 0.01f) return;
+                float nx = (local.x - rect.xMin) / rect.width;
+                float ny = (rect.yMax - local.y) / rect.height;
+                bool inside = nx >= 0f && nx <= 1f && ny >= 0f && ny <= 1f;
+                if (!inside)
+                {
+                    if (mouseDown) { _compositionWebFocused = false; UpdateInputOwnershipState(); }
+                    if (_browserPointerDown && mouseUp) _browserPointerDown = false; else if (!mouseHeld) _browserPointerDown = false;
+                    if (_browserPointerRightDown && rUp) _browserPointerRightDown = false; else if (!rHeld) _browserPointerRightDown = false;
+                    return;
+                }
+
+                if (!UnderNetBrowserExternalWindowMirror.GetClientRectScreen(_externalMirrorHwnd, out var crect)) return;
+                int cw = Math.Max(1, crect.Right - crect.Left);
+                int ch = Math.Max(1, crect.Bottom - crect.Top);
+                int px = Mathf.Clamp(Mathf.RoundToInt(nx * (cw - 1)), 0, cw - 1);
+                int py = Mathf.Clamp(Mathf.RoundToInt(ny * (ch - 1)), 0, ch - 1);
+
+                if (mouseDown)
+                {
+                    _browserPointerDown = true;
+                    _compositionWebFocused = true;
+                    try { if (_urlInput != null && _urlInput.isFocused) UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                    UpdateInputOwnershipState();
+                    UnderNetBrowserExternalWindowMirror.SendMouseMove(_externalMirrorHwnd, px, py);
+                    UnderNetBrowserExternalWindowMirror.SendMouseDown(_externalMirrorHwnd, px, py, false);
+                }
+                else if (rDown)
+                {
+                    _browserPointerRightDown = true;
+                    _compositionWebFocused = true;
+                    UpdateInputOwnershipState();
+                    UnderNetBrowserExternalWindowMirror.SendMouseMove(_externalMirrorHwnd, px, py);
+                    UnderNetBrowserExternalWindowMirror.SendMouseDown(_externalMirrorHwnd, px, py, true);
+                }
+                else
+                {
+                    bool moved = (px != _lastSentPointerX || py != _lastSentPointerY);
+                    bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
+                    if (moved && (due || mouseHeld || rHeld || _browserPointerDown || _browserPointerRightDown))
+                    {
+                        _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
+                        UnderNetBrowserExternalWindowMirror.SendMouseMove(_externalMirrorHwnd, px, py);
+                    }
+                }
+
+                if (mouseUp && _browserPointerDown)
+                {
+                    _browserPointerDown = false;
+                    UnderNetBrowserExternalWindowMirror.SendMouseUp(_externalMirrorHwnd, px, py, false);
+                }
+                if (rUp && _browserPointerRightDown)
+                {
+                    _browserPointerRightDown = false;
+                    UnderNetBrowserExternalWindowMirror.SendMouseUp(_externalMirrorHwnd, px, py, true);
+                }
+
+                float scroll = Input.mouseScrollDelta.y;
+                if (Math.Abs(scroll) > 0.001f)
+                {
+                    int delta = (int)(scroll * 120f);
+                    UnderNetBrowserExternalWindowMirror.SendMouseWheel(_externalMirrorHwnd, px, py, delta);
+                }
+            }
+            catch { }
+        }
+
+        private void HandleExternalMirrorKeyboardInput()
+        {
+            if (!_externalMirrorMode || _externalMirrorHwnd == IntPtr.Zero) return;
+            try
+            {
+                bool urlFocused = _urlInput != null && _urlInput.isFocused;
+                if (urlFocused) { if (_gameKeysHeld.Count > 0) ReleaseAllGameKeys("url_focused_mirror"); return; }
+                bool webFocused = _compositionWebFocused && !urlFocused;
+                if (!webFocused) { if (_gameKeysHeld.Count > 0) ReleaseAllGameKeys("web_unfocused_mirror"); return; }
+
+                // Forward tracked/game-mode keys and common typing keys to external window.
+                const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_CHAR = 0x0102;
+                foreach (var kc in s_gameInputTrackedKeys)
+                {
+                    if (!TryGetGameInputVk(kc, out var vk)) continue;
+                    bool down = Input.GetKey(kc);
+                    bool wasHeld = _gameKeysHeld.Contains(vk);
+                    if (down && !wasHeld)
+                    {
+                        _gameKeysHeld.Add(vk);
+                        UnderNetBrowserExternalWindowMirror.SendKey(_externalMirrorHwnd, WM_KEYDOWN, (ulong)vk, 0);
+                        if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) || vk == 0x20)
+                        {
+                            char ch = vk == 0x20 ? ' ' : (vk >= 0x41 && vk <= 0x5A ? (char)('a' + (vk - 0x41)) : (char)vk);
+                            UnderNetBrowserExternalWindowMirror.SendKey(_externalMirrorHwnd, WM_CHAR, ch, 0);
+                        }
+                    }
+                    else if (!down && wasHeld)
+                    {
+                        _gameKeysHeld.Remove(vk);
+                        UnderNetBrowserExternalWindowMirror.SendKey(_externalMirrorHwnd, WM_KEYUP, (ulong)vk, 0);
+                    }
+                }
+                // Text input for chat
+                try
+                {
+                    var input = Input.inputString;
+                    if (!string.IsNullOrEmpty(input))
+                    {
+                        foreach (char c in input)
+                        {
+                            if (c == '\b' || c == '\n' || c == '\r' || c == '\t') continue;
+                            UnderNetBrowserExternalWindowMirror.SendKey(_externalMirrorHwnd, WM_CHAR, c, 0);
+                        }
+                    }
+                }
+                catch { }
+            }
+            catch { }
+        }
+        private bool IsDiscordMirrorRequestUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            return url.IndexOf("discord.com/app", StringComparison.OrdinalIgnoreCase) >= 0
+                || url.IndexOf("discord.com/channels", StringComparison.OrdinalIgnoreCase) >= 0
+                || url.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryStartDiscordMirror(string? requestedUrl)
+        {
+            try
+            {
+                if (Time.realtimeSinceStartup - _lastExternalMirrorAttemptTime < 1.0f) return _externalMirrorMode;
+                _lastExternalMirrorAttemptTime = Time.realtimeSinceStartup;
+
+                if (!UnderNetBrowserExternalWindowMirror.TryFindDiscordWindow(out var target) || target.Hwnd == IntPtr.Zero)
+                    return false;
+
+                // Stop current external mirror if switching targets
+                if (_externalMirrorMode) StopExternalWindowMirror("restart");
+
+                _externalMirrorReturnUrl = _gpuCompositionCapture?.CurrentUrl;
+                if (string.IsNullOrWhiteSpace(_externalMirrorReturnUrl)) _externalMirrorReturnUrl = GetResolvedHomeUrl();
+
+                // Shut down composition browser (WGC HWND capture and comp browser share native target/render path).
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause();}catch(_){}}}catch(_){}})();"); } catch { }
+                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                _gpuCompositionCapture = null;
+                try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+                _gpuCompositionMode = false;
+
+                _externalWindowCapture = new UnderNetBrowserGpuCapture();
+                int w = Math.Max(2, _videoDisplay != null ? Mathf.RoundToInt(_videoDisplay.rectTransform.rect.width) : 1280);
+                int h = Math.Max(2, _videoDisplay != null ? Mathf.RoundToInt(_videoDisplay.rectTransform.rect.height) : 720);
+                if (w < 640 || h < 360) { w = 1280; h = 720; }
+                if (!_externalWindowCapture.TryStart(target.Hwnd, w, h))
+                {
+                    try { _externalWindowCapture.Dispose(); } catch { }
+                    _externalWindowCapture = null;
+                    SetHint("Discord found, but window capture failed.");
+                    // Try to restore browser home
+                    try { EnsureCompositionBrowserStarted(); } catch { }
+                    return false;
+                }
+
+                _externalMirrorHwnd = target.Hwnd;
+                _externalMirrorMode = true;
+                _externalMirrorLabel = string.IsNullOrWhiteSpace(target.Title) ? "Discord" : target.Title;
+                try { if (_videoDisplay != null && _externalWindowCapture.Texture != null) _videoDisplay.texture = _externalWindowCapture.Texture; } catch { }
+                try { SetUrlDisplayText($"discord:mirror ({_externalMirrorLabel})"); } catch { }
+                try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; } } catch { }
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror started: hwnd=0x{target.Hwnd.ToInt64():X} title='{_externalMirrorLabel}' pid={target.ProcessId}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] TryStartDiscordMirror failed: {ex.Message}");
+                try { StopExternalWindowMirror("start_failed"); } catch { }
+                return false;
+            }
+        }
+
+        private void StopExternalWindowMirror(string reason)
+        {
+            try
+            {
+                if (!_externalMirrorMode && _externalWindowCapture == null) return;
+                try { _externalWindowCapture?.Dispose(); } catch { }
+                _externalWindowCapture = null;
+                _externalMirrorMode = false;
+                _externalMirrorHwnd = IntPtr.Zero;
+                _externalMirrorLabel = "";
+                try { if (_videoDisplay != null) _videoDisplay.texture = null; } catch { }
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror stopped ({reason}).");
+            }
+            catch { }
+        }
+
+        private void EnsureCompositionBrowserStarted()
+        {
+            try
+            {
+                if (_gpuCompositionCapture != null) return;
+                _gpuCompositionMode = false;
+                // Reuse existing startup path by simulating open/init through existing fields? call the same logic used in OnOpened/start
+                var home = GetResolvedHomeUrl();
+                string compUserData = "";
+                try { compUserData = Path.Combine(GetUserDataRoot(), "WebView2", "UserData"); } catch { compUserData = ""; }
+                _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
+                int compW = 1920, compH = 1080;
+                try { compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560); } catch { }
+                try { compH = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080, 480, 1440); } catch { }
+                bool ok = false;
+                try { ok = _gpuCompositionCapture.TryStart(home, compW, compH, compUserData); } catch { ok = false; }
+                if (ok)
+                {
+                    _gpuCompositionMode = true;
+                    try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
+                }
+                else
+                {
+                    try { _gpuCompositionCapture.Dispose(); } catch { }
+                    _gpuCompositionCapture = null;
+                    _gpuCompositionMode = false;
+                    SetHint("Failed to restart browser after mirror.");
+                }
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] EnsureCompositionBrowserStarted failed: {ex.Message}");
+            }
+        }
+
+        private void UpdateExternalMirrorTick()
+        {
+            if (!_externalMirrorMode || _externalWindowCapture == null) return;
+            try
+            {
+                try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; _hintText.text = ""; } } catch { }
+                _externalWindowCapture.Tick();
+                if (_videoDisplay != null && _externalWindowCapture.Texture != null && _videoDisplay.texture != _externalWindowCapture.Texture)
+                    _videoDisplay.texture = _externalWindowCapture.Texture;
+
+                // If Discord window is gone, stop mirror and fall back.
+                if (_externalMirrorHwnd != IntPtr.Zero)
+                {
+                    bool alive = false;
+                    try { alive = IsWindow(_externalMirrorHwnd); } catch { alive = false; }
+                    if (!alive)
+                    {
+                        var ret = _externalMirrorReturnUrl;
+                        StopExternalWindowMirror("target_window_closed");
+                        EnsureCompositionBrowserStarted();
+                        try { SetUrl(string.IsNullOrWhiteSpace(ret) ? "undernet:home" : ret); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
+
     }
 }
+
+

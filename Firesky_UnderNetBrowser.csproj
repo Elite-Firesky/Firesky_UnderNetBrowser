@@ -106,5 +106,10 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <TargetPath>WebView2Loader.dll</TargetPath>
     </Content>
+    <Content Include="UnderNetIcon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>UnderNetIcon.png</TargetPath>
+    </Content>
   </ItemGroup>
 </Project>
