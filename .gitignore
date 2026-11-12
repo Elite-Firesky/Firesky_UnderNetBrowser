@@ -1,0 +1,147 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+out/
+artifacts/
+dist/
+
+# Visual Studio / IDE
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+*.ipch
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+.idea/
+*.DotSettings.user
+
+# CMake / native build artifacts
+**/build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/compile_commands.json
+**/CMakeConfigureLog.yaml
+**/CTestTestfile.cmake
+**/Makefile
+**/_deps/
+*.vcxproj.user
+*.tlog
+*.recipe
+*.lastbuildstate
+*.idb
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+# Compiled binaries / symbols / intermediates
+*.dll
+*.pdb
+*.exe
+*.lib
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+*.app
+*.appx
+*.msix
+*.nupkg
+*.snupkg
+
+# Allow required WebView2 redistributables referenced by the managed project
+!Redist/WebView2/WebView2Loader.dll
+!Redist/WebView2/lib/Microsoft.Web.WebView2.Core.dll
+!Redist/WebView2/lib/Microsoft.Web.WebView2.Core.xml
+
+# Diagnostics, logs, captures, local test output
+*.log
+*.csv
+Diagnostics/
+**/Diagnostics/
+*.etl
+*.dmp
+*.trace
+*.perf
+
+# WebView2 / browser runtime data, profiles, caches
+WebView2*/
+**/WebView2*/
+UserData/
+**/UserData/
+EBWebView/
+**/EBWebView/
+*Cache*/
+**/*Cache*/
+GPUCache/
+Code Cache/
+Crashpad/
+*.WebView2/
+BrowserProfiles/
+browser_profiles/
+
+# But keep required build redistributables
+!Redist/WebView2/
+!Redist/WebView2/**
+!Redist/WebView2/WebView2Loader.dll
+!Redist/WebView2/lib/Microsoft.Web.WebView2.Core.dll
+!Redist/WebView2/lib/Microsoft.Web.WebView2.Core.xml
+
+# Game installs, local deployment targets, packaged deployment copies
+for_client/
+**/for_client/
+Schedule I/
+**/Schedule I/**
+Mods/
+Plugins/
+UserLibs/
+MelonLoader/
+deploy/
+deployment/
+
+# Temporary / downloaded / generated extension build output
+tmp/
+temp/
+*.tmp
+*.temp
+downloads/
+Downloaded/
+**/generated/
+**/Generated/
+BrowserExtensions/**/build/
+BrowserExtensions/**/dist/
+BrowserExtensions/**/generated/
+BrowserExtensions/**/node_modules/
+BrowserExtensions/uBlockOriginLite/log.txt
+
+# Local machine-specific / secrets
+*.local
+*.local.*
+local.settings.*
+secrets/
+*.env
+.env
+.env.*
+*.pfx
+*.snk
+launchSettings.user.json
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
