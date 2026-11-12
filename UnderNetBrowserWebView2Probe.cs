@@ -86,7 +86,7 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                MelonLogger.Warning("[Firesky UnderNet Browser] [StageA/WebView2] RESULT: Runtime detected by registry but native loader/version probe did not succeed in this process. Ensure WebView2Loader.dll (x64) is shipped next to Firesky_UnderNetBrowser.dll (or in Mods/FireskyUnderNetBrowser/). Full CoreWebView2Environment creation must be tested in Schedule I (Stage A in-game).");
+                MelonLogger.Warning("[Firesky UnderNet Browser] [StageA/WebView2] RESULT: Runtime detected by registry but native loader/version probe did not succeed in this process. Ensure WebView2Loader.dll (x64) is shipped next to Firesky_UnderNetBrowser.dll or in Mods\\UnderNetBrowser\\ (or Mods\\FireskyUnderNetBrowser\\). Full CoreWebView2Environment creation must be tested in Schedule I (Stage A in-game).");
             }
             catch (Exception ex)
             {
@@ -107,7 +107,9 @@ namespace Firesky.UnderNetBrowser
                 {
                     if (string.IsNullOrWhiteSpace(dir)) return;
                     candidates.Add(System.IO.Path.Combine(dir, "WebView2Loader.dll"));
+                    candidates.Add(System.IO.Path.Combine(dir, "UnderNetBrowser", "WebView2Loader.dll"));
                     candidates.Add(System.IO.Path.Combine(dir, "FireskyUnderNetBrowser", "WebView2Loader.dll"));
+                    candidates.Add(System.IO.Path.Combine(dir, "deps", "WebView2Loader.dll"));
                     candidates.Add(System.IO.Path.Combine(dir, "Redist", "WebView2", "WebView2Loader.dll"));
                     candidates.Add(System.IO.Path.Combine(dir, "runtimes", "win-x64", "native", "WebView2Loader.dll"));
                 }
@@ -139,7 +141,7 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [StageA/WebView2] Bundled WebView2Loader.dll not found in expected mod locations. asmDir='{asmDir}' baseDir='{baseDir}'");
+                MelonLogger.Warning($"[Firesky UnderNet Browser] [StageA/WebView2] Bundled WebView2Loader.dll not found in expected mod locations (checked mod dir, Mods/UnderNetBrowser, Mods/FireskyUnderNetBrowser, deps). asmDir='{asmDir}' baseDir='{baseDir}'");
             }
             catch (Exception ex)
             {

@@ -71,11 +71,12 @@ Deploy to a **local** Schedule I install (paths vary by user). Do not commit gam
 | Component | Deploy to |
 |---|---|
 | `Firesky_UnderNetBrowser.dll` (managed mod) | `<Schedule I>\Mods\` |
-| `Microsoft.Web.WebView2.Core.dll`, `WebView2Loader.dll` (if required by your packaging/load context) | alongside mod in `<Schedule I>\Mods\` or as appropriate for your setup |
+| `Microsoft.Web.WebView2.Core.dll`, `WebView2Loader.dll` (WebView2 dependencies) | `<Schedule I>\Mods\UnderNetBrowser\` (or alongside the mod DLL in `<Schedule I>\Mods\`; mod resolves both locations) |
+| `UnderNetIcon.png` (app icon) | embedded in `Firesky_UnderNetBrowser.dll` (no separate file required; loose-file fallback still supported) |
 | `UnderNetGpuRenderer.dll` (native) | `<Schedule I>\Schedule I_Data\Plugins\x86_64\` (Unity native plugin path; restart game after changes) |
-| `BrowserExtensions/` assets (e.g. `uBlockOriginLite`) | as expected by mod/runtime extension deployment logic (often sourced from mod data/user data); keep source assets in repo, do not commit generated profile caches |
+| Default browser extension (`uBlockOriginLite`) | pre-seed in `<Schedule I>\UserData\FireskyUnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` for clients, or keep a source copy (e.g. `BrowserExtensions\uBlockOriginLite` in repo) for auto-deploy; runtime uses the WebView2 composition profile under `UserData\FireskyUnderNetBrowser\WebView2Composition\` (do not duplicate into extra `UserData\...\Extensions` or game `Mods` folders at runtime) |
 
-A local `for_client/`-style package folder may be used to stage these files for distribution/testing, but it is a deployment artifact and is excluded from version control.
+A local `for_client/`-style package folder may be used to stage these files for distribution/testing, but it is a deployment artifact and is excluded from version control. The staged client package should contain only files required by the client runtime (no redundant extension copies).
 
 ### Notes
 

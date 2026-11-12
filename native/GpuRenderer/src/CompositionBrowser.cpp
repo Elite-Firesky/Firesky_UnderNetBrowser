@@ -800,11 +800,9 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
                         if(FAILED(hr)||!cc){ impl->startError="CreateCompositionController failed"; m_running.store(false); m_status.store(-1); SetDiag("Start failed: compCtrl | " + tt); SetEvent(impl->readyEvent); return hr; }
                         impl->compController=cc; cc->QueryInterface(IID_PPV_ARGS(&impl->controller)); if(impl->controller) impl->controller->get_CoreWebView2(&impl->core);
-                        // Resolve browser PID for spatial PoC activation (if enabled) once core is ready.
-                        // NOTE: WASAPI process-loopback capture worker auto-start is deferred to avoid startup crashes
-                        // while activation/config propagation is being stabilized. Activation state + resolved PID are recorded.
+                        // Resolve browser PID once core is ready (used for spatial PoC and as last-resort shutdown cleanup).
                         try {
-                            if (impl->core && impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                            if (impl->core) {
                                 UINT32 bpid = 0;
                                 if (SUCCEEDED(impl->core->get_BrowserProcessId(&bpid)) && bpid != 0) {
                                     impl->spatialBrowserPid.store((uint32_t)bpid, std::memory_order_relaxed);
@@ -812,13 +810,16 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                         impl->spatialTargetPid.store((uint32_t)bpid, std::memory_order_relaxed);
                                     }
                                 }
-                                std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
-                                uint32_t pid = impl->spatialTargetPid.load(std::memory_order_relaxed);
-                                char buf[128];
-                                if (pid != 0) sprintf_s(buf, "spatial: enabled (pid=%u, capture deferred)", (unsigned)pid);
-                                else sprintf_s(buf, "spatial: enabled (browser pid unresolved, capture deferred)");
-                                impl->spatialDiag = buf;
-                                impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+                                // Spatial PoC activation state/diag (capture worker auto-start deferred).
+                                if (impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                                    std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+                                    uint32_t pid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+                                    char buf[128];
+                                    if (pid != 0) sprintf_s(buf, "spatial: enabled (pid=%u, capture deferred)", (unsigned)pid);
+                                    else sprintf_s(buf, "spatial: enabled (browser pid unresolved, capture deferred)");
+                                    impl->spatialDiag = buf;
+                                    impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+                                }
                             }
                         } catch (...) {}
                         if (impl->core) {
@@ -1641,23 +1642,70 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
             Sleep(1);
         }
 
-        // Best-effort stop playback/content before teardown.
+        // Best-effort stop playback/content before teardown (hardened to avoid lingering WebView2 processes).
+        auto PumpMessagesFor = [](DWORD totalMs) {
+            const ULONGLONG end = GetTickCount64() + (ULONGLONG)totalMs;
+            do {
+                MSG msg{};
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    if (msg.message == WM_QUIT) break;
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                DWORD remaining = 0;
+                ULONGLONG now = GetTickCount64();
+                if (now < end) {
+                    ULONGLONG rem64 = end - now;
+                    remaining = rem64 > 50 ? 50 : (DWORD)rem64;
+                }
+                MsgWaitForMultipleObjectsEx(0, nullptr, remaining, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            } while (GetTickCount64() < end);
+        };
+
+        try {
+            if (impl->core) {
+                // Stop active page work/media as aggressively as possible before closing WebView2.
+                const wchar_t* stopScript =
+                    L"(function(){try{var v=document.querySelectorAll('video,audio');for(var i=0;i<v.length;i++){try{v[i].pause();v[i].muted=true;v[i].removeAttribute('src');v[i].load();}catch(e){}}}catch(e){}"
+                    L"try{if(window.__unStopMediaInt){clearInterval(window.__unStopMediaInt);}}catch(e){}"
+                    L"try{window.__unStopMediaInt=setInterval(function(){try{var v=document.querySelectorAll('video,audio');for(var i=0;i<v.length;i++){try{v[i].pause();v[i].muted=true;}catch(e){}}}catch(e){}},100);}catch(e){}"
+                    L"try{var AC=window.AudioContext||window.webkitAudioContext;if(AC&&AC.prototype&&AC.prototype.close&&!AC.__unPatched){var _c=AC.prototype.close;AC.prototype.close=function(){try{return _c.apply(this,arguments);}catch(e){}};AC.__unPatched=1;}}catch(e){}"
+                    L"try{if(document.exitPointerLock){document.exitPointerLock();}}catch(e){}"
+                    L"try{if(document.fullscreenElement&&document.exitFullscreen){document.exitFullscreen();}}catch(e){}"
+                    L"try{window.stop&&window.stop();}catch(e){}})();";
+                try { impl->core->ExecuteScript(stopScript, nullptr); } catch (...) {}
+                try {
+                    ComPtr<ICoreWebView2_8> core8;
+                    if (SUCCEEDED(impl->core->QueryInterface(IID_PPV_ARGS(&core8))) && core8) {
+                        try { core8->put_IsMuted(TRUE); } catch (...) {}
+                    }
+                } catch (...) {}
+            }
+        } catch (...) {}
+
+        // Allow script/mute requests to be processed, then navigate away and stop.
+        PumpMessagesFor(150);
         try { if (impl->core) impl->core->Navigate(L"about:blank"); } catch (...) {}
         try { if (impl->core) impl->core->Stop(); } catch (...) {}
+        PumpMessagesFor(350);
 
         try { if (impl->session) impl->session.Close(); } catch (...) {}
         try { impl->session = nullptr; } catch (...) {}
         try { if (impl->pool) impl->pool.Close(); } catch (...) {}
         try { impl->pool = nullptr; } catch (...) {}
+        PumpMessagesFor(100);
 
         try { if (impl->controller) impl->controller->put_IsVisible(FALSE); } catch (...) {}
         try { if (impl->controller) impl->controller->Close(); } catch (...) {}
+        PumpMessagesFor(500);
 
         // Release WebView2/WinRT objects on the browser STA thread.
         try { impl->core.Reset(); } catch (...) {}
         try { impl->compController.Reset(); } catch (...) {}
         try { impl->controller.Reset(); } catch (...) {}
+        PumpMessagesFor(250);
         try { impl->env.Reset(); } catch (...) {}
+        PumpMessagesFor(250);
         try { impl->webVisual = nullptr; } catch (...) {}
         try { impl->rootVisual = nullptr; } catch (...) {}
         try { impl->compositor = nullptr; } catch (...) {}
@@ -1666,8 +1714,75 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
         if (impl->hostHwnd) { DestroyWindow(impl->hostHwnd); impl->hostHwnd = nullptr; }
 
+        // Final pump to let WebView2 process teardown/completion messages drain.
+        PumpMessagesFor(400);
+
+        // Last resort: if WebView2 browser process for this session is still alive, terminate its process tree.
+        // This prevents orphaned msedgewebview2.exe processes in cases where graceful shutdown doesn't complete.
+        try {
+            uint32_t browserPid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+            if (browserPid == 0) browserPid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+            if (browserPid != 0) {
+                auto processExists = [](DWORD pid) -> bool {
+                    if (pid == 0) return false;
+                    HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                    if (!h) return GetLastError() != ERROR_INVALID_PARAMETER;
+                    DWORD wr = WaitForSingleObject(h, 0);
+                    CloseHandle(h);
+                    return wr == WAIT_TIMEOUT;
+                };
+                auto collectTree = [](DWORD rootPid) -> std::vector<DWORD> {
+                    std::vector<DWORD> out;
+                    if (rootPid == 0) return out;
+                    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                    if (snap == INVALID_HANDLE_VALUE) { out.push_back(rootPid); return out; }
+                    std::vector<std::pair<DWORD, DWORD>> procs; // pid,parent
+                    PROCESSENTRY32W pe{};
+                    pe.dwSize = sizeof(pe);
+                    if (Process32FirstW(snap, &pe)) {
+                        do {
+                            procs.push_back({ pe.th32ProcessID, pe.th32ParentProcessID });
+                        } while (Process32NextW(snap, &pe));
+                    }
+                    CloseHandle(snap);
+                    std::vector<DWORD> q; q.push_back(rootPid);
+                    for (size_t i = 0; i < q.size(); ++i) {
+                        DWORD cur = q[i];
+                        bool seen = false;
+                        for (DWORD v : out) { if (v == cur) { seen = true; break; } }
+                        if (seen) continue;
+                        out.push_back(cur);
+                        for (auto& pp : procs) {
+                            if (pp.second == cur) q.push_back(pp.first);
+                        }
+                    }
+                    return out;
+                };
+
+                // Give graceful shutdown a brief moment to finish before forcing termination.
+                if (processExists(browserPid)) {
+                    PumpMessagesFor(250);
+                }
+                if (processExists(browserPid)) {
+                    auto tree = collectTree(browserPid);
+                    // Terminate children first, then root browser process.
+                    for (auto it = tree.rbegin(); it != tree.rend(); ++it) {
+                        DWORD pid = *it;
+                        if (pid == 0 || pid == GetCurrentProcessId()) continue;
+                        HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                        if (h) {
+                            TerminateProcess(h, 0);
+                            WaitForSingleObject(h, 200);
+                            CloseHandle(h);
+                        }
+                    }
+                }
+            }
+        } catch (...) {}
+
         // Release dispatcher queue controller reference; do not force ShutdownQueueAsync from teardown path.
         try { impl->dq = nullptr; } catch (...) {}
+        PumpMessagesFor(100);
     });
 
     // Async init: do not block Unity main thread. Thread will set status ready(1)/error(<0) and diag with per-stage timings.

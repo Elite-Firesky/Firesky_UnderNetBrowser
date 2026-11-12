@@ -359,6 +359,7 @@ namespace Firesky.UnderNetBrowser
             try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
             try { UnderNetBrowserInputHooks.LogDiagnostics(force: true); } catch { }
             bool explicitXClose = _explicitCloseRequested;
+            _explicitCloseRequested = false; // consume once
             if (explicitXClose)
             {
                 // Explicit app close (X): fully shut down browser/WebView2 to avoid lingering processes.
@@ -775,22 +776,17 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (string.IsNullOrWhiteSpace(sourceDir)) return;
 
-                var targets = new List<string>();
-                try { targets.Add(Path.Combine(compositionUserDataRoot, "Extensions", extensionFolderName)); } catch { }
-                try { targets.Add(Path.Combine(GetUserDataRoot(), "Extensions", extensionFolderName)); } catch { }
-
-                for (int t = 0; t < targets.Count; t++)
+                // Deploy only to the active WebView2 composition profile to avoid redundant duplicate copies in UserData.
+                try
                 {
-                    try
+                    var dst = Path.Combine(compositionUserDataRoot, "Extensions", extensionFolderName);
+                    if (!string.IsNullOrWhiteSpace(dst) && !File.Exists(Path.Combine(dst, "manifest.json")))
                     {
-                        var dst = targets[t];
-                        if (string.IsNullOrWhiteSpace(dst)) continue;
-                        if (File.Exists(Path.Combine(dst, "manifest.json"))) continue; // already present
                         CopyDirectoryRecursive(sourceDir, dst);
                         UnderNetBrowserConfig.Log($"[UnderNetBrowser] Auto-deployed default browser extension to '{dst}'.");
                     }
-                    catch { }
                 }
+                catch { }
             }
             catch { }
         }
@@ -1138,7 +1134,7 @@ namespace Firesky.UnderNetBrowser
                 const uint WM_KEYUP = 0x0101;
                 foreach (var vk in _gameKeysHeld)
                 {
-                    try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, 0); } catch { }
+                    try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, MakeKeyLParam(vk, true)); } catch { }
                     try { TrySendGameInputDomKeyUpByVk(vk); } catch { }
                 }
                 _gameKeysHeld.Clear();
@@ -1153,8 +1149,9 @@ namespace Firesky.UnderNetBrowser
             {
                 if (_gpuCompositionCapture == null) return;
                 if (!TryGetJsKeyEventPropsFromVk(vk, out var jsKey, out var jsCode, out var keyCode, out var location)) return;
+                // Lightweight DOM event for game input compatibility (no DOM queries/focus work).
                 string script =
-                    "(function(){try{var d=document;var tgt=d.activeElement||d.querySelector('canvas')||d.body||d.documentElement; var evInit={key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,composed:true,repeat:false}; var targets=[]; if(tgt) targets.push(tgt); if(d) targets.push(d); if(window) targets.push(window); for(var i=0;i<targets.length;i++){try{targets[i].dispatchEvent(new KeyboardEvent('keyup',evInit));}catch(_){}} }catch(_){}})();";
+                    "try{var e=new KeyboardEvent('keyup',{key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,repeat:false});window.dispatchEvent(e);document.dispatchEvent(e);}catch(_e){}";
                 _gpuCompositionCapture.ExecuteScript(script);
             }
             catch { }
@@ -1307,19 +1304,10 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
 
-                // Periodic focus nudge for browser games (some pages/canvas lose focus after load or internal transitions).
-                try
-                {
-                    if (Time.unscaledTime - _lastGameModeFocusNudge > 0.75f)
-                    {
-                        _lastGameModeFocusNudge = Time.unscaledTime;
-                        try { _gpuCompositionCapture.RequestFocus(); } catch { }
-                        try { _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus();}catch(_){}} }catch(_){}})();"); } catch { }
-                    }
-                }
-                catch { }
-
-                const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_CHAR = 0x0102;
+                // Forward real key down/up transitions to WebView2 via native Win32 messages.
+                // Avoid per-frame/per-key ExecuteScript DOM injection and periodic focus/script nudges here:
+                // they add overhead on the WebView2/page thread and can cause lag, delays, and audio issues in games.
+                const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
                 foreach (var kc in s_gameInputTrackedKeys)
                 {
                     if (!TryGetGameInputVk(kc, out var vk)) continue;
@@ -1328,20 +1316,13 @@ namespace Firesky.UnderNetBrowser
                     if (down && !wasHeld)
                     {
                         _gameKeysHeld.Add(vk);
-                        try { _gpuCompositionCapture.SendKey(WM_KEYDOWN, (ulong)vk, 0); } catch { }
-                        // For basic text-producing keys, also send WM_CHAR on initial press for games/pages that expect it.
-                        if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) || vk == 0x20)
-                        {
-                            char ch = vk == 0x20 ? ' ' : (vk >= 0x41 && vk <= 0x5A ? (char)('a' + (vk - 0x41)) : (char)vk);
-                            try { _gpuCompositionCapture.SendKey(WM_CHAR, ch, 0); } catch { }
-                        }
-                        // Browser games (WebGL/Emscripten) often rely on DOM KeyboardEvents/focus; inject events as a compatibility path.
+                        try { _gpuCompositionCapture.SendKey(WM_KEYDOWN, (ulong)vk, MakeKeyLParam(vk, false)); } catch { }
                         TrySendGameInputDomKeyEvent(kc, vk, true);
                     }
                     else if (!down && wasHeld)
                     {
                         _gameKeysHeld.Remove(vk);
-                        try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, 0); } catch { }
+                        try { _gpuCompositionCapture.SendKey(WM_KEYUP, (ulong)vk, MakeKeyLParam(vk, true)); } catch { }
                         TrySendGameInputDomKeyEvent(kc, vk, false);
                     }
                 }
@@ -1356,14 +1337,33 @@ namespace Firesky.UnderNetBrowser
                 if (_gpuCompositionCapture == null) return;
                 if (!TryGetJsKeyEventProps(kc, vk, out var jsKey, out var jsCode, out var keyCode, out var location)) return;
                 string type = down ? "keydown" : "keyup";
-                // Dispatch to focused/canvas targets and window to maximize compatibility with browser games.
-                // Do not prevent default globally except we let page handle; some games need default prevented for arrows/space - emulate common behavior via event options is limited,
-                // but dispatching proper KeyboardEvents is often sufficient.
+                // Lightweight DOM KeyboardEvent for browser-game compatibility (sent on transitions only, no DOM queries/focus work).
                 string script =
-                    "(function(){try{var d=document;var tgt=d.activeElement;if(!tgt||tgt===d.body||tgt===d.documentElement){var c=d.querySelector('canvas'); if(c){try{if(typeof c.focus==='function') c.focus();}catch(_){} tgt=c;}} if(!tgt)tgt=d.body||d.documentElement; var evInit={key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,composed:true,repeat:false}; var targets=[]; if(tgt) targets.push(tgt); if(d) targets.push(d); if(window) targets.push(window); for(var i=0;i<targets.length;i++){try{targets[i].dispatchEvent(new KeyboardEvent('" + type + "',evInit));}catch(_){}} }catch(_){}})();";
+                    "try{var e=new KeyboardEvent('" + type + "',{key:'" + EscapeJsString(jsKey) + "',code:'" + EscapeJsString(jsCode) + "',keyCode:" + keyCode + ",which:" + keyCode + ",location:" + location + ",bubbles:true,cancelable:true,repeat:false});window.dispatchEvent(e);document.dispatchEvent(e);}catch(_e){}";
                 _gpuCompositionCapture.ExecuteScript(script);
             }
             catch { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        private static ulong MakeKeyLParam(int vk, bool keyUp)
+        {
+            try
+            {
+                uint scan = MapVirtualKey((uint)vk, 0) & 0xFF;
+                bool extended = vk == 0xA3 || vk == 0xA5 || // RCtrl, RAlt
+                                vk == 0x2D || vk == 0x2E || vk == 0x24 || vk == 0x23 || // Ins, Del, Home, End
+                                vk == 0x21 || vk == 0x22 || // PgUp, PgDn
+                                (vk >= 0x25 && vk <= 0x28) || // arrows
+                                vk == 0x6F; // numpad divide
+                ulong lp = 1UL | ((ulong)scan << 16);
+                if (extended) lp |= 1UL << 24;
+                if (keyUp) lp |= (1UL << 30) | (1UL << 31);
+                return lp;
+            }
+            catch { return keyUp ? 0xC0000001UL : 0x00000001UL; }
         }
 
         private static bool TryGetJsKeyEventProps(KeyCode kc, int vk, out string key, out string code, out int keyCode, out int location)
@@ -2082,12 +2082,12 @@ namespace Firesky.UnderNetBrowser
                     {
                         try { _gpuCompositionCapture.RequestFocus(); } catch { }
                     }
-                    // In game mode, help focus the actual game canvas/element so keyboard events reach it.
-                    if (_gameInputMode)
+                    // In game mode, help focus the actual game canvas/element so keyboard events reach it (once on focus transition).
+                    if (_gameInputMode && !wasWebFocused)
                     {
                         try
                         {
-                            _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{c.tabIndex=c.tabIndex||0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{d.body&&d.body.focus&&d.body.focus();}catch(_){} }catch(_){}})();");
+                            _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} }catch(_){}})();");
                         }
                         catch { }
                     }
@@ -2364,6 +2364,7 @@ namespace Firesky.UnderNetBrowser
 
         private void CloseAppToTvHome()
         {
+            bool invokedFrameworkClose = false;
             try
             {
                 MelonLogger.Msg("[Firesky UnderNet Browser] [UnderNetBrowser] Close requested (X).");
@@ -2380,18 +2381,24 @@ namespace Firesky.UnderNetBrowser
                         var m = t.GetMethod(n, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic, null, Type.EmptyTypes, null);
                         if (m != null)
                         {
+                            invokedFrameworkClose = true;
                             m.Invoke(this, null);
                             return;
                         }
                     }
-                    catch { }
+                    catch { invokedFrameworkClose = false; }
                 }
                 // Fallback: treat as close callback (will at least stop our browser/HUD restore) if framework doesn't expose explicit close.
                 try { OnClosed(); } catch { }
                 UnderNetBrowserConfig.Log("[UnderNetBrowser] No TVApp close method found via reflection; performed local close cleanup only.");
             }
             catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Close failed: {ex.Message}"); }
-            finally { _explicitCloseRequested = false; }
+            finally
+            {
+                // If framework close was invoked, OnClosed may run later and must see explicit-close intent.
+                // It will clear the flag; clear here only for immediate/fallback paths.
+                if (!invokedFrameworkClose) _explicitCloseRequested = false;
+            }
         }
 
         private bool _detachRequested;
@@ -5327,6 +5334,47 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
+                // Prefer embedded icon (no loose file required)
+                try
+                {
+                    var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                    string? resName = null;
+                    try
+                    {
+                        var names = asm.GetManifestResourceNames();
+                        for (int i = 0; i < names.Length; i++)
+                        {
+                            if (names[i] != null && names[i].EndsWith("UnderNetIcon.png", StringComparison.OrdinalIgnoreCase))
+                            { resName = names[i]; break; }
+                        }
+                    }
+                    catch { resName = null; }
+                    if (!string.IsNullOrWhiteSpace(resName))
+                    {
+                        using (var s = asm.GetManifestResourceStream(resName))
+                        {
+                            if (s != null)
+                            {
+                                using (var ms = new System.IO.MemoryStream())
+                                {
+                                    s.CopyTo(ms);
+                                    var bytes = ms.ToArray();
+                                    var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                                    if (ImageConversion.LoadImage(tex, bytes, false))
+                                    {
+                                        tex.filterMode = FilterMode.Bilinear;
+                                        tex.wrapMode = TextureWrapMode.Clamp;
+                                        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                                    }
+                                    UnityEngine.Object.Destroy(tex);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Backward-compatible fallback: loose file next to mod / in Mods
                 var asmPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
                 var asmDir = string.IsNullOrEmpty(asmPath) ? "" : System.IO.Path.GetDirectoryName(asmPath);
                 string[] candidates = new[]

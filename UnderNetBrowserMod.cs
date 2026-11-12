@@ -1,5 +1,7 @@
 ﻿using System;
+using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using HarmonyLib;
 using MelonLoader;
 using UnityEngine;
@@ -15,8 +17,106 @@ namespace Firesky.UnderNetBrowser
     public class UnderNetBrowserMod : MelonMod
     {
         private static HarmonyLib.Harmony? _tvHarmony;
+        private static bool _depsResolved;
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool AddDllDirectory(IntPtr newDirectory);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string lpFileName);
+
+        private static void EnsureDependencyResolution()
+        {
+            if (_depsResolved) return;
+            _depsResolved = true;
+            try
+            {
+                AppDomain.CurrentDomain.AssemblyResolve += OnAssemblyResolve;
+            }
+            catch { }
+            try
+            {
+                var asmLoc = typeof(UnderNetBrowserMod).Assembly.Location;
+                var asmDir = string.IsNullOrWhiteSpace(asmLoc) ? null : Path.GetDirectoryName(asmLoc);
+                var candidates = new System.Collections.Generic.List<string>();
+                void Add(string? d)
+                {
+                    if (string.IsNullOrWhiteSpace(d)) return;
+                    candidates.Add(d);
+                    candidates.Add(Path.Combine(d, "UnderNetBrowser"));
+                    candidates.Add(Path.Combine(d, "FireskyUnderNetBrowser"));
+                    candidates.Add(Path.Combine(d, "deps"));
+                    candidates.Add(Path.Combine(d, "lib"));
+                }
+                Add(asmDir);
+                try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory); } catch { }
+                try { Add(AppContext.BaseDirectory); } catch { }
+                foreach (var d in candidates)
+                {
+                    try
+                    {
+                        if (string.IsNullOrWhiteSpace(d)) continue;
+                        if (!Directory.Exists(d)) continue;
+                        // Try to preload native loader from subfolder
+                        var loader = Path.Combine(d, "WebView2Loader.dll");
+                        if (File.Exists(loader)) { try { LoadLibrary(loader); } catch { } }
+                        // Also add to DLL search path
+                        try { SetDllDirectory(d); } catch { }
+                        try { AddDllDirectory(Marshal.StringToHGlobalUni(d)); } catch { } /* best-effort; handle not freed, acceptable for lifetime of process */
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        private static System.Reflection.Assembly? OnAssemblyResolve(object sender, ResolveEventArgs args)
+        {
+            try
+            {
+                var name = new System.Reflection.AssemblyName(args.Name);
+                var simpleName = name.Name;
+                if (string.IsNullOrWhiteSpace(simpleName)) return null;
+                // Only handle our known dependencies
+                if (!string.Equals(simpleName, "Microsoft.Web.WebView2.Core", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                var asmLoc = typeof(UnderNetBrowserMod).Assembly.Location;
+                var asmDir = string.IsNullOrWhiteSpace(asmLoc) ? null : Path.GetDirectoryName(asmLoc);
+                string[] baseDirs = new[]
+                {
+                    asmDir ?? "",
+                    tryGet(() => MelonLoader.Utils.MelonEnvironment.ModsDirectory) ?? "",
+                    AppContext.BaseDirectory ?? ""
+                };
+                string[] sub = new[] { "UnderNetBrowser", "FireskyUnderNetBrowser", "deps", "lib", "" };
+                foreach (var bd in baseDirs)
+                {
+                    if (string.IsNullOrWhiteSpace(bd)) continue;
+                    foreach (var s in sub)
+                    {
+                        try
+                        {
+                            string dir = string.IsNullOrEmpty(s) ? bd : Path.Combine(bd, s);
+                            string path = Path.Combine(dir, simpleName + ".dll");
+                            if (File.Exists(path))
+                                return System.Reflection.Assembly.LoadFrom(path);
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string? tryGet(Func<string> f) { try { return f(); } catch { return null; } }
+
         public override void OnInitializeMelon()
         {
+            EnsureDependencyResolution();
             UnderNetBrowserConfig.Initialize();
             MelonLogger.Msg("[Firesky UnderNet Browser] Mod initialized. TV app 'UnderNet' registered via S1API.");
 
