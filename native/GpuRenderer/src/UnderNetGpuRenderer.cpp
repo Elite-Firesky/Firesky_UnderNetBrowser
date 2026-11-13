@@ -686,6 +686,11 @@ UN_EXPORT void __stdcall UnGpu_CompRequestFocus() {
     g_comp.RequestFocus();
 }
 
+UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float volume01) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_comp.SetDistanceAudioVolume(enabled != 0, volume01);
+}
+
 UN_EXPORT void __stdcall UnGpu_CompSetSpatialAudioPoc(int32_t enabled, uint32_t targetPid) {
     std::lock_guard<std::mutex> lock(g_mutex);
     char msg[160];

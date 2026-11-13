@@ -203,6 +203,10 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompRequestFocus")]
         public static extern void CompRequestFocus();
 
+        // Best-effort process-level audio attenuation for WebView2 browser process tree (distance-based volume testing).
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetDistanceAudioVolume")]
+        public static extern void CompSetDistanceAudioVolume(int enabled, float volume01);
+
         // Stage 3 Gate A PoC (dev-only): enable experimental WASAPI process-loopback capture diagnostics/attempt.
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetSpatialAudioPoc")]
         public static extern void CompSetSpatialAudioPoc(int enabled, uint targetPid);

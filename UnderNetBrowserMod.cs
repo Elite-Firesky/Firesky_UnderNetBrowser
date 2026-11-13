@@ -143,6 +143,7 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (_tvHarmony == null) return;
+                TryPatchSimpleChatEnterOpen(); // best-effort: prevent chat mod from consuming Enter while browser owns input
                 var tvAppType = typeof(S1API.TVApp.TVApp);
                 foreach (var name in new[] { "Close", "ForceClose" })
                 {
@@ -274,6 +275,67 @@ namespace Firesky.UnderNetBrowser
                 }
             }
             catch { }
+        }
+
+        private static void TryPatchSimpleChatEnterOpen()
+        {
+            try
+            {
+                if (_tvHarmony == null) return;
+                Type? chatUiType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { chatUiType = asm.GetType("SimpleChat.ChatUI", false); } catch { chatUiType = null; }
+                    if (chatUiType != null) break;
+                }
+                if (chatUiType == null)
+                {
+                    // SimpleChat may load later; harmless if absent.
+                    // MelonLogger.Msg("[Firesky UnderNet Browser] SimpleChat.ChatUI not found (Enter-guard patch skipped).");
+                    return;
+                }
+
+                var prefix = typeof(UnderNetBrowserMod).GetMethod(nameof(SimpleChat_OpenChatPrefix), BindingFlags.Static | BindingFlags.NonPublic);
+                if (prefix == null) return;
+
+                foreach (var name in new[] { "OpenChat", "Update" })
+                {
+                    try
+                    {
+                        var mi = chatUiType.GetMethod(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (mi == null) continue;
+                        _tvHarmony.Patch(mi, prefix: new HarmonyMethod(prefix));
+                        MelonLogger.Msg($"[Firesky UnderNet Browser] Patched SimpleChat.ChatUI.{name} (browser Enter/chat guard, best-effort).");
+                    }
+                    catch (Exception ex)
+                    {
+                        MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch SimpleChat.ChatUI.{name}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[Firesky UnderNet Browser] SimpleChat patch failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        private static bool SimpleChat_OpenChatPrefix(System.Reflection.MethodBase __originalMethod)
+        {
+            try
+            {
+                if (UnderNetBrowserInputHooks.ShouldBrowserConsumeEnterNow())
+                {
+                    // Allow ChatUI.Update to continue doing harmless UI refreshes? No, prefix runs before method.
+                    // For OpenChat: block opening chat while browser is using Enter.
+                    // For Update: do not block whole update (it manages rendering/state); only block Enter-open inside Update via Input hooks.
+                    // So skip only OpenChat here.
+                    var name = __originalMethod?.Name ?? "";
+                    if (string.Equals(name, "OpenChat", StringComparison.Ordinal))
+                        return false;
+                }
+            }
+            catch { }
+            return true;
         }
 
         public override void OnApplicationQuit()

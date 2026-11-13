@@ -197,6 +197,13 @@ struct CompositionBrowser::Impl {
     UINT cW=0,cH=0,tW=0,tH=0; DXGI_FORMAT fmt=DXGI_FORMAT_UNKNOWN; uint64_t seq=0,copied=0;
     uint64_t lastFullDiagBuildMs = 0; // throttle expensive per-frame diag string rebuilds
 
+    // Distance-based audio attenuation (best-effort, WebView2 process-tree session volume)
+    std::atomic<bool> distanceAudioEnabled{false};
+    std::atomic<int> distanceAudioVolumeMilli{1000}; // 0..1000
+    uint64_t lastDistanceAudioApplyMs = 0;
+    int lastDistanceAudioAppliedMilli = -1;
+    bool distanceAudioNeedsRestore = false;
+
     // blit
     ID3D11VertexShader* vs=nullptr; ID3D11PixelShader* ps=nullptr; ID3D11SamplerState* samp=nullptr; ID3D11Buffer* cb=nullptr; ID3D11BlendState* blend=nullptr; ID3D11RasterizerState* rs=nullptr; bool blitReady=false;
 
@@ -667,6 +674,9 @@ namespace {
         });
     }
 }
+
+static std::vector<uint32_t> CollectProcessTreePids(uint32_t rootPid);
+static void ApplyDistanceAudioVolumeToProcessTree(CompositionBrowser::Impl* impl, bool enabled, float volume01);
 
 bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height, const std::wstring& initialUrl, const std::wstring& userDataFolder, std::string& outError) {
     Shutdown();
@@ -1640,8 +1650,43 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                 std::lock_guard<std::mutex> lk(impl->inputMutex);
                 impl->mouseQueue.clear();
             }
+
+            // Distance-based WebView2 process audio attenuation (best-effort, throttled).
+            try {
+                uint64_t nowMs = GetTickCount64();
+                bool enabled = impl->distanceAudioEnabled.load(std::memory_order_relaxed);
+                int milli = impl->distanceAudioVolumeMilli.load(std::memory_order_relaxed);
+                if (milli < 0) milli = 0; if (milli > 1000) milli = 1000;
+                bool needApply = false;
+                if (enabled) {
+                    if (impl->lastDistanceAudioAppliedMilli != milli || (nowMs - impl->lastDistanceAudioApplyMs) >= 250) needApply = true;
+                } else if (impl->distanceAudioNeedsRestore && (nowMs - impl->lastDistanceAudioApplyMs) >= 250) {
+                    needApply = true;
+                }
+                if (needApply) {
+                    ApplyDistanceAudioVolumeToProcessTree(impl, enabled, (float)milli / 1000.0f);
+                    impl->lastDistanceAudioApplyMs = nowMs;
+                    if (enabled) {
+                        impl->lastDistanceAudioAppliedMilli = milli;
+                        impl->distanceAudioNeedsRestore = true;
+                    } else {
+                        impl->lastDistanceAudioAppliedMilli = 1000;
+                        impl->distanceAudioNeedsRestore = false;
+                    }
+                }
+            } catch (...) {}
+
             Sleep(1);
         }
+
+        // Best-effort: restore process audio volume if distance attenuation modified it.
+        try {
+            ApplyDistanceAudioVolumeToProcessTree(impl, false, 1.0f);
+            impl->distanceAudioEnabled.store(false, std::memory_order_relaxed);
+            impl->distanceAudioVolumeMilli.store(1000, std::memory_order_relaxed);
+            impl->distanceAudioNeedsRestore = false;
+            impl->lastDistanceAudioAppliedMilli = 1000;
+        } catch (...) {}
 
         // Best-effort stop playback/content before teardown (hardened to avoid lingering WebView2 processes).
         auto PumpMessagesFor = [](DWORD totalMs) {
@@ -2144,6 +2189,133 @@ void CompositionBrowser::RequestFocus(){
     if(!m_impl) return;
     m_impl->diagFocusReqSet.fetch_add(1, std::memory_order_relaxed);
     m_impl->focusRequested.store(true);
+}
+
+static std::vector<uint32_t> CollectProcessTreePids(uint32_t rootPid)
+{
+    std::vector<uint32_t> result;
+    if (rootPid == 0) return result;
+    result.push_back(rootPid);
+
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return result;
+
+    struct Node { uint32_t pid; uint32_t ppid; };
+    std::vector<Node> procs;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            procs.push_back({ pe.th32ProcessID, pe.th32ParentProcessID });
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+
+    std::vector<uint32_t> queue;
+    queue.push_back(rootPid);
+    for (size_t qi = 0; qi < queue.size(); ++qi) {
+        uint32_t cur = queue[qi];
+        for (const auto& n : procs) {
+            if (n.ppid != cur || n.pid == 0) continue;
+            bool seen = false;
+            for (auto v : result) { if (v == n.pid) { seen = true; break; } }
+            if (!seen) {
+                result.push_back(n.pid);
+                queue.push_back(n.pid);
+            }
+        }
+    }
+    return result;
+}
+
+static void ApplyDistanceAudioVolumeToProcessTree(CompositionBrowser::Impl* impl, bool enabled, float volume01)
+{
+    if (!impl) return;
+    if (volume01 < 0.0f) volume01 = 0.0f;
+    if (volume01 > 1.0f) volume01 = 1.0f;
+
+    uint32_t browserPid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+    if (browserPid == 0) {
+        // Fallback: target pid field may be used in some contexts; prefer browser pid for this feature.
+        browserPid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+    }
+    if (browserPid == 0) return;
+
+    auto pids = CollectProcessTreePids(browserPid);
+    if (pids.empty()) return;
+
+    auto pidInTree = [&pids](DWORD pid) -> bool {
+        for (auto p : pids) { if (p == pid) return true; }
+        return false;
+    };
+
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr) || !enumerator) return;
+
+    ComPtr<IMMDevice> device;
+    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+    if (FAILED(hr) || !device) return;
+
+    ComPtr<IAudioSessionManager2> sessionManager;
+    hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, (void**)sessionManager.GetAddressOf());
+    if (FAILED(hr) || !sessionManager) return;
+
+    ComPtr<IAudioSessionEnumerator> sessionEnum;
+    hr = sessionManager->GetSessionEnumerator(&sessionEnum);
+    if (FAILED(hr) || !sessionEnum) return;
+
+    int count = 0;
+    if (FAILED(sessionEnum->GetCount(&count)) || count <= 0) return;
+
+    const float targetVol = enabled ? volume01 : 1.0f;
+    for (int i = 0; i < count; ++i) {
+        ComPtr<IAudioSessionControl> sessionControl;
+        if (FAILED(sessionEnum->GetSession(i, &sessionControl)) || !sessionControl) continue;
+
+        ComPtr<IAudioSessionControl2> sessionControl2;
+        if (FAILED(sessionControl.As(&sessionControl2)) || !sessionControl2) continue;
+
+        DWORD sessionPid = 0;
+        if (FAILED(sessionControl2->GetProcessId(&sessionPid))) continue;
+        if (sessionPid == 0 || !pidInTree(sessionPid)) continue;
+
+        ComPtr<ISimpleAudioVolume> simpleVol;
+        if (FAILED(sessionControl.As(&simpleVol)) || !simpleVol) continue;
+
+        float current = 1.0f;
+        if (SUCCEEDED(simpleVol->GetMasterVolume(&current))) {
+            if (fabsf(current - targetVol) > 0.01f) {
+                try { simpleVol->SetMasterVolume(targetVol, nullptr); } catch (...) {}
+            }
+        } else {
+            try { simpleVol->SetMasterVolume(targetVol, nullptr); } catch (...) {}
+        }
+    }
+}
+
+void CompositionBrowser::SetDistanceAudioVolume(bool enabled, float volume01)
+{
+    if (volume01 < 0.0f) volume01 = 0.0f;
+    if (volume01 > 1.0f) volume01 = 1.0f;
+    int milli = (int)(volume01 * 1000.0f + 0.5f);
+    if (milli < 0) milli = 0;
+    if (milli > 1000) milli = 1000;
+
+    if (!m_impl) {
+        // No impl yet; nothing to apply now. Managed side should re-send when active.
+        return;
+    }
+
+    m_impl->distanceAudioEnabled.store(enabled, std::memory_order_relaxed);
+    m_impl->distanceAudioVolumeMilli.store(milli, std::memory_order_relaxed);
+    if (enabled) m_impl->distanceAudioNeedsRestore = true;
+
+    // Apply promptly on caller thread best-effort (managed calls are fine; COM calls are lightweight and this is test feature).
+    // Also applied periodically from browser thread loop for ongoing attenuation/restore.
+    try { ApplyDistanceAudioVolumeToProcessTree(m_impl, enabled, (float)milli / 1000.0f); } catch (...) {}
+    m_impl->lastDistanceAudioApplyMs = GetTickCount64();
+    m_impl->lastDistanceAudioAppliedMilli = enabled ? milli : 1000;
 }
 
 void CompositionBrowser::SetSpatialAudioPoc(bool enabled, uint32_t targetPid){

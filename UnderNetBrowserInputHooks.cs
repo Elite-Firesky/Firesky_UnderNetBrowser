@@ -41,6 +41,7 @@ namespace Firesky.UnderNetBrowser
         private static int _lastObservedEquipSlot = int.MinValue;
         private static long _lastDiagLogTick;
         private static int _ownershipTransitions;
+        private static float _suppressEnterForGameUntilRealtime;
 
         public static bool Installed => _installed;
         public static IReadOnlyList<string> HookedMethods => _hookedMethods;
@@ -85,6 +86,7 @@ namespace Firesky.UnderNetBrowser
                     ok += TryHookPlayerInventory() ? 1 : 0;
                     ok += TryHookScrollWheelHandlers();
                     ok += TryHookGameplayActionHandlers(); // WASD/movement/jump/crouch/sprint/interact suppression while TV active
+                    ok += TryHookUnityInputEnter() ? 1 : 0; // best-effort: prevent game chat/mod hotkeys consuming Enter used by browser UI/web inputs
                     _installed = ok > 0;
                     MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] Init complete. installed={_installed} hooks={_hookedMethods.Count} failures={_hookFailures.Count} optionalUnavailable={_hookNotes.Count}");
                     foreach (var h in _hookedMethods) MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] Hooked: {h}");
@@ -328,6 +330,100 @@ namespace Firesky.UnderNetBrowser
         private static void EquippedSlotChanged_Postfix(object __instance)
         {
             try { ObserveEquipSlot(__instance, null, changing: false); } catch { }
+        }
+
+        internal static void SuppressEnterForGameBriefly(float seconds = 0.15f)
+        {
+            try
+            {
+                float until = UnityEngine.Time.realtimeSinceStartup + Math.Max(0.05f, seconds);
+                if (until > _suppressEnterForGameUntilRealtime) _suppressEnterForGameUntilRealtime = until;
+            }
+            catch { }
+        }
+
+        private static bool TryHookUnityInputEnter()
+        {
+            bool any = false;
+            try
+            {
+                if (_harmony == null) return false;
+                var t = typeof(UnityEngine.Input);
+                foreach (var name in new[] { "GetKeyDown", "GetKeyUp", "GetKey" })
+                {
+                    try
+                    {
+                        var mi = t.GetMethod(name, BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(UnityEngine.KeyCode) }, null);
+                        if (mi == null) continue;
+                        string patchName = name == "GetKeyDown" ? nameof(Input_GetKeyDown_EnterPrefix)
+                            : name == "GetKeyUp" ? nameof(Input_GetKeyUp_EnterPrefix)
+                            : nameof(Input_GetKey_EnterPrefix);
+                        if (TryPatchMethodBase(mi, patchName, prefix: true))
+                            any = true;
+                    }
+                    catch (Exception ex) { _hookFailures.Add($"Input.{name}(KeyCode) hook failed: {ex.Message}"); }
+                }
+            }
+            catch (Exception ex) { _hookFailures.Add($"TryHookUnityInputEnter exception: {ex.Message}"); }
+            if (!any) _hookNotes.Add("UnityEngine.Input Enter suppression hook unavailable; chat mods may still react to Enter in browser text contexts.");
+            return any;
+        }
+
+        internal static bool ShouldBrowserConsumeEnterNow()
+        {
+            try
+            {
+                if (!_appOpen) return false;
+                // While browser app is open and focused on URL bar or web content, Enter should not open external chat mods.
+                // (URL bar submit / web submit are handled by the browser; ESC behavior is handled separately.)
+                return _urlBarFocused || _webFocused;
+            }
+            catch { return false; }
+        }
+
+        private static bool ShouldSuppressEnterForGame(UnityEngine.KeyCode key)
+        {
+            try
+            {
+                if (!_appOpen) return false;
+                if (key != UnityEngine.KeyCode.Return && key != UnityEngine.KeyCode.KeypadEnter) return false;
+                if (UnityEngine.Time.realtimeSinceStartup > _suppressEnterForGameUntilRealtime) return false;
+                // Only suppress during a brief post-handling window. Continuous suppression in browser text contexts breaks
+                // UnderNetBrowser's own UnityEngine.Input-based Enter handling (and Unity Input System mods like Simple Chat
+                // are not blocked by Input.GetKey hooks anyway; Simple Chat is handled via a targeted Harmony patch).
+                return _urlBarFocused || _webFocused;
+            }
+            catch { return false; }
+        }
+
+        private static bool Input_GetKeyDown_EnterPrefix(UnityEngine.KeyCode key, ref bool __result)
+        {
+            if (ShouldSuppressEnterForGame(key))
+            {
+                __result = false;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool Input_GetKeyUp_EnterPrefix(UnityEngine.KeyCode key, ref bool __result)
+        {
+            if (ShouldSuppressEnterForGame(key))
+            {
+                __result = false;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool Input_GetKey_EnterPrefix(UnityEngine.KeyCode key, ref bool __result)
+        {
+            if (ShouldSuppressEnterForGame(key))
+            {
+                __result = false;
+                return false;
+            }
+            return true;
         }
 
         // Prefix for OnScrollWheel(InputValue/1-param callbacks) on player/input/inventory-related types.

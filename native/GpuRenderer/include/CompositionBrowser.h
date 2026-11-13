@@ -57,6 +57,10 @@ public:
     uint32_t ReadSpatialAudioSamples(float* dstInterleaved, uint32_t maxFrames);
     bool IsSpatialCaptureActive() const;
 
+    // Best-effort: attenuate default-render audio sessions belonging to this WebView2 browser process tree.
+    // volume01 is clamped to [0,1]. When disabled, restores affected sessions to 1.0.
+    void SetDistanceAudioVolume(bool enabled, float volume01);
+
     struct Impl;
 private:
     Impl* m_impl = nullptr;

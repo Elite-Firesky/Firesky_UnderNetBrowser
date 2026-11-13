@@ -20,6 +20,9 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<bool>? AutoConsentEnabled { get; private set; }
         public static MelonPreferences_Entry<bool>? AlwaysLogDiagnostics { get; private set; }
         public static MelonPreferences_Entry<bool>? SpatialAudioPocEnabled { get; private set; }
+        public static MelonPreferences_Entry<bool>? DistanceVolumeEnabled { get; private set; }
+        public static MelonPreferences_Entry<float>? DistanceVolumeFullDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? DistanceVolumeSilentDistance { get; private set; }
 
         public static MelonPreferences_Entry<int>? GpuCompositionRenderWidth { get; private set; }
         public static MelonPreferences_Entry<int>? GpuCompositionRenderHeight { get; private set; }
@@ -42,6 +45,9 @@ namespace Firesky.UnderNetBrowser
             DebugLogging = _category.CreateEntry("DebugLogging", false, "Enable verbose debug logging");
             AlwaysLogDiagnostics = _category.CreateEntry("AlwaysLogDiagnostics", true, "Always log key diagnostics (input/HUD/navigation)");
             SpatialAudioPocEnabled = _category.CreateEntry("SpatialAudioPocEnabled", false, "[DEV/PoC] Stage 3 spatial audio proof-of-concept (off by default). No effect unless a validated PoC implementation is enabled; preserves current browser audio path.");
+            DistanceVolumeEnabled = _category.CreateEntry("DistanceVolumeEnabled", true, "Attenuate browser/WebView2 audio volume based on distance to the TV (best-effort, process audio sessions).");
+            DistanceVolumeFullDistance = _category.CreateEntry("DistanceVolumeFullDistance", 7.5f, "Distance (meters) at or below which browser/WebView2 audio volume is full when distance volume is enabled.");
+            DistanceVolumeSilentDistance = _category.CreateEntry("DistanceVolumeSilentDistance", 35.0f, "Distance (meters) at or beyond which browser/WebView2 audio volume is silent when distance volume is enabled.");
             HomeUrl = _category.CreateEntry("HomeUrl", "undernet:home", "Default URL loaded when the TV app opens (undernet:home for built-in homepage)");
             BasicAdBlockEnabled = _category.CreateEntry("BasicAdBlockEnabled", true, "Enable basic built-in ad/tracker request blocking (WebView2)");
             AutoConsentEnabled = _category.CreateEntry("AutoConsentEnabled", false, "Auto-accept/dismiss some consent dialogs (can cause unwanted clicks)");
