@@ -39,31 +39,102 @@ namespace Firesky.UnderNetBrowser
 
         public static void Initialize()
         {
-            _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser");
+            // Keep the original category identifier for compatibility with existing saved MelonPreferences.
+            _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser", "Firesky UnderNet Browser");
 
-            Enabled = _category.CreateEntry("Enabled", true, "Enable UnderNet app");
-            DebugLogging = _category.CreateEntry("DebugLogging", false, "Enable verbose debug logging");
-            AlwaysLogDiagnostics = _category.CreateEntry("AlwaysLogDiagnostics", true, "Always log key diagnostics (input/HUD/navigation)");
-            SpatialAudioPocEnabled = _category.CreateEntry("SpatialAudioPocEnabled", false, "[DEV/PoC] Stage 3 spatial audio proof-of-concept (off by default). No effect unless a validated PoC implementation is enabled; preserves current browser audio path.");
-            DistanceVolumeEnabled = _category.CreateEntry("DistanceVolumeEnabled", true, "Attenuate browser/WebView2 audio volume based on distance to the TV (best-effort, process audio sessions).");
-            DistanceVolumeFullDistance = _category.CreateEntry("DistanceVolumeFullDistance", 7.5f, "Distance (meters) at or below which browser/WebView2 audio volume is full when distance volume is enabled.");
-            DistanceVolumeSilentDistance = _category.CreateEntry("DistanceVolumeSilentDistance", 35.0f, "Distance (meters) at or beyond which browser/WebView2 audio volume is silent when distance volume is enabled.");
-            HomeUrl = _category.CreateEntry("HomeUrl", "undernet:home", "Default URL loaded when the TV app opens (undernet:home for built-in homepage)");
-            BasicAdBlockEnabled = _category.CreateEntry("BasicAdBlockEnabled", true, "Enable basic built-in ad/tracker request blocking (WebView2)");
-            AutoConsentEnabled = _category.CreateEntry("AutoConsentEnabled", false, "Auto-accept/dismiss some consent dialogs (can cause unwanted clicks)");
-            // UnderNet now runs in WebView2 Composition mode only (GPU composition browser).
-            GpuCompositionRenderWidth = _category.CreateEntry("GpuCompositionRenderWidth", 1920, "Composition browser internal render width (e.g. 1280/1920). Restart/reopen may be required.");
-            GpuCompositionRenderHeight = _category.CreateEntry("GpuCompositionRenderHeight", 1080, "Composition browser internal render height (e.g. 720/1080). Restart/reopen may be required.");
+            // --- Basic ---
+            Enabled = _category.CreateEntry(
+                "Enabled", true,
+                "Enable App",
+                "Enable or disable the UnderNet TV app.");
 
-            // Keybinds
-            KeyToggleCursor = _category.CreateEntry("KeyToggleCursor", "F3", "Toggle cursor visibility/lock (works globally, including outside TV). Unity KeyCode name.");
-            KeyReload = _category.CreateEntry("KeyReload", "F5", "Reload current page while browser/TV app is active. Unity KeyCode name.");
-            KeyGameInputMode = _category.CreateEntry("KeyGameInputMode", "F6", "Toggle Game Input Mode while browser/TV app is active. Unity KeyCode name.");
+            HomeUrl = _category.CreateEntry(
+                "HomeUrl", "undernet:home",
+                "Home URL",
+                "Default page loaded when UnderNet opens (use undernet:home for the built-in homepage).");
 
-            // Stage 4 diagnostics (opt-in, low overhead). Samples periodically and records phase markers (A-F).
-            PerformanceDiagnosticsEnabled = _category.CreateEntry("PerformanceDiagnosticsEnabled", false, "Enable Stage 4 performance/memory diagnostics logging (opt-in, low overhead).");
-            DiagnosticsSampleIntervalSeconds = _category.CreateEntry("DiagnosticsSampleIntervalSeconds", 1.0f, "Diagnostics sample interval in seconds (periodic; not per-frame).");
-            DiagnosticsOutputDirectory = _category.CreateEntry("DiagnosticsOutputDirectory", "", "Diagnostics output folder (empty = UserData/FireskyUnderNetBrowser/Diagnostics).");
+            BasicAdBlockEnabled = _category.CreateEntry(
+                "BasicAdBlockEnabled", true,
+                "Basic Ad/Tracker Blocking",
+                "Enable built-in basic ad and tracker request blocking in WebView2.");
+
+            AutoConsentEnabled = _category.CreateEntry(
+                "AutoConsentEnabled", false,
+                "Auto-Accept Consent Dialogs",
+                "Automatically accept or dismiss some website consent/cookie dialogs (may cause unintended clicks on some sites).");
+
+            DistanceVolumeEnabled = _category.CreateEntry(
+                "DistanceVolumeEnabled", true,
+                "Distance-Based Audio Volume",
+                "Attenuate browser/WebView2 audio based on distance from the TV (best-effort process audio; not spatial/3D audio).");
+
+            DistanceVolumeFullDistance = _category.CreateEntry(
+                "DistanceVolumeFullDistance", 7.5f,
+                "Distance Volume: Full Distance (m)",
+                "Distance in meters at or below which browser audio is at full volume when distance-based volume is enabled.");
+
+            DistanceVolumeSilentDistance = _category.CreateEntry(
+                "DistanceVolumeSilentDistance", 35.0f,
+                "Distance Volume: Silent Distance (m)",
+                "Distance in meters at or beyond which browser audio is muted when distance-based volume is enabled. Beyond this range, detached remote arrow controls are also disabled.");
+
+            // --- Controls / Keybinds ---
+            KeyToggleCursor = _category.CreateEntry(
+                "KeyToggleCursor", "F3",
+                "Keybind: Toggle Cursor",
+                "Unity KeyCode name for toggling cursor visibility/lock (works globally, including outside the TV).");
+
+            KeyReload = _category.CreateEntry(
+                "KeyReload", "F5",
+                "Keybind: Reload Page",
+                "Unity KeyCode name for reloading the current page while the browser/TV app is active.");
+
+            KeyGameInputMode = _category.CreateEntry(
+                "KeyGameInputMode", "F6",
+                "Keybind: Game Input Mode",
+                "Unity KeyCode name for toggling Game Input Mode while the browser/TV app is active.");
+
+            // --- Advanced / Display ---
+            GpuCompositionRenderWidth = _category.CreateEntry(
+                "GpuCompositionRenderWidth", 1920,
+                "Advanced: Render Width",
+                "Internal WebView2 composition render width (e.g. 1280, 1920). Restart/reopen may be required.");
+
+            GpuCompositionRenderHeight = _category.CreateEntry(
+                "GpuCompositionRenderHeight", 1080,
+                "Advanced: Render Height",
+                "Internal WebView2 composition render height (e.g. 720, 1080). Restart/reopen may be required.");
+
+            // --- Advanced / Diagnostics & Developer ---
+            DebugLogging = _category.CreateEntry(
+                "DebugLogging", false,
+                "Advanced: Verbose Debug Logging",
+                "Enable verbose debug logging for troubleshooting.");
+
+            AlwaysLogDiagnostics = _category.CreateEntry(
+                "AlwaysLogDiagnostics", true,
+                "Advanced: Key Diagnostics Logging",
+                "Always log key diagnostics (input/HUD/navigation) even when verbose debug logging is disabled.");
+
+            PerformanceDiagnosticsEnabled = _category.CreateEntry(
+                "PerformanceDiagnosticsEnabled", false,
+                "Advanced: Performance Diagnostics",
+                "Enable periodic performance/memory diagnostics logging (opt-in, low overhead).");
+
+            DiagnosticsSampleIntervalSeconds = _category.CreateEntry(
+                "DiagnosticsSampleIntervalSeconds", 1.0f,
+                "Advanced: Diagnostics Sample Interval (s)",
+                "Sampling interval in seconds for performance diagnostics (periodic, not per-frame).");
+
+            DiagnosticsOutputDirectory = _category.CreateEntry(
+                "DiagnosticsOutputDirectory", "",
+                "Advanced: Diagnostics Output Folder",
+                "Custom output folder for diagnostics files. Leave empty to use UserData/FireskyUnderNetBrowser/Diagnostics.");
+
+            SpatialAudioPocEnabled = _category.CreateEntry(
+                "SpatialAudioPocEnabled", false,
+                "Developer: Spatial Audio PoC",
+                "[DEV/PoC] Experimental spatial audio proof-of-concept (off by default). No effect unless a validated PoC implementation is enabled.");
 
             // Boundary diagnostics (Stage 3 activation): confirm registered/read values at startup.
             try

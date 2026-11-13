@@ -11,3 +11,5 @@ using System.Reflection;
 [assembly: AssemblyFileVersion("1.0.0.0")]
 [assembly: MelonInfo(typeof(Firesky.UnderNetBrowser.UnderNetBrowserMod), "Firesky UnderNet Browser", "1.0.0", "Firesky")]
 [assembly: MelonGame("TVGS", "Schedule I")]
+// WebView2.Core is shipped/resolved from mod subfolders (e.g. Mods/UnderNetBrowser) via runtime assembly resolution.
+[assembly: MelonOptionalDependencies("Microsoft.Web.WebView2.Core")]

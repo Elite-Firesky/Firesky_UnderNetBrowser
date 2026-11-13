@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using HarmonyLib;
@@ -144,6 +145,7 @@ namespace Firesky.UnderNetBrowser
             {
                 if (_tvHarmony == null) return;
                 TryPatchSimpleChatEnterOpen(); // best-effort: prevent chat mod from consuming Enter while browser owns input
+                TryPatchModManagerPreferencesOrder(); // best-effort: preserve our MelonPreferences display order in Mod Manager & Phone App UI
                 var tvAppType = typeof(S1API.TVApp.TVApp);
                 foreach (var name in new[] { "Close", "ForceClose" })
                 {
@@ -336,6 +338,303 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             return true;
+        }
+
+        // --- Mod Manager & Phone App: best-effort UI ordering patch (v2.2.4 sorts categories/entries by Identifier) ---
+        private static bool _modManagerOrderPatchAttempted;
+        private static readonly string[] _modManagerPreferredEntryOrder = new[]
+        {
+            "Enabled",
+            "HomeUrl",
+            "BasicAdBlockEnabled",
+            "AutoConsentEnabled",
+            "DistanceVolumeEnabled",
+            "DistanceVolumeFullDistance",
+            "DistanceVolumeSilentDistance",
+            "KeyToggleCursor",
+            "KeyReload",
+            "KeyGameInputMode",
+            "GpuCompositionRenderWidth",
+            "GpuCompositionRenderHeight",
+            "DebugLogging",
+            "AlwaysLogDiagnostics",
+            "PerformanceDiagnosticsEnabled",
+            "DiagnosticsSampleIntervalSeconds",
+            "DiagnosticsOutputDirectory",
+            "SpatialAudioPocEnabled"
+        };
+
+        private static void TryPatchModManagerPreferencesOrder()
+        {
+            try
+            {
+                if (_tvHarmony == null) return;
+                if (_modManagerOrderPatchAttempted) return;
+
+                Type? creatorType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { creatorType = asm.GetType("ModManagerPhoneApp.ModSettingsAppCreator", false); } catch { creatorType = null; }
+                    if (creatorType != null) break;
+                }
+                if (creatorType == null)
+                {
+                    // Not installed / not loaded yet in this context; allow retry on next scene/init.
+                    return;
+                }
+
+                _modManagerOrderPatchAttempted = true;
+
+                var postfix = typeof(UnderNetBrowserMod).GetMethod(nameof(ModManager_PopulateSettingsPostfix), BindingFlags.Static | BindingFlags.NonPublic);
+                if (postfix == null) return;
+
+                int patched = 0;
+                foreach (var methodName in new[] { "PopulateMenuConfigPanel", "PopulateAllSettings", "PopulateModSettings" })
+                {
+                    try
+                    {
+                        var mi = creatorType.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (mi == null) continue;
+                        _tvHarmony.Patch(mi, postfix: new HarmonyMethod(postfix));
+                        patched++;
+                        MelonLogger.Msg($"[Firesky UnderNet Browser] Patched ModManagerPhoneApp.ModSettingsAppCreator.{methodName} (preferences order, best-effort).");
+                    }
+                    catch (Exception ex)
+                    {
+                        MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch ModManagerPhoneApp.ModSettingsAppCreator.{methodName}: {ex.Message}");
+                    }
+                }
+
+                if (patched == 0)
+                    MelonLogger.Warning("[Firesky UnderNet Browser] Mod Manager detected but no settings population methods were patched.");
+            }
+            catch (Exception ex)
+            {
+                _modManagerOrderPatchAttempted = true; // avoid repeated noisy failures
+                MelonLogger.Warning($"[Firesky UnderNet Browser] Mod Manager order patch failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        private static void ModManager_PopulateSettingsPostfix(object __instance)
+        {
+            try
+            {
+                if (__instance == null)
+                {
+                    MelonLogger.Msg("[Firesky UnderNet Browser] [ModManagerOrder] Postfix called with null instance.");
+                    return;
+                }
+                var type = __instance.GetType();
+
+                // Menu config UI and phone app UI use different content roots.
+                TryReorderModManagerCategoryEntries(__instance, type, "_menuConfigContent", "FireskyUnderNetBrowser");
+                TryReorderModManagerCategoryEntries(__instance, type, "rightPanelContent", "FireskyUnderNetBrowser");
+            }
+            catch (Exception ex)
+            {
+                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [ModManagerOrder] Postfix exception: {ex.Message}"); } catch { }
+            }
+        }
+
+        private static void TryReorderModManagerCategoryEntries(object instance, Type instanceType, string contentFieldName, string categoryIdentifier)
+        {
+            try
+            {
+                var f = instanceType.GetField(contentFieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f == null)
+                {
+                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: field not found on {instanceType.FullName}");
+                    return;
+                }
+                var contentObj = f.GetValue(instance);
+                if (contentObj == null)
+                {
+                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: null");
+                    return;
+                }
+
+                // UnityEngine.Transform in IL2CPP/MelonLoader context
+                UnityEngine.Transform? contentTransform = contentObj as UnityEngine.Transform;
+                if (contentTransform == null)
+                {
+                    try
+                    {
+                        var tt = contentObj.GetType();
+                        // Il2CppInterop/IL2CPP objects sometimes require TryCast; use reflection so this still compiles without hard dependency.
+                        var tryCast = tt.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                            .FirstOrDefault(m => m.Name == "TryCast" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
+                        if (tryCast != null)
+                        {
+                            try
+                            {
+                                var gm = tryCast.MakeGenericMethod(typeof(UnityEngine.Transform));
+                                contentTransform = gm.Invoke(contentObj, null) as UnityEngine.Transform;
+                            }
+                            catch { }
+                        }
+                        if (contentTransform == null)
+                        {
+                            var trProp = tt.GetProperty("transform", BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                            if (trProp != null) contentTransform = trProp.GetValue(contentObj) as UnityEngine.Transform;
+                        }
+                        if (contentTransform == null)
+                        {
+                            var trField = tt.GetField("transform", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                            if (trField != null) contentTransform = trField.GetValue(contentObj) as UnityEngine.Transform;
+                        }
+                    }
+                    catch { }
+                }
+                if (contentTransform == null)
+                {
+                    // Last resort: if type name indicates Transform, proceed with reflection-based access below? No, just log.
+                    try { MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: not a Transform ({contentObj.GetType().FullName})"); } catch { }
+                    return;
+                }
+
+                int childCount = 0;
+                try { childCount = contentTransform.childCount; } catch { childCount = 0; }
+                if (childCount <= 0)
+                {
+                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: childCount=0");
+                    return;
+                }
+
+                static bool IsOurCategoryHeader(string name, string categoryId)
+                {
+                    if (string.IsNullOrEmpty(name)) return false;
+                    return string.Equals(name, "Menu_Category_" + categoryId, StringComparison.Ordinal) ||
+                           string.Equals(name, "Category_" + categoryId, StringComparison.Ordinal) ||
+                           name.EndsWith("_Category_" + categoryId, StringComparison.Ordinal) ||
+                           name.EndsWith("Category_" + categoryId, StringComparison.Ordinal);
+                }
+
+                static bool IsAnyCategoryHeader(string name)
+                {
+                    if (string.IsNullOrEmpty(name)) return false;
+                    return name.StartsWith("Menu_Category_", StringComparison.Ordinal) ||
+                           name.StartsWith("Category_", StringComparison.Ordinal) ||
+                           name.Contains("_Category_", StringComparison.Ordinal);
+                }
+
+                // Reorder every block belonging to our category (some UI paths may temporarily duplicate/rebuild sections).
+                int headerCount = 0;
+                int totalMoved = 0;
+                int totalEntries = 0;
+                int totalMatched = 0;
+                int blocks = 0;
+                string marker = "_" + categoryIdentifier + "_";
+
+                for (int scan = 0; scan < childCount; scan++)
+                {
+                    UnityEngine.Transform? child = null;
+                    string name = "";
+                    try { child = contentTransform.GetChild(scan); name = child?.name ?? ""; } catch { child = null; name = ""; }
+                    if (child == null || !IsOurCategoryHeader(name, categoryIdentifier))
+                        continue;
+
+                    headerCount++;
+                    blocks++;
+                    int headerIndex = scan;
+                    int blockEndExclusive = childCount;
+                    for (int i = headerIndex + 1; i < childCount; i++)
+                    {
+                        try
+                        {
+                            var c = contentTransform.GetChild(i);
+                            var n = c != null ? (c.name ?? "") : "";
+                            if (IsAnyCategoryHeader(n))
+                            {
+                                blockEndExclusive = i;
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    var entries = new System.Collections.Generic.List<UnityEngine.Transform>();
+                    var byId = new System.Collections.Generic.Dictionary<string, UnityEngine.Transform>(StringComparer.Ordinal);
+
+                    for (int i = headerIndex + 1; i < blockEndExclusive; i++)
+                    {
+                        UnityEngine.Transform? entryChild = null;
+                        string entryName = "";
+                        try { entryChild = contentTransform.GetChild(i); entryName = entryChild?.name ?? ""; } catch { entryChild = null; entryName = ""; }
+                        if (entryChild == null || string.IsNullOrEmpty(entryName)) continue;
+
+                        string? entryId = null;
+                        int idx = entryName.IndexOf(marker, StringComparison.Ordinal);
+                        if (idx >= 0)
+                        {
+                            // Menu config UI naming: Menu_<Template>_<CategoryId>_<EntryId>
+                            entryId = entryName.Substring(idx + marker.Length);
+                        }
+                        else
+                        {
+                            // Phone UI naming (observed): Menu_<Template>_<EntryId> (no category id in entry object name).
+                            // Map rows in this category block by matching known entry ID suffixes.
+                            for (int p = 0; p < _modManagerPreferredEntryOrder.Length; p++)
+                            {
+                                var candidate = _modManagerPreferredEntryOrder[p];
+                                if (!string.IsNullOrEmpty(candidate) && entryName.EndsWith("_" + candidate, StringComparison.Ordinal))
+                                {
+                                    entryId = candidate;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (string.IsNullOrEmpty(entryId)) continue;
+                        entries.Add(entryChild);
+                        if (!byId.ContainsKey(entryId)) byId[entryId] = entryChild;
+                    }
+
+                    totalEntries += entries.Count;
+                    totalMatched += byId.Count;
+
+                    if (entries.Count == 0)
+                    {
+                        scan = blockEndExclusive - 1;
+                        // Refresh childCount in case hierarchy changed unexpectedly (defensive)
+                        try { childCount = contentTransform.childCount; } catch { }
+                        continue;
+                    }
+
+                    // Reinsert in preferred order immediately after this category header, preserving unknown entries at the end of the block.
+                    int insertIndex = headerIndex + 1;
+                    var placed = new System.Collections.Generic.HashSet<UnityEngine.Transform>();
+
+                    foreach (var entryId in _modManagerPreferredEntryOrder)
+                    {
+                        if (!byId.TryGetValue(entryId, out var t) || t == null) continue;
+                        try { t.SetSiblingIndex(insertIndex++); totalMoved++; } catch { }
+                        placed.Add(t);
+                    }
+
+                    foreach (var t in entries)
+                    {
+                        if (t == null || placed.Contains(t)) continue;
+                        try { t.SetSiblingIndex(insertIndex++); totalMoved++; } catch { }
+                    }
+
+                    // Continue scanning after the (possibly unchanged-size) block.
+                    scan = blockEndExclusive - 1;
+                    try { childCount = contentTransform.childCount; } catch { }
+                }
+
+                if (headerCount > 0)
+                {
+                    try
+                    {
+                        MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: headers={headerCount} blocks={blocks} entries={totalEntries} matched={totalMatched} moved={totalMoved}");
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [ModManagerOrder] Failed for {contentFieldName}: {ex.Message}"); } catch { }
+            }
         }
 
         public override void OnApplicationQuit()

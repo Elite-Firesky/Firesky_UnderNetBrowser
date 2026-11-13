@@ -21,7 +21,7 @@ namespace Firesky.UnderNetBrowser
         protected override string AppTitle => "UnderNet";
 
         private Sprite? _icon;
-        protected override Sprite? Icon => _icon ??= CreateDefaultIcon();
+        protected override Sprite? Icon => _icon ??= LoadOrCreateIcon();
 
         private RawImage? _videoDisplay;
         private RectTransform? _videoRT;
@@ -1828,6 +1828,14 @@ namespace Firesky.UnderNetBrowser
                 if (!_detachedToGameplay || _gpuCompositionCapture == null) return;
                 // Don't interfere while typing in other Unity UI or when paused menus likely need input.
                 try { if (Time.timeScale <= 0.01f) return; } catch { }
+                // Respect distance-based volume range for remote detached controls: if the browser is beyond the silent/max distance,
+                // do not accept remote arrow media controls until back in range.
+                try
+                {
+                    if (UnderNetBrowserConfig.DistanceVolumeEnabled?.Value == true && _lastDistanceVolumeApplied <= 0.001f)
+                        return;
+                }
+                catch { }
                 // Best-effort: forward arrow keys for video seek/volume control while browser/video continues off-TV.
                 // (Game reportedly doesn't use these keys.) Supports holding via repeat (VK taps + JS fallbacks).
                 TryHandleMediaArrowRepeat(
@@ -3665,12 +3673,19 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
                 catch { }
+
+                try { _detachedHiddenHomeScreenObjects.Clear(); } catch { }
+                try { _detachedHiddenClockRenderers.Clear(); } catch { }
+
+                // Reset scan state after a full restore so future detach sessions can rediscover/hide as needed.
+                _detachedVisualTargetsScanned = false;
+            }
+            else
+            {
+                // App remains active/detached-visual context: keep hidden-object tracking so a later full close/shutdown
+                // can restore the TV lock screen (time/day) correctly. Do not mark as scanned-false here either.
             }
 
-            try { _detachedHiddenHomeScreenObjects.Clear(); } catch { }
-            try { _detachedHiddenClockRenderers.Clear(); } catch { }
-
-            _detachedVisualTargetsScanned = false;
             try { RestoreTvScreenMirror(); } catch { }
         }
 
@@ -5942,13 +5957,18 @@ namespace Firesky.UnderNetBrowser
                 // Backward-compatible fallback: loose file next to mod / in Mods
                 var asmPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
                 var asmDir = string.IsNullOrEmpty(asmPath) ? "" : System.IO.Path.GetDirectoryName(asmPath);
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? "";
                 string[] candidates = new[]
                 {
                     string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "UnderNetIcon.png"),
+                    string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "UnderNetBrowser", "UnderNetIcon.png"),
+                    string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "FireskyUnderNetBrowser", "UnderNetIcon.png"),
                     string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "..", "UnderNetIcon.png"),
                     string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "..", "..", "UnderNetIcon.png"),
-                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? "", "Mods", "UnderNetIcon.png"),
-                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? "", "UnderNetIcon.png")
+                    System.IO.Path.Combine(baseDir, "Mods", "UnderNetIcon.png"),
+                    System.IO.Path.Combine(baseDir, "Mods", "UnderNetBrowser", "UnderNetIcon.png"),
+                    System.IO.Path.Combine(baseDir, "Mods", "FireskyUnderNetBrowser", "UnderNetIcon.png"),
+                    System.IO.Path.Combine(baseDir, "UnderNetIcon.png")
                 };
                 foreach (var p in candidates)
                 {
@@ -5973,20 +5993,62 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                var tex = new Texture2D(64, 64, TextureFormat.RGBA32, false);
-                var pixels = new Color32[64 * 64];
-                var bg = new Color32(30, 30, 40, 255);
-                var fg = new Color32(220, 60, 60, 255);
-                for (int y = 0; y < 64; y++)
-                for (int x = 0; x < 64; x++)
+                const int size = 64;
+                var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+                var pixels = new Color32[size * size];
+                var bg = new Color32(16, 20, 28, 255);
+                var border = new Color32(58, 78, 96, 255);
+                var accent = new Color32(80, 220, 140, 255);
+                var accentSoft = new Color32(60, 170, 120, 255);
+                var textCol = new Color32(235, 245, 255, 255);
+                for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
                 {
-                    bool border = x < 4 || x > 59 || y < 4 || y > 59;
-                    bool play = (x > 22 && x < 44 && y > 18 && y < 46 && (x - 22) < (y - 18) && (x - 22) < (46 - y));
-                    pixels[y * 64 + x] = play ? fg : (border ? new Color32(80, 80, 90, 255) : bg);
+                    int dx = x - 31;
+                    int dy = y - 31;
+                    int ax = dx >= 0 ? dx : -dx;
+                    int ay = dy >= 0 ? dy : -dy;
+                    bool isBorder = x <= 3 || x >= 60 || y <= 3 || y >= 60;
+                    bool inner = x >= 6 && x <= 57 && y >= 6 && y <= 57;
+                    var c = isBorder ? border : bg;
+
+                    // Subtle monitor/browser frame
+                    if (inner)
+                    {
+                        bool frame = x <= 8 || x >= 55 || y <= 10 || y >= 53;
+                        bool topBar = y >= 48 && y <= 53 && x >= 9 && x <= 54;
+                        if (frame) c = new Color32(34, 44, 58, 255);
+                        if (topBar) c = new Color32(28, 36, 48, 255);
+                        // address dots / bar accent in top bar
+                        if (topBar && y >= 50 && y <= 51 && x >= 12 && x <= 16) c = accentSoft;
+                        if (topBar && y >= 50 && y <= 51 && x >= 18 && x <= 22) c = new Color32(90, 120, 150, 255);
+                        if (topBar && y >= 50 && y <= 51 && x >= 24 && x <= 44) c = new Color32(44, 56, 72, 255);
+                    }
+
+                    // Stylized "U" (UnderNet) in center
+                    bool inU = (x >= 22 && x <= 41 && y >= 18 && y <= 42);
+                    if (inU)
+                    {
+                        bool stroke = (x >= 22 && x <= 25) || (x >= 38 && x <= 41) || (y >= 18 && y <= 21);
+                        bool curveCut = (y <= 20 && x >= 26 && x <= 37); // soften bottom corners slightly
+                        bool innerCut = (x >= 26 && x <= 37 && y >= 22 && y <= 42);
+                        if (stroke && !curveCut) c = textCol;
+                        else if (innerCut) c = (inner ? new Color32(34, 44, 58, 255) : bg);
+                    }
+
+                    // Green status/accent dot (network/live feel)
+                    int dotDx = x - 46;
+                    int dotDy = y - 39;
+                    if ((dotDx * dotDx + dotDy * dotDy) <= 9) c = accent;
+                    else if ((dotDx * dotDx + dotDy * dotDy) <= 14 && c.r == bg.r && c.g == bg.g && c.b == bg.b) c = accentSoft;
+
+                    pixels[y * size + x] = c;
                 }
                 tex.SetPixels32(pixels);
                 tex.Apply(false, false);
-                return Sprite.Create(tex, new Rect(0, 0, 64, 64), new Vector2(0.5f, 0.5f));
+                var sprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+                try { sprite.name = "FireskyUnderNetBrowser_Icon"; } catch { }
+                return sprite;
             }
             catch { return null; }
         }
