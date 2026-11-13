@@ -698,8 +698,17 @@ namespace Firesky.UnderNetBrowser
         {
             var text = (input ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(text)) return "https://www.google.com";
+
+            // Built-in routes
             if (text.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) || text.Equals("about:home", StringComparison.OrdinalIgnoreCase))
                 return "undernet:home";
+            if (text.Equals("home:home", StringComparison.OrdinalIgnoreCase) || text.Equals("home:homepage", StringComparison.OrdinalIgnoreCase))
+                return "undernet:home";
+
+            // App routes (simple local UI host): home:<id>, undernet:<id>, undernet:app/<id>
+            if (TryParseLocalAppRoute(text, out var appId))
+                return "home:" + appId;
+
             if (!text.Contains("://") && !text.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
                 text = "https://" + text;
             return text;
@@ -710,6 +719,18 @@ namespace Firesky.UnderNetBrowser
             var normalized = NormalizeUrl(input);
             if (normalized.Equals("undernet:home", StringComparison.OrdinalIgnoreCase))
                 return GetOrCreateHomepageUrl();
+
+            // Local app UI routes -> file:///.../root/Apps/<id>/index.html
+            if (TryParseLocalAppRoute(normalized, out var appId))
+            {
+                var appUrl = TryResolveLocalAppUrl("home:" + appId);
+                if (!string.IsNullOrWhiteSpace(appUrl))
+                    return appUrl;
+                // App not found: fall back to homepage (simple, safe behavior)
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] App route not found: home:{appId}");
+                return GetOrCreateHomepageUrl();
+            }
+
             // Migrate previous default to new built-in homepage experience
             if (normalized.Equals("https://www.youtube.com", StringComparison.OrdinalIgnoreCase) && string.Equals(UnderNetBrowserConfig.HomeUrl?.Value?.Trim(), "undernet:home", StringComparison.OrdinalIgnoreCase))
                 return GetOrCreateHomepageUrl();
@@ -726,53 +747,8 @@ namespace Firesky.UnderNetBrowser
             return ResolveNavigationTarget(home);
         }
 
-        private static bool _homePageEnsuredThisSession;
+        private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-
-        private string GetOrCreateHomepageUrl()
-        {
-            try
-            {
-                var dir = Path.Combine(GetUserDataRoot(), "Home");
-                var path = Path.Combine(dir, "home.html");
-
-                // Fast path: once ensured this session and file exists, avoid rebuilding large HTML and disk reads (helps HDD/cold-start hitches).
-                if (_homePageEnsuredThisSession && !string.IsNullOrEmpty(_cachedHomepageFileUrl) && File.Exists(path))
-                    return _cachedHomepageFileUrl;
-
-                Directory.CreateDirectory(dir);
-
-                if (!_homePageEnsuredThisSession || !File.Exists(path))
-                {
-                    var html = BuildHomepageHtml();
-                    bool needsWrite = true;
-                    try
-                    {
-                        if (File.Exists(path))
-                        {
-                            // Avoid unnecessary disk writes on every open; still update if template/content changes.
-                            var existing = File.ReadAllText(path);
-                            needsWrite = !string.Equals(existing, html, StringComparison.Ordinal);
-                        }
-                    }
-                    catch { needsWrite = true; }
-
-                    if (needsWrite)
-                    {
-                        File.WriteAllText(path, html);
-                    }
-                    _homePageEnsuredThisSession = true;
-                }
-
-                _cachedHomepageFileUrl = new Uri(path).AbsoluteUri;
-                return _cachedHomepageFileUrl;
-            }
-            catch (Exception ex)
-            {
-                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage creation failed, falling back to Google: {ex.Message}");
-                return "https://www.google.com";
-            }
-        }
 
         private static string GetUserDataRoot()
         {
@@ -784,6 +760,179 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             return Path.Combine(AppContext.BaseDirectory, "FireskyUnderNetBrowser");
+        }
+
+        private static string GetWebContentRoot() => Path.Combine(GetUserDataRoot(), "root");
+        private static string GetHomepageDir() => Path.Combine(GetWebContentRoot(), "Homepage");
+        private static string GetHomepageFilePath() => Path.Combine(GetHomepageDir(), "index.html");
+        private static string GetAppsRootDir() => Path.Combine(GetWebContentRoot(), "Apps");
+        private static string GetLegacyHomepageFilePath() => Path.Combine(GetUserDataRoot(), "Home", "home.html");
+
+        private static bool IsSafeAppId(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            id = id.Trim();
+            if (id.Length == 0 || id.Length > 64) return false;
+            for (int i = 0; i < id.Length; i++)
+            {
+                char c = id[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+                if (!ok) return false;
+            }
+            return true;
+        }
+
+        private static bool IsPathUnderRoot(string fullPath, string rootFullPath)
+        {
+            try
+            {
+                var p = Path.GetFullPath(fullPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                var r = Path.GetFullPath(rootFullPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        private static bool TryParseLocalAppRoute(string? input, out string appId)
+        {
+            appId = "";
+            try
+            {
+                var s = (input ?? "").Trim();
+                if (s.Length == 0) return false;
+
+                string? candidate = null;
+                if (s.StartsWith("home:", StringComparison.OrdinalIgnoreCase))
+                    candidate = s.Substring("home:".Length);
+                else if (s.StartsWith("undernet:app/", StringComparison.OrdinalIgnoreCase))
+                    candidate = s.Substring("undernet:app/".Length);
+                else if (s.StartsWith("undernet:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rest = s.Substring("undernet:".Length);
+                    if (!rest.Equals("home", StringComparison.OrdinalIgnoreCase))
+                        candidate = rest;
+                }
+
+                if (candidate == null) return false;
+                candidate = candidate.Trim().Trim('/', '\\');
+                if (candidate.Length == 0) return false;
+                // Disallow nested paths for now (simple app-id routing)
+                if (candidate.IndexOf('/') >= 0 || candidate.IndexOf('\\') >= 0) return false;
+
+                if (!IsSafeAppId(candidate)) return false;
+                // Reserve homepage tokens
+                if (candidate.Equals("home", StringComparison.OrdinalIgnoreCase) || candidate.Equals("homepage", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                appId = candidate.ToLowerInvariant();
+                return true;
+            }
+            catch { appId = ""; return false; }
+        }
+
+        private static string? TryGetAppIndexPath(string appId)
+        {
+            try
+            {
+                if (!IsSafeAppId(appId)) return null;
+                var appsRoot = Path.GetFullPath(GetAppsRootDir());
+                var appDir = Path.Combine(appsRoot, appId);
+                var index = Path.Combine(appDir, "index.html");
+                if (!IsPathUnderRoot(appDir, appsRoot)) return null;
+                return File.Exists(index) ? index : null;
+            }
+            catch { return null; }
+        }
+
+        private static string? TryResolveLocalAppUrl(string? routeInput)
+        {
+            try
+            {
+                if (!TryParseLocalAppRoute(routeInput, out var appId)) return null;
+                EnsureWebAppsFoundation();
+                var indexPath = TryGetAppIndexPath(appId);
+                if (string.IsNullOrWhiteSpace(indexPath)) return null;
+                return new Uri(indexPath).AbsoluteUri;
+            }
+            catch { return null; }
+        }
+
+        private static void EnsureWebAppsFoundation()
+        {
+            try
+            {
+                Directory.CreateDirectory(GetHomepageDir());
+                Directory.CreateDirectory(GetAppsRootDir());
+
+                var homepagePath = GetHomepageFilePath();
+                var legacyPath = GetLegacyHomepageFilePath();
+
+                // Migrate legacy homepage once if new homepage does not exist yet.
+                if (!File.Exists(homepagePath) && File.Exists(legacyPath))
+                {
+                    try
+                    {
+                        File.Copy(legacyPath, homepagePath, false);
+                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Migrated legacy homepage to root/Homepage/index.html.");
+                    }
+                    catch (Exception ex)
+                    {
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] Legacy homepage migration failed (will generate default): {ex.Message}");
+                    }
+                }
+
+                // Ensure default homepage exists.
+                if (!File.Exists(homepagePath))
+                {
+                    try { File.WriteAllText(homepagePath, BuildDefaultHomepageHtml()); } catch { }
+                }
+
+                // Ensure built-in example app exists (simple plug-and-play reference).
+                try
+                {
+                    var exampleDir = Path.Combine(GetAppsRootDir(), "example");
+                    Directory.CreateDirectory(exampleDir);
+                    var exampleIndex = Path.Combine(exampleDir, "index.html");
+                    if (!File.Exists(exampleIndex))
+                    {
+                        File.WriteAllText(exampleIndex, BuildExampleAppHtml());
+                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created example app at root/Apps/example/index.html.");
+                    }
+                }
+                catch { }
+
+                _webAppsFoundationEnsured = true;
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] EnsureWebAppsFoundation failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        private string GetOrCreateHomepageUrl()
+        {
+            try
+            {
+                EnsureWebAppsFoundation();
+                var path = GetHomepageFilePath();
+
+                // Fast path: once ensured this session and file exists, avoid repeated filesystem checks/allocations.
+                if (_webAppsFoundationEnsured && !string.IsNullOrEmpty(_cachedHomepageFileUrl) && File.Exists(path))
+                    return _cachedHomepageFileUrl;
+
+                if (!File.Exists(path))
+                {
+                    try { Directory.CreateDirectory(GetHomepageDir()); File.WriteAllText(path, BuildDefaultHomepageHtml()); } catch { }
+                }
+
+                _cachedHomepageFileUrl = new Uri(path).AbsoluteUri;
+                return _cachedHomepageFileUrl;
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage creation failed, falling back to Google: {ex.Message}");
+                return "https://www.google.com";
+            }
         }
 
         private static string? _cachedDefaultExtensionSourceDir;
@@ -892,11 +1041,10 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
-        private static string BuildHomepageHtml()
+        private static string BuildDefaultHomepageHtml()
         {
-            // Self-contained, polished Schedule I / UnderNet-themed dark homepage with preset shortcuts.
+            // Default UnderNet homepage (deployed to root/Homepage/index.html if missing). Users/mods can edit it.
             return @"<!DOCTYPE html>
-<!-- UnderNetBrowser-Home-v1 -->
 <html lang=""en"">
 <head>
 <meta charset=""utf-8"" />
@@ -905,129 +1053,71 @@ namespace Firesky.UnderNetBrowser
 <style>
   :root{
     --bg0:#040605; --bg1:#070b09; --bg2:#0a120e;
-    --panel:#0c1310; --panel2:#0f1914; --edge:#1b2a22; --edge2:#24372d;
+    --panel:#0c1310; --edge:#1b2a22;
     --text:#e9f7ee; --muted:#8ea89a; --muted2:#6f887c;
-    --accent:#7cff6b; --accent2:#35d97b; --accent3:#baff6a;
-    --glow:rgba(124,255,107,.20); --glow2:rgba(53,217,123,.14);
+    --accent:#7cff6b;
   }
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0}
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
   body{
-    font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif;
-    color:var(--text);
+    font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif; color:var(--text);
     background:
       radial-gradient(900px 420px at 15% -5%, rgba(53,217,123,.16), transparent 60%),
       radial-gradient(700px 360px at 100% 0%, rgba(124,255,107,.10), transparent 55%),
-      radial-gradient(800px 500px at 50% 120%, rgba(124,255,107,.08), transparent 60%),
       linear-gradient(180deg, var(--bg0), var(--bg1) 35%, var(--bg2));
-    overflow:hidden;
   }
-  body:before{
-    content:''; position:fixed; inset:0; pointer-events:none; opacity:.22;
-    background:
-      repeating-linear-gradient(to bottom, rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px, transparent 2px, transparent 4px),
-      linear-gradient(90deg, rgba(124,255,107,.03), transparent 30%, transparent 70%, rgba(124,255,107,.02));
-    mix-blend-mode:soft-light;
-  }
-  .wrap{position:relative;height:100%;padding:26px 30px;display:flex;flex-direction:column;gap:18px}
-  .hero{
-    position:relative;
-    display:flex;align-items:center;justify-content:space-between;gap:18px;
-    padding:18px 20px;border:1px solid var(--edge);border-radius:16px;
-    background:
-      linear-gradient(180deg, rgba(16,26,21,.92), rgba(9,14,11,.94)),
-      radial-gradient(500px 120px at 0% 0%, rgba(124,255,107,.08), transparent 60%);
-    box-shadow: 0 0 0 1px rgba(124,255,107,.04) inset, 0 22px 50px rgba(0,0,0,.42);
-    overflow:hidden;
-  }
-  .hero:after{
-    content:''; position:absolute; right:-80px; top:-80px; width:260px; height:260px; border-radius:50%;
-    background:radial-gradient(circle, rgba(124,255,107,.14), transparent 65%);
-    filter:blur(2px);
-  }
-  .brand{display:flex;align-items:center;gap:14px;min-width:0}
-  .mark{
-    width:52px;height:52px;border-radius:14px;position:relative;flex:0 0 auto;
-    background:radial-gradient(circle at 30% 28%, #d8ffbe 0%, var(--accent) 34%, #1b8f52 72%, #0f4a2f 100%);
-    box-shadow:0 0 28px var(--glow), 0 0 0 1px rgba(255,255,255,.09) inset;
-  }
-  .mark:before{content:'';position:absolute;inset:2px;border-radius:12px;border:1px solid rgba(255,255,255,.18);opacity:.35}
-  .mark:after{content:'';position:absolute;left:19px;top:14px;width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:18px solid rgba(5,14,9,.92);filter:drop-shadow(0 0 6px rgba(0,0,0,.25))}
-  .titlewrap{min-width:0}
-  h1{margin:0;font-size:34px;line-height:1;letter-spacing:2.4px;font-weight:800;text-transform:uppercase}
-  h1 .u{color:var(--accent);text-shadow:0 0 22px rgba(124,255,107,.22)}
-  .tag{margin:5px 0 0;color:var(--muted);font-size:12px;letter-spacing:1.1px;text-transform:uppercase}
-  .chips{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-  .chip{
-    padding:7px 11px;border-radius:999px;border:1px solid rgba(124,255,107,.22);
-    background:rgba(124,255,107,.06);color:#dfffe3;font-size:11px;letter-spacing:.7px;text-transform:uppercase;
-    box-shadow:0 0 0 1px rgba(124,255,107,.03) inset;
-    white-space:nowrap;
-  }
-  .chip.dim{border-color:rgba(255,255,255,.10);background:rgba(255,255,255,.03);color:#cfe0d6}
-  .content{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;min-height:0;flex:1}
-  .panel{
+  .wrap{height:100%;padding:26px 30px;display:flex;flex-direction:column;gap:18px}
+  .hero,.panel,.info{
     border:1px solid var(--edge);border-radius:16px;
     background:linear-gradient(180deg, rgba(14,22,18,.95), rgba(9,14,11,.96));
     box-shadow:0 14px 34px rgba(0,0,0,.30), 0 0 0 1px rgba(124,255,107,.03) inset;
-    padding:16px;min-height:0;
   }
+  .hero{padding:18px 20px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+  .brand{display:flex;align-items:center;gap:14px}
+  .mark{width:52px;height:52px;border-radius:14px;background:radial-gradient(circle at 30% 28%, #d8ffbe 0%, var(--accent) 34%, #1b8f52 72%, #0f4a2f 100%);box-shadow:0 0 28px rgba(124,255,107,.20)}
+  h1{margin:0;font-size:34px;line-height:1;letter-spacing:2.4px;text-transform:uppercase}
+  h1 .u{color:var(--accent)}
+  .tag{margin:5px 0 0;color:var(--muted);font-size:12px;letter-spacing:1.1px;text-transform:uppercase}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{padding:7px 11px;border-radius:999px;border:1px solid rgba(124,255,107,.22);background:rgba(124,255,107,.06);color:#dfffe3;font-size:11px;letter-spacing:.7px;text-transform:uppercase}
+  .chip.dim{border-color:rgba(255,255,255,.10);background:rgba(255,255,255,.03);color:#cfe0d6}
+  .content{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;min-height:0;flex:1}
+  .panel{padding:16px}
   .section-title{display:flex;align-items:center;justify-content:space-between;margin:2px 4px 12px}
   .section-title h2{margin:0;font-size:13px;letter-spacing:1.4px;text-transform:uppercase;color:#d7eadf}
   .section-title span{font-size:11px;color:var(--muted2);letter-spacing:.6px;text-transform:uppercase}
   .grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:12px}
-  .card{
-    position:relative;display:flex;align-items:center;gap:14px;text-decoration:none;color:var(--text);
-    padding:14px 14px;border-radius:14px;border:1px solid var(--edge);
-    background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));
-    transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease,background .14s ease;
-    overflow:hidden;
-  }
-  .card:before{content:'';position:absolute;inset:0;background:linear-gradient(120deg, rgba(124,255,107,.10), transparent 35%);opacity:0;transition:opacity .14s ease}
-  .card:hover{transform:translateY(-2px);border-color:rgba(124,255,107,.42);box-shadow:0 0 0 1px rgba(124,255,107,.07) inset, 0 18px 30px rgba(0,0,0,.34)}
-  .card:hover:before{opacity:1}
-  .icon{
-    width:50px;height:50px;border-radius:12px;display:grid;place-items:center;flex:0 0 auto;
-    color:#08110b;font-weight:800;font-size:20px;
-    box-shadow:0 0 18px rgba(124,255,107,.16), 0 0 0 1px rgba(255,255,255,.08) inset;
-  }
+  .card{display:flex;align-items:center;gap:14px;text-decoration:none;color:var(--text);padding:14px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96))}
+  .card:hover{border-color:rgba(124,255,107,.42);box-shadow:0 0 0 1px rgba(124,255,107,.07) inset}
+  .icon{width:50px;height:50px;border-radius:12px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:20px}
   .icon.yt{background:linear-gradient(180deg,#ff9696,#ff3b3b);color:#fff}
   .icon.gg{background:linear-gradient(180deg,#ecff9a,#7cff6b);color:#0a1710}
-  .icon.nfs{background:linear-gradient(180deg,#7fdcff,#1f7fff);color:#061018}
+  .icon.app{background:linear-gradient(180deg,#b5f59a,#35d97b);color:#08110b}
   .icon.dc{background:linear-gradient(180deg,#8ea1ff,#5865f2);color:#fff}
-  .meta{min-width:0}
-  .meta .name{margin:0 0 3px;font-size:18px;font-weight:700;letter-spacing:.2px}
+  .meta .name{margin:0 0 3px;font-size:18px;font-weight:700}
   .meta .desc{margin:0;font-size:12px;color:var(--muted);line-height:1.35}
-  .meta .url{margin:6px 0 0;font-size:11px;color:#7fa893;letter-spacing:.4px}
+  .meta .url{margin:6px 0 0;font-size:11px;color:#7fa893}
   .side{display:flex;flex-direction:column;gap:12px}
-  .info{
-    padding:13px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.06);
-    background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
-  }
+  .info{padding:13px 14px;border-radius:12px}
   .info h3{margin:0 0 6px;font-size:12px;letter-spacing:1.1px;text-transform:uppercase;color:#dcecdf}
   .info p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.5}
-  .kbd{display:inline-block;padding:1px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#eefaf2;font-size:11px}
-  .accentline{height:1px;background:linear-gradient(90deg, rgba(124,255,107,.45), rgba(124,255,107,0));margin:10px 0 2px;opacity:.7}
+  code{color:#dfffe3}
   .footer{display:flex;align-items:center;justify-content:space-between;color:#789083;font-size:11px;letter-spacing:.5px;padding:0 4px}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px rgba(124,255,107,.7);display:inline-block;margin-right:7px;vertical-align:middle}
-  @media (max-width: 980px){.content{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}}
-  @media (max-width: 760px){.wrap{padding:16px}.grid{grid-template-columns:1fr}h1{font-size:28px}.chips{justify-content:flex-start}}
+  @media (max-width: 980px){.content{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
 </style>
 </head>
-<body tabindex=""0"">
+<body>
   <div class=""wrap"">
     <header class=""hero"">
       <div class=""brand"">
         <div class=""mark""></div>
         <div class=""titlewrap"">
           <h1><span class=""u"">Under</span>Net</h1>
-          <div class=""tag"">In-game browser node • Hyland Point network</div>
+          <div class=""tag"">In-game browser + local app UI host</div>
         </div>
       </div>
       <div class=""chips"">
         <div class=""chip"">WebView2 Live</div>
-        <div class=""chip dim"">Secure Session</div>
-        <div class=""chip dim"">TV Display Link</div>
+        <div class=""chip dim"">Local Apps Ready</div>
       </div>
     </header>
 
@@ -1035,70 +1125,94 @@ namespace Firesky.UnderNetBrowser
       <section class=""panel"">
         <div class=""section-title"">
           <h2>Quick Access</h2>
-          <span>Saved Shortcuts</span>
+          <span>Web & Apps</span>
         </div>
         <div class=""grid"">
           <a class=""card"" href=""https://www.youtube.com"">
             <div class=""icon yt"">▶</div>
-            <div class=""meta"">
-              <p class=""name"">YouTube</p>
-              <p class=""desc"">Videos, music, streams and live content.</p>
-              <p class=""url"">youtube.com</p>
-            </div>
+            <div class=""meta""><p class=""name"">YouTube</p><p class=""desc"">Videos, music, streams and live content.</p><p class=""url"">youtube.com</p></div>
           </a>
           <a class=""card"" href=""https://www.google.com"">
             <div class=""icon gg"">G</div>
-            <div class=""meta"">
-              <p class=""name"">Google</p>
-              <p class=""desc"">Search the web from inside Schedule I.</p>
-              <p class=""url"">google.com</p>
-            </div>
+            <div class=""meta""><p class=""name"">Google</p><p class=""desc"">Search the web from inside Schedule I.</p><p class=""url"">google.com</p></div>
           </a>
-          <a class=""card"" href=""https://nfsu2.xyz/"">
-            <div class=""icon nfs"">N</div>
-            <div class=""meta"">
-              <p class=""name"">NFSU2</p>
-              <p class=""desc"">Quick launch Need for Speed Underground 2 web port.</p>
-              <p class=""url"">nfsu2.xyz</p>
-            </div>
+          <a class=""card"" href=""home:example"">
+            <div class=""icon app"">A</div>
+            <div class=""meta""><p class=""name"">Example App</p><p class=""desc"">Built-in sample local UI page (plug-and-play template).</p><p class=""url"">home:example</p></div>
           </a>
           <a class=""card"" href=""https://discord.com/app"">
             <div class=""icon dc"">D</div>
-            <div class=""meta"">
-              <p class=""name"">Discord</p>
-              <p class=""desc"">Mirror Discord if running, or open Discord Web.</p>
-              <p class=""url"">discord.com/app</p>
-            </div>
+            <div class=""meta""><p class=""name"">Discord</p><p class=""desc"">Mirror Discord if running, or open Discord Web.</p><p class=""url"">discord.com/app</p></div>
           </a>
         </div>
       </section>
 
       <aside class=""side"">
         <div class=""info"">
-          <h3>Navigation</h3>
-          <p>Use the top address bar to browse. Paste with <span class=""kbd"">Ctrl</span>+<span class=""kbd"">V</span>, then press <span class=""kbd"">Enter</span> to load.</p>
-          <div class=""accentline""></div>
-          <p>Back, forward, reload and close are available in the browser chrome.</p>
+          <h3>Local Apps (Simple)</h3>
+          <p>Drop a folder at <code>UserData/FireskyUnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code> and open it with <code>home:&lt;app-id&gt;</code>.</p>
         </div>
         <div class=""info"">
-          <h3>Status</h3>
-          <p><span class=""dot""></span>UnderNet ready. Video pages and web apps render directly on the in-game TV.</p>
+          <h3>Homepage</h3>
+          <p>This page lives at <code>root/Homepage/index.html</code>. You can customize it freely.</p>
         </div>
       </aside>
     </main>
 
     <div class=""footer"">
-      <div>UNDERNET // PRIVATE TERMINAL</div>
+      <div>UNDERNET // LOCAL APP HOST</div>
       <div>Schedule I TV Browser</div>
     </div>
   </div>
-  <script>
-    try {
-      window.focus();
-      document.body && document.body.focus && document.body.focus();
-      document.addEventListener('DOMContentLoaded', function(){ try{ window.focus(); document.body.focus(); }catch(e){} }, { once: true });
-    } catch(e) {}
-  </script>
+</body>
+</html>";
+        }
+
+        private static string BuildExampleAppHtml()
+        {
+            // Simple built-in example app to demonstrate plug-and-play local UI hosting.
+            return @"<!DOCTYPE html>
+<html lang=""en"">
+<head>
+<meta charset=""utf-8"" />
+<meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
+<title>UnderNet Example App</title>
+<style>
+  :root { --bg:#07110d; --panel:#0f1b16; --edge:#214033; --text:#e9f7ee; --muted:#9bb7aa; --accent:#7cff6b; }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:radial-gradient(800px 300px at 20% 0%,rgba(124,255,107,.12),transparent 60%),var(--bg);color:var(--text);padding:24px}
+  .card{max-width:900px;margin:0 auto;background:linear-gradient(180deg,rgba(18,29,23,.96),rgba(11,17,14,.96));border:1px solid var(--edge);border-radius:14px;padding:20px;box-shadow:0 16px 40px rgba(0,0,0,.35)}
+  h1{margin:0 0 8px;font-size:28px} .sub{margin:0 0 16px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .box{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)}
+  h2{margin:0 0 8px;font-size:14px;letter-spacing:.8px;text-transform:uppercase;color:#dcecdf}
+  p,li{color:var(--muted);line-height:1.45} code{color:#dfffe3}
+  a.btn{display:inline-block;margin-top:10px;padding:8px 12px;border-radius:8px;border:1px solid rgba(124,255,107,.35);color:#eaffea;text-decoration:none;background:rgba(124,255,107,.08)}
+  a.btn:hover{background:rgba(124,255,107,.14)}
+  @media (max-width:760px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+  <div class=""card"">
+    <h1>Example UnderNet App</h1>
+    <p class=""sub"">This is a simple local HTML page hosted inside UnderNet Browser. Use it as a template for mod/app UIs.</p>
+    <div class=""grid"">
+      <div class=""box"">
+        <h2>How it works</h2>
+        <ul>
+          <li>Folder: <code>UserData/FireskyUnderNetBrowser/root/Apps/example/</code></li>
+          <li>Entry file: <code>index.html</code></li>
+          <li>Open with: <code>home:example</code></li>
+        </ul>
+        <a class=""btn"" href=""undernet:home"">Back to Home</a>
+      </div>
+      <div class=""box"">
+        <h2>Make your own</h2>
+        <p>Create <code>root/Apps/&lt;app-id&gt;/index.html</code>, then navigate to <code>home:&lt;app-id&gt;</code>.</p>
+        <p>This is ideal for simple interfaces (dashboards, launchers, tools, mod UIs) built with HTML/CSS/JS.</p>
+      </div>
+    </div>
+  </div>
 </body>
 </html>";
         }
@@ -4758,6 +4872,8 @@ namespace Firesky.UnderNetBrowser
                 var raw = url.Trim();
                 if (raw.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) || raw.Equals("about:home", StringComparison.OrdinalIgnoreCase))
                     return "undernet:home";
+                if (TryParseLocalAppRoute(raw, out var appIdRaw))
+                    return "home:" + appIdRaw;
                 if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)) return raw;
 
                 var host = uri.Host ?? "";
@@ -4927,16 +5043,40 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
 
-                // Keep a friendly label for our built-in homepage file.
+                // Keep friendly labels for local homepage/app routes.
                 var display = url;
                 try
                 {
-                    var homeFile = Path.Combine(GetUserDataRoot(), "Home", "home.html");
                     if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
                     {
-                        var local = new Uri(url).LocalPath;
-                        if (string.Equals(Path.GetFullPath(local), Path.GetFullPath(homeFile), StringComparison.OrdinalIgnoreCase))
-                            display = "undernet:home";
+                        var local = Path.GetFullPath(new Uri(url).LocalPath);
+
+                        var homeCandidates = new[] { GetHomepageFilePath(), GetLegacyHomepageFilePath() };
+                        foreach (var hc in homeCandidates)
+                        {
+                            try
+                            {
+                                if (string.Equals(local, Path.GetFullPath(hc), StringComparison.OrdinalIgnoreCase))
+                                { display = "undernet:home"; break; }
+                            }
+                            catch { }
+                        }
+
+                        if (!string.Equals(display, "undernet:home", StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                var appsRoot = Path.GetFullPath(GetAppsRootDir()) + Path.DirectorySeparatorChar;
+                                if (local.StartsWith(appsRoot, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var rel = local.Substring(appsRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                                    var parts = rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+                                    if (parts.Length >= 2 && string.Equals(parts[1], "index.html", StringComparison.OrdinalIgnoreCase) && IsSafeAppId(parts[0]))
+                                        display = "home:" + parts[0].ToLowerInvariant();
+                                }
+                            }
+                            catch { }
+                        }
                     }
                 }
                 catch { }

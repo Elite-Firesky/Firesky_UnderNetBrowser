@@ -58,7 +58,7 @@ namespace Firesky.UnderNetBrowser
             HomeUrl = _category.CreateEntry(
                 "HomeUrl", "undernet:home",
                 "Home URL",
-                "Default page loaded when UnderNet opens (use undernet:home for the built-in homepage).");
+                "Default page loaded when UnderNet opens. Use undernet:home for the built-in homepage, or home:<app-id> for a local app in UserData/FireskyUnderNetBrowser/root/Apps/<app-id>/index.html.");
 
             BasicAdBlockEnabled = _category.CreateEntry(
                 "BasicAdBlockEnabled", true,
