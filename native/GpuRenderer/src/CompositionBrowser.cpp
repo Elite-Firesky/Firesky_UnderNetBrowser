@@ -85,6 +85,7 @@ struct CompositionBrowser::Impl {
     int width = 1280, height = 720;
     std::wstring initialUrl = L"about:blank";
     std::wstring userDataFolder; // explicit WebView2 profile path (prevents Schedule I.exe.WebView2 in game root)
+    std::wstring additionalBrowserArguments; // optional Chromium/WebView2 switches for environment creation
     std::wstring pendingUrl;
     std::atomic<bool> urlPending{false};
     std::atomic<int> pendingNavAction{0}; // 1=back,2=forward,3=reload
@@ -678,7 +679,7 @@ namespace {
 static std::vector<uint32_t> CollectProcessTreePids(uint32_t rootPid);
 static void ApplyDistanceAudioVolumeToProcessTree(CompositionBrowser::Impl* impl, bool enabled, float volume01);
 
-bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height, const std::wstring& initialUrl, const std::wstring& userDataFolder, std::string& outError) {
+bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height, const std::wstring& initialUrl, const std::wstring& userDataFolder, const std::wstring& additionalBrowserArguments, std::string& outError) {
     Shutdown();
     outError.clear();
     if(!device||!context){ outError="Unity D3D11 device/context unavailable"; SetError(outError); return false; }
@@ -686,6 +687,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
     m_impl->unityDevice = device; m_impl->unityContext = context;
     m_impl->width = (std::max)(1,width); m_impl->height=(std::max)(1,height); m_impl->initialUrl = initialUrl.empty()?L"about:blank":initialUrl;
     m_impl->userDataFolder = userDataFolder;
+    m_impl->additionalBrowserArguments = additionalBrowserArguments;
     m_impl->readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     // Apply pending spatial PoC config (may be set before Start/impl creation). Defer capture start until browser/core PID is ready.
     if (m_spatialPocPendingSet.load(std::memory_order_relaxed)) {
@@ -772,6 +774,11 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
             envOptions = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
             if (envOptions) {
                 try { envOptions->put_AreBrowserExtensionsEnabled(TRUE); } catch (...) {}
+                try {
+                    if (!impl->additionalBrowserArguments.empty()) {
+                        envOptions->put_AdditionalBrowserArguments(impl->additionalBrowserArguments.c_str());
+                    }
+                } catch (...) {}
                 envOptions.As(&envOptionsBase);
             }
         } catch (...) {}
@@ -1703,7 +1710,8 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                 }
             } catch (...) {}
 
-            Sleep(1);
+            // Wait for messages or a short timeout to reduce CPU wakeups while keeping input/nav responsive.
+            MsgWaitForMultipleObjectsEx(0, nullptr, 8, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
 
         // Best-effort: restore process audio volume if distance attenuation modified it.
@@ -1757,28 +1765,28 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         } catch (...) {}
 
         // Allow script/mute requests to be processed, then navigate away and stop.
-        PumpMessagesFor(150);
+        PumpMessagesFor(100);
         try { if (impl->core) impl->core->Navigate(L"about:blank"); } catch (...) {}
         try { if (impl->core) impl->core->Stop(); } catch (...) {}
-        PumpMessagesFor(350);
+        PumpMessagesFor(150);
 
         try { if (impl->session) impl->session.Close(); } catch (...) {}
         try { impl->session = nullptr; } catch (...) {}
         try { if (impl->pool) impl->pool.Close(); } catch (...) {}
         try { impl->pool = nullptr; } catch (...) {}
-        PumpMessagesFor(100);
+        PumpMessagesFor(50);
 
         try { if (impl->controller) impl->controller->put_IsVisible(FALSE); } catch (...) {}
         try { if (impl->controller) impl->controller->Close(); } catch (...) {}
-        PumpMessagesFor(500);
+        PumpMessagesFor(250);
 
         // Release WebView2/WinRT objects on the browser STA thread.
         try { impl->core.Reset(); } catch (...) {}
         try { impl->compController.Reset(); } catch (...) {}
         try { impl->controller.Reset(); } catch (...) {}
-        PumpMessagesFor(250);
+        PumpMessagesFor(150);
         try { impl->env.Reset(); } catch (...) {}
-        PumpMessagesFor(250);
+        PumpMessagesFor(100);
         try { impl->webVisual = nullptr; } catch (...) {}
         try { impl->rootVisual = nullptr; } catch (...) {}
         try { impl->compositor = nullptr; } catch (...) {}
@@ -1788,7 +1796,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         if (impl->hostHwnd) { DestroyWindow(impl->hostHwnd); impl->hostHwnd = nullptr; }
 
         // Final pump to let WebView2 process teardown/completion messages drain.
-        PumpMessagesFor(400);
+        PumpMessagesFor(150);
 
         // Last resort: if WebView2 browser process for this session is still alive, terminate its process tree.
         // This prevents orphaned msedgewebview2.exe processes in cases where graceful shutdown doesn't complete.
@@ -1834,7 +1842,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
                 // Give graceful shutdown a brief moment to finish before forcing termination.
                 if (processExists(browserPid)) {
-                    PumpMessagesFor(250);
+                    PumpMessagesFor(150);
                 }
                 if (processExists(browserPid)) {
                     auto tree = collectTree(browserPid);

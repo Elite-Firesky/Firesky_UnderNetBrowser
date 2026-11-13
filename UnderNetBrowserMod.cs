@@ -361,6 +361,11 @@ namespace Firesky.UnderNetBrowser
             "PerformanceDiagnosticsEnabled",
             "DiagnosticsSampleIntervalSeconds",
             "DiagnosticsOutputDirectory",
+            "WebView2ArgDisableBackgroundTimerThrottling",
+            "WebView2ArgDisableRendererBackgrounding",
+            "WebView2ArgAutoplayNoUserGesture",
+            "WebView2ArgDisableFrameRateLimit",
+            "WebView2CustomBrowserArguments",
             "SpatialAudioPocEnabled"
         };
 

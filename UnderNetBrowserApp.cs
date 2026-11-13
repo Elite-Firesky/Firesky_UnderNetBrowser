@@ -104,6 +104,8 @@ namespace Firesky.UnderNetBrowser
         private float _nextUrlBarPasteRepeatTime = -1f;
         private readonly UnderNetBrowserSync _sync = new UnderNetBrowserSync();
         private readonly List<(GameObject go, bool wasActive)> _hiddenHudObjects = new List<(GameObject, bool)>();
+        private readonly List<GameObject> _cachedHudHideCandidates = new List<GameObject>(16);
+        private float _lastHudCandidateScanRealtime = -999f;
         private static Font? _cachedFont;
         private static UnderNetBrowserApp? _activeInstance;
 
@@ -536,12 +538,7 @@ namespace Firesky.UnderNetBrowser
                 // F3 cursor toggle is handled globally in UnderNetBrowserMod (works inside/outside TV).
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F5, UnderNetBrowserConfig.KeyReload)))
                 {
-                    if (_gpuCompositionCapture != null)
-                    {
-                        var u = _gpuCompositionCapture.CurrentUrl;
-                        if (string.IsNullOrWhiteSpace(u)) u = GetResolvedHomeUrl();
-                        HardResetCompositionNavigate(u, "reload_key");
-                    }
+                    _gpuCompositionCapture?.Reload();
                 }
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F6, UnderNetBrowserConfig.KeyGameInputMode)))
                 {
@@ -730,17 +727,24 @@ namespace Firesky.UnderNetBrowser
         }
 
         private static bool _homePageEnsuredThisSession;
+        private static string? _cachedHomepageFileUrl;
 
         private string GetOrCreateHomepageUrl()
         {
             try
             {
                 var dir = Path.Combine(GetUserDataRoot(), "Home");
-                Directory.CreateDirectory(dir);
                 var path = Path.Combine(dir, "home.html");
-                var html = BuildHomepageHtml();
+
+                // Fast path: once ensured this session and file exists, avoid rebuilding large HTML and disk reads (helps HDD/cold-start hitches).
+                if (_homePageEnsuredThisSession && !string.IsNullOrEmpty(_cachedHomepageFileUrl) && File.Exists(path))
+                    return _cachedHomepageFileUrl;
+
+                Directory.CreateDirectory(dir);
+
                 if (!_homePageEnsuredThisSession || !File.Exists(path))
                 {
+                    var html = BuildHomepageHtml();
                     bool needsWrite = true;
                     try
                     {
@@ -759,7 +763,9 @@ namespace Firesky.UnderNetBrowser
                     }
                     _homePageEnsuredThisSession = true;
                 }
-                return new Uri(path).AbsoluteUri;
+
+                _cachedHomepageFileUrl = new Uri(path).AbsoluteUri;
+                return _cachedHomepageFileUrl;
             }
             catch (Exception ex)
             {
@@ -1133,9 +1139,9 @@ namespace Firesky.UnderNetBrowser
             if (_gpuCompositionCapture != null)
             {
                 try { ReleaseAllGameKeys("navigate"); } catch { }
-                // Hard reset on URL/home navigation to recover from hung WebGPU/WebView2 pages (e.g. browser games)
-                // that do not unload on normal navigation and can leave the TV visually/compositionally stuck.
-                HardResetCompositionNavigate(url, "navigate");
+                _gpuCompositionCapture.Navigate(url);
+                SetHint("");
+                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Navigate (composition): {url}");
             }
             else
             {
@@ -2502,15 +2508,23 @@ namespace Firesky.UnderNetBrowser
                 _gpuCompositionCapture?.GoForward();
             }, 15);
             _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "R", new Vector2(30, 26), new Color(0.22f, 0.28f, 0.34f, 1f), () => {
-                if (_gpuCompositionCapture != null)
-                {
-                    var u = _gpuCompositionCapture.CurrentUrl;
-                    if (string.IsNullOrWhiteSpace(u)) u = GetResolvedHomeUrl();
-                    HardResetCompositionNavigate(u, "reload_button");
-                }
+                _gpuCompositionCapture?.Reload();
             }, 14);
             _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "H", new Vector2(30, 26), new Color(0.18f, 0.30f, 0.22f, 1f), () => {
-                SetUrl("undernet:home");
+                try { ReleaseAllGameKeys("home_button"); } catch { }
+                var raw = "undernet:home";
+                var home = GetResolvedHomeUrl();
+                if (_urlInput != null)
+                {
+                    _urlInput.text = "undernet:home";
+                    if (_urlInput.textComponent != null) { _urlInput.textComponent.text = "undernet:home"; _urlInput.textComponent.enabled = true; }
+                    try { _urlInput.ForceLabelUpdate(); } catch { }
+                }
+                try { SetUrlDisplayText("undernet:home"); } catch { }
+                if (_gpuCompositionCapture != null)
+                    HardResetCompositionNavigate(home, "home_button");
+                else
+                    SetUrl(raw);
             }, 14);
 
             _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(300, 28), "Search or enter URL");
@@ -4253,6 +4267,7 @@ namespace Firesky.UnderNetBrowser
         }
 
         private static readonly Dictionary<string, Type?> _typeLookupCache = new Dictionary<string, Type?>(StringComparer.Ordinal);
+        private static bool _hotbarLikeScanCompletedNoTargets;
 
         private static (UnityEngine.Object? obj, Type? type) TryGetIl2CppComponentByTypeNames(GameObject go, params string[] typeNames)
         {
@@ -5194,10 +5209,28 @@ namespace Firesky.UnderNetBrowser
 
         private void TryDisableHotbarOnInventoryLikeTypes(bool captureState = true)
         {
+            // This broad GetTypes() scan is expensive; if a prior full scan found no actionable targets on this runtime, skip repeats.
+            if (_hotbarLikeScanCompletedNoTargets)
+            {
+                try { UnderNetBrowserConfig.Log($"[HotbarScan] skipped: prior scan found no actionable targets (capture={captureState})"); } catch { }
+                return;
+            }
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int assembliesTotal = 0, assembliesScanned = 0, assembliesSkipped = 0, typesEnumerated = 0, typesMatched = 0;
+            int staticHits = 0, instanceHits = 0, capturedStatesAdded = 0;
+            int savedBefore = 0;
+            bool verbose = false;
+            try { verbose = UnderNetBrowserConfig.DebugLogging?.Value == true; } catch { verbose = false; }
+            try { savedBefore = _savedInputStates.Count; } catch { savedBefore = 0; }
+
             try
             {
                 string[] memberNames = { "CanChangeEquippedItem", "canChangeEquippedItem", "EquippingEnabled", "equippingEnabled", "HotbarEnabled", "hotbarEnabled", "ScrollEnabled", "scrollEnabled" };
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                assembliesTotal = assemblies?.Length ?? 0;
+
+                foreach (var asm in assemblies)
                 {
                     string an = "";
                     try { an = asm.GetName().Name ?? ""; } catch { an = ""; }
@@ -5206,10 +5239,16 @@ namespace Firesky.UnderNetBrowser
                         an.IndexOf("S1API", StringComparison.OrdinalIgnoreCase) < 0 &&
                         an.IndexOf("Il2Cpp", StringComparison.OrdinalIgnoreCase) < 0 &&
                         an.IndexOf("Assembly-CSharp", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        assembliesSkipped++;
                         continue;
+                    }
 
+                    assembliesScanned++;
                     Type[] types;
                     try { types = asm.GetTypes(); } catch { continue; }
+                    typesEnumerated += types.Length;
+
                     foreach (var t in types)
                     {
                         try
@@ -5222,21 +5261,64 @@ namespace Firesky.UnderNetBrowser
                                 tn.IndexOf("S1API", StringComparison.OrdinalIgnoreCase) < 0 &&
                                 tn.IndexOf("Il2CppScheduleOne", StringComparison.OrdinalIgnoreCase) < 0) continue;
 
+                            typesMatched++;
+
                             // Try static members
                             foreach (var m in memberNames)
                             {
-                                if (captureState) TrySetStaticBoolByTypeName(tn, m, false);
-                                else
+                                try
                                 {
                                     var p = t.GetProperty(m, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                                    if (p != null && p.CanWrite && p.PropertyType == typeof(bool)) { try { p.SetValue(null, false); } catch { } }
+                                    if (p != null && p.CanRead && p.CanWrite && p.PropertyType == typeof(bool))
+                                    {
+                                        object? prev = null;
+                                        try { prev = p.GetValue(null); } catch { prev = null; }
+                                        bool prevBool = prev is bool b && b;
+                                        if (captureState)
+                                        {
+                                            int before = _savedInputStates.Count;
+                                            TrySetStaticBoolByTypeName(tn, m, false);
+                                            if (_savedInputStates.Count > before)
+                                            {
+                                                staticHits++;
+                                                if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] static hit: asm='{an}' type='{tn}' member='{m}' (prop) prev={prevBool} -> false (captured)");
+                                            }
+                                        }
+                                        else if (prevBool)
+                                        {
+                                            try { p.SetValue(null, false); staticHits++; if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] static apply: asm='{an}' type='{tn}' member='{m}' (prop) prev=true -> false"); } catch { }
+                                        }
+                                        continue;
+                                    }
+
                                     var f = t.GetField(m, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                                    if (f != null && f.FieldType == typeof(bool)) { try { f.SetValue(null, false); } catch { } }
+                                    if (f != null && f.FieldType == typeof(bool))
+                                    {
+                                        object? prev = null;
+                                        try { prev = f.GetValue(null); } catch { prev = null; }
+                                        bool prevBool = prev is bool b && b;
+                                        if (captureState)
+                                        {
+                                            int before = _savedInputStates.Count;
+                                            TrySetStaticBoolByTypeName(tn, m, false);
+                                            if (_savedInputStates.Count > before)
+                                            {
+                                                staticHits++;
+                                                if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] static hit: asm='{an}' type='{tn}' member='{m}' (field) prev={prevBool} -> false (captured)");
+                                            }
+                                        }
+                                        else if (prevBool)
+                                        {
+                                            try { f.SetValue(null, false); staticHits++; if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] static apply: asm='{an}' type='{tn}' member='{m}' (field) prev=true -> false"); } catch { }
+                                        }
+                                    }
                                 }
+                                catch { }
                             }
 
                             // Try singleton-like instances (Instance/instance/Local)
                             object? inst = null;
+                            string instSource = "";
                             foreach (var sm in new[] { "Instance", "instance", "Local", "local", "Singleton" })
                             {
                                 try
@@ -5248,28 +5330,87 @@ namespace Firesky.UnderNetBrowser
                                         var sf = t.GetField(sm, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
                                         if (sf != null) inst = sf.GetValue(null);
                                     }
-                                    if (inst != null) break;
+                                    if (inst != null) { instSource = sm; break; }
                                 }
                                 catch { }
                             }
                             if (inst == null) continue;
+
                             foreach (var m in memberNames)
                             {
-                                if (captureState) TrySetBoolMember(inst, m, false);
-                                else
+                                try
                                 {
-                                    var p = inst.GetType().GetProperty(m, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                                    if (p != null && p.CanWrite && p.PropertyType == typeof(bool)) { try { p.SetValue(inst, false); } catch { } }
-                                    var f = inst.GetType().GetField(m, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                                    if (f != null && f.FieldType == typeof(bool)) { try { f.SetValue(inst, false); } catch { } }
+                                    var it = inst.GetType();
+                                    var p = it.GetProperty(m, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                                    if (p != null && p.CanRead && p.CanWrite && p.PropertyType == typeof(bool))
+                                    {
+                                        object? prev = null;
+                                        try { prev = p.GetValue(inst); } catch { prev = null; }
+                                        bool prevBool = prev is bool b && b;
+                                        if (captureState)
+                                        {
+                                            int before = _savedInputStates.Count;
+                                            TrySetBoolMember(inst, m, false);
+                                            if (_savedInputStates.Count > before)
+                                            {
+                                                instanceHits++;
+                                                if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] instance hit: asm='{an}' type='{tn}' singleton='{instSource}' member='{m}' (prop) prev={prevBool} -> false (captured)");
+                                            }
+                                        }
+                                        else if (prevBool)
+                                        {
+                                            try { p.SetValue(inst, false); instanceHits++; if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] instance apply: asm='{an}' type='{tn}' singleton='{instSource}' member='{m}' (prop) prev=true -> false"); } catch { }
+                                        }
+                                        continue;
+                                    }
+
+                                    var f = it.GetField(m, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                                    if (f != null && f.FieldType == typeof(bool))
+                                    {
+                                        object? prev = null;
+                                        try { prev = f.GetValue(inst); } catch { prev = null; }
+                                        bool prevBool = prev is bool b && b;
+                                        if (captureState)
+                                        {
+                                            int before = _savedInputStates.Count;
+                                            TrySetBoolMember(inst, m, false);
+                                            if (_savedInputStates.Count > before)
+                                            {
+                                                instanceHits++;
+                                                if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] instance hit: asm='{an}' type='{tn}' singleton='{instSource}' member='{m}' (field) prev={prevBool} -> false (captured)");
+                                            }
+                                        }
+                                        else if (prevBool)
+                                        {
+                                            try { f.SetValue(inst, false); instanceHits++; if (verbose) UnderNetBrowserConfig.Log($"[HotbarScan] instance apply: asm='{an}' type='{tn}' singleton='{instSource}' member='{m}' (field) prev=true -> false"); } catch { }
+                                        }
+                                    }
                                 }
+                                catch { }
                             }
                         }
                         catch { }
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[HotbarScan] failed (non-fatal): {ex.Message}"); } catch { }
+            }
+            finally
+            {
+                try
+                {
+                    sw.Stop();
+                    capturedStatesAdded = Math.Max(0, _savedInputStates.Count - savedBefore);
+                    int totalHits = staticHits + instanceHits;
+                    // Summary for narrowing/perf analysis (gated to debug logging to avoid normal-log noise).
+                    UnderNetBrowserConfig.Log($"[HotbarScan] summary: capture={captureState} elapsedMs={sw.ElapsedMilliseconds} asmTotal={assembliesTotal} asmScanned={assembliesScanned} asmSkipped={assembliesSkipped} typesEnumerated={typesEnumerated} typesMatched={typesMatched} staticHits={staticHits} instanceHits={instanceHits} totalHits={totalHits} capturedStatesAdded={capturedStatesAdded}");
+                    if (totalHits == 0)
+                        _hotbarLikeScanCompletedNoTargets = true;
+                }
+                catch { }
+            }
         }
 
         private void TryDisableGameInput()
@@ -5436,20 +5577,11 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                Type? invType = null;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    try
-                    {
-                        invType = asm.GetType("Il2CppScheduleOne.PlayerScripts.PlayerInventory", false)
-                               ?? asm.GetType("ScheduleOne.PlayerScripts.PlayerInventory", false);
-                        if (invType != null) break;
-                    }
-                    catch { }
-                }
+                Type? invType = FindTypeInLoadedAssemblies("Il2CppScheduleOne.PlayerScripts.PlayerInventory")
+                             ?? FindTypeInLoadedAssemblies("ScheduleOne.PlayerScripts.PlayerInventory");
                 if (invType == null)
                 {
-                    // fallback scan
+                    // fallback scan (expensive, but rare) - avoid repeated full scans by caching null result not possible here; keep best-effort
                     foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                     {
                         Type[] types;
@@ -5565,11 +5697,26 @@ namespace Firesky.UnderNetBrowser
 
         private static Type? FindTypeInLoadedAssemblies(string typeName)
         {
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            if (string.IsNullOrWhiteSpace(typeName)) return null;
+            try
             {
-                try { var t = asm.GetType(typeName, false); if (t != null) return t; } catch { }
+                if (_typeLookupCache.TryGetValue(typeName, out var cached))
+                    return cached;
             }
-            return null;
+            catch { }
+
+            Type? found = null;
+            try
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { found = asm.GetType(typeName, false); if (found != null) break; } catch { }
+                }
+            }
+            catch { found = null; }
+
+            try { _typeLookupCache[typeName] = found; } catch { }
+            return found;
         }
 
         private void TrySetS1ApiLocalCanMoveNoCapture(bool value)
@@ -5632,11 +5779,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                Type? t = null;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    try { t = asm.GetType(typeName, false); if (t != null) break; } catch { }
-                }
+                Type? t = FindTypeInLoadedAssemblies(typeName);
                 if (t == null) return;
                 object? target = null;
                 var p = t.GetProperty(staticMember, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
@@ -5652,11 +5795,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                Type? t = null;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    try { t = asm.GetType(typeName, false); if (t != null) break; } catch { }
-                }
+                Type? t = FindTypeInLoadedAssemblies(typeName);
                 if (t == null) return;
                 var p = t.GetProperty(member, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
                 if (p != null && p.CanRead && p.CanWrite && p.PropertyType == typeof(bool))
@@ -5798,7 +5937,49 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 TryRestoreGameHud();
-                var seen = new HashSet<int>();
+
+                bool useCache = false;
+                try
+                {
+                    // Reuse previously discovered HUD candidates to avoid expensive Resources.FindObjectsOfTypeAll<Canvas>() on reattach/reopen.
+                    // Rescan periodically or if cache is empty/stale in case HUD objects are recreated.
+                    if (_cachedHudHideCandidates.Count > 0 && (Time.realtimeSinceStartup - _lastHudCandidateScanRealtime) < 300f)
+                    {
+                        int valid = 0;
+                        for (int i = 0; i < _cachedHudHideCandidates.Count; i++)
+                        {
+                            var go = _cachedHudHideCandidates[i];
+                            if (go == null) continue;
+                            try { if (!go.scene.IsValid()) continue; } catch { }
+                            valid++;
+                        }
+                        useCache = valid > 0;
+                    }
+                }
+                catch { useCache = false; }
+
+                if (useCache)
+                {
+                    var seen = new HashSet<int>();
+                    for (int i = 0; i < _cachedHudHideCandidates.Count; i++)
+                    {
+                        var go = _cachedHudHideCandidates[i];
+                        if (go == null) continue;
+                        try { if (!go.scene.IsValid()) continue; } catch { continue; }
+                        int id = 0;
+                        try { id = go.GetInstanceID(); } catch { id = 0; }
+                        if (id != 0 && !seen.Add(id)) continue;
+                        bool wasActive = false;
+                        try { wasActive = go.activeSelf; } catch { wasActive = false; }
+                        _hiddenHudObjects.Add((go, wasActive));
+                        try { if (wasActive) go.SetActive(false); } catch { }
+                    }
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) hidden via cache.");
+                    return;
+                }
+
+                _cachedHudHideCandidates.Clear();
+                var seenScan = new HashSet<int>();
                 var canvases = Resources.FindObjectsOfTypeAll<Canvas>();
                 foreach (var c in canvases)
                 {
@@ -5823,7 +6004,8 @@ namespace Firesky.UnderNetBrowser
                             if (!match) continue;
                             var go = child.gameObject;
                             int id = go.GetInstanceID();
-                            if (!seen.Add(id)) continue;
+                            if (!seenScan.Add(id)) continue;
+                            _cachedHudHideCandidates.Add(go);
                             _hiddenHudObjects.Add((go, go.activeSelf));
                             if (go.activeSelf) go.SetActive(false);
                             UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Hid HUD object candidate: {cn} (canvas={c.gameObject.name})");
@@ -5831,9 +6013,10 @@ namespace Firesky.UnderNetBrowser
                     }
                     catch { }
                 }
+                _lastHudCandidateScanRealtime = Time.realtimeSinceStartup;
                 // Skip expensive full-scene GameObject scan on normal paths (canvas-child scan above is sufficient and cheaper).
                 // Full scan caused noticeable hitches on reattach/open in some scenes. Keep only if explicitly needed in future.
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) tracked.");
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) tracked (scan).");
             }
             catch (Exception ex) { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] HUD hide failed (non-fatal): {ex.Message}"); }
         }

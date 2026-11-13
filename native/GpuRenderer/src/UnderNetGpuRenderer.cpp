@@ -61,6 +61,7 @@ namespace {
     CompositionBrowser g_comp;
     std::wstring g_compPendingUrl = L"about:blank";
     std::wstring g_compPendingUserData = L"";
+    std::wstring g_compPendingBrowserArgs = L"";
     int32_t g_compPendingW = 1280;
     int32_t g_compPendingH = 720;
     std::atomic<int32_t> g_compWantStart{ 0 };
@@ -448,7 +449,7 @@ namespace {
                 break;
             }
             std::string err;
-            if (g_comp.Start(g_device, g_context, g_compPendingW, g_compPendingH, g_compPendingUrl, g_compPendingUserData, err)) {
+            if (g_comp.Start(g_device, g_context, g_compPendingW, g_compPendingH, g_compPendingUrl, g_compPendingUserData, g_compPendingBrowserArgs, err)) {
                 g_compLastDiag = g_comp.GetDiag();
                 g_status.store(UN_GPU_OK);
                 g_lastError.clear();
@@ -466,7 +467,7 @@ namespace {
                 g_wgc.Stop();
                 if (EnsureTargetReadyOnRenderThread() && g_device && g_context) {
                     std::string err;
-                    if (g_comp.Start(g_device, g_context, g_compPendingW, g_compPendingH, g_compPendingUrl, g_compPendingUserData, err)) {
+                    if (g_comp.Start(g_device, g_context, g_compPendingW, g_compPendingH, g_compPendingUrl, g_compPendingUserData, g_compPendingBrowserArgs, err)) {
                         g_compLastDiag = g_comp.GetDiag();
                         Log(0, std::string("UnderNetGpuRenderer: composition browser start accepted (deferred/async). ") + g_compLastDiag);
                     } else {
@@ -589,6 +590,12 @@ UN_EXPORT int32_t __stdcall UnGpu_CompSetParams(const wchar_t* initialUrl, int32
     g_compPendingW = width > 0 ? width : 1280;
     g_compPendingH = height > 0 ? height : 720;
     g_compWantStart.store(1);
+    return 1;
+}
+
+UN_EXPORT int32_t __stdcall UnGpu_CompSetAdditionalBrowserArguments(const wchar_t* args) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_compPendingBrowserArgs = args ? args : L"";
     return 1;
 }
 

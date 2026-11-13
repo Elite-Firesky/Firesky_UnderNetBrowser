@@ -67,6 +67,14 @@ namespace Firesky.UnderNetBrowser
                     return false;
 
                 _createIssued = true;
+                try
+                {
+                    var browserArgs = UnderNetBrowserConfig.BuildWebView2AdditionalBrowserArguments();
+                    UnderNetBrowserGpuNative.CompSetAdditionalBrowserArguments(string.IsNullOrWhiteSpace(browserArgs) ? null : browserArgs);
+                    if (!string.IsNullOrWhiteSpace(browserArgs))
+                        MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Additional browser arguments configured: '{browserArgs}'");
+                }
+                catch { }
                 try { UnderNetBrowserGpuNative.CompSetParams(_lastUrl, _width, _height, userDataFolder); } catch { }
                 bool poc = false;
                 try
@@ -224,7 +232,7 @@ namespace Firesky.UnderNetBrowser
                 _unityTexture.filterMode = FilterMode.Bilinear;
                 _unityTexture.wrapMode = TextureWrapMode.Clamp;
                 var fill = new Color32[width * height];
-                for (int i = 0; i < fill.Length; i++) fill[i] = new Color32(20, 20, 30, 255);
+                Array.Fill(fill, new Color32(20, 20, 30, 255));
                 _unityTexture.SetPixels32(fill);
                 _unityTexture.Apply(false, false);
 

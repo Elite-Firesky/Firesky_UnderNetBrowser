@@ -155,6 +155,9 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, EntryPoint = "UnGpu_CompSetParams")]
         public static extern int CompSetParams(string initialUrl, int width, int height, string? userDataFolder);
 
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, EntryPoint = "UnGpu_CompSetAdditionalBrowserArguments")]
+        public static extern int CompSetAdditionalBrowserArguments(string? additionalBrowserArguments);
+
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, EntryPoint = "UnGpu_CompNavigate")]
         public static extern int CompNavigate(string url);
 

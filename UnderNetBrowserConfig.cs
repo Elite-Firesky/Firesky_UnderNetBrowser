@@ -37,6 +37,13 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<float>? DiagnosticsSampleIntervalSeconds { get; private set; }
         public static MelonPreferences_Entry<string>? DiagnosticsOutputDirectory { get; private set; }
 
+        // Advanced WebView2/Chromium browser arguments (testing). Applied when the WebView2 environment is created (cold start / hard reset).
+        public static MelonPreferences_Entry<bool>? WebView2ArgDisableBackgroundTimerThrottling { get; private set; }
+        public static MelonPreferences_Entry<bool>? WebView2ArgDisableRendererBackgrounding { get; private set; }
+        public static MelonPreferences_Entry<bool>? WebView2ArgAutoplayNoUserGesture { get; private set; }
+        public static MelonPreferences_Entry<bool>? WebView2ArgDisableFrameRateLimit { get; private set; }
+        public static MelonPreferences_Entry<string>? WebView2CustomBrowserArguments { get; private set; }
+
         public static void Initialize()
         {
             // Keep the original category identifier for compatibility with existing saved MelonPreferences.
@@ -131,6 +138,32 @@ namespace Firesky.UnderNetBrowser
                 "Advanced: Diagnostics Output Folder",
                 "Custom output folder for diagnostics files. Leave empty to use UserData/FireskyUnderNetBrowser/Diagnostics.");
 
+            // --- Advanced / WebView2 Browser Arguments (testing) ---
+            WebView2ArgDisableBackgroundTimerThrottling = _category.CreateEntry(
+                "WebView2ArgDisableBackgroundTimerThrottling", false,
+                "Testing: Disable Background Timer Throttling",
+                "Adds --disable-background-timer-throttling. May help background timers/media in some cases but can increase CPU usage. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
+            WebView2ArgDisableRendererBackgrounding = _category.CreateEntry(
+                "WebView2ArgDisableRendererBackgrounding", false,
+                "Testing: Disable Renderer Backgrounding",
+                "Adds --disable-renderer-backgrounding. May affect background behavior; can increase resource usage. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
+            WebView2ArgAutoplayNoUserGesture = _category.CreateEntry(
+                "WebView2ArgAutoplayNoUserGesture", false,
+                "Testing: Autoplay Without User Gesture",
+                "Adds --autoplay-policy=no-user-gesture-required. May allow media to autoplay more readily; site behavior may change. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
+            WebView2ArgDisableFrameRateLimit = _category.CreateEntry(
+                "WebView2ArgDisableFrameRateLimit", false,
+                "Testing: Disable Frame Rate Limit",
+                "Adds --disable-frame-rate-limit. Test only: may increase GPU/CPU/power usage and usually does not improve captured TV playback. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
+            WebView2CustomBrowserArguments = _category.CreateEntry(
+                "WebView2CustomBrowserArguments", "",
+                "Testing: Custom WebView2 Browser Arguments",
+                "Optional additional Chromium/WebView2 switches appended to the environment (space-separated), e.g. --enable-features=... Use for testing only; invalid/risky flags can break rendering, input, security, or stability. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
             SpatialAudioPocEnabled = _category.CreateEntry(
                 "SpatialAudioPocEnabled", false,
                 "Developer: Spatial Audio PoC",
@@ -151,6 +184,9 @@ namespace Firesky.UnderNetBrowser
                 MelonLogger.Msg($"[Firesky UnderNet Browser] [SpatialPoC] Config.Initialize: SpatialAudioPocEnabled value={SpatialAudioPocEnabled?.Value} default={SpatialAudioPocEnabled?.DefaultValue} (category={_category?.Identifier}) afterLoad");
             }
             catch { }
+
+            // Persist newly registered entries/defaults so they appear in the MelonPreferences cfg without requiring Mod Manager to save first.
+            try { MelonPreferences.Save(); } catch { try { _category?.SaveToFile(false); } catch { } }
         }
 
         public static void LogAlways(string message)
@@ -179,6 +215,36 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             return fallback;
+        }
+
+        /// <summary>
+        /// Builds AdditionalBrowserArguments for WebView2 environment creation from testing toggles and custom args.
+        /// Applied only on environment creation (cold start / hard reset / restart).
+        /// </summary>
+        public static string BuildWebView2AdditionalBrowserArguments()
+        {
+            try
+            {
+                var parts = new System.Collections.Generic.List<string>(8);
+                if (WebView2ArgDisableBackgroundTimerThrottling?.Value == true) parts.Add("--disable-background-timer-throttling");
+                if (WebView2ArgDisableRendererBackgrounding?.Value == true) parts.Add("--disable-renderer-backgrounding");
+                if (WebView2ArgAutoplayNoUserGesture?.Value == true) parts.Add("--autoplay-policy=no-user-gesture-required");
+                if (WebView2ArgDisableFrameRateLimit?.Value == true) parts.Add("--disable-frame-rate-limit");
+
+                var custom = WebView2CustomBrowserArguments?.Value;
+                if (!string.IsNullOrWhiteSpace(custom))
+                {
+                    // Basic normalization: collapse newlines/tabs to spaces; do not attempt to parse/quote shell-style args here.
+                    custom = custom.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ').Trim();
+                    if (custom.Length > 0) parts.Add(custom);
+                }
+
+                return parts.Count == 0 ? string.Empty : string.Join(" ", parts);
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
     }
 }

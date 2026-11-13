@@ -15,7 +15,8 @@ public:
 
     // Called from render thread with valid Unity D3D11 device/context. Starts internal STA thread for WebView2/WinRT.
     // userDataFolder: absolute path for WebView2 user data/profile (must be inside mod/user data; avoids default exe-adjacent profile).
-    bool Start(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height, const std::wstring& initialUrl, const std::wstring& userDataFolder, std::string& outError);
+    // additionalBrowserArguments: optional Chromium/WebView2 switches for environment creation (testing/advanced).
+    bool Start(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height, const std::wstring& initialUrl, const std::wstring& userDataFolder, const std::wstring& additionalBrowserArguments, std::string& outError);
     // Thread-safe request; actual navigation occurs on browser thread.
     void Navigate(const std::wstring& url);
     void GoBack();
