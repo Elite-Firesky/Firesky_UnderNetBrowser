@@ -536,7 +536,12 @@ namespace Firesky.UnderNetBrowser
                 // F3 cursor toggle is handled globally in UnderNetBrowserMod (works inside/outside TV).
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F5, UnderNetBrowserConfig.KeyReload)))
                 {
-                    _gpuCompositionCapture?.Reload();
+                    if (_gpuCompositionCapture != null)
+                    {
+                        var u = _gpuCompositionCapture.CurrentUrl;
+                        if (string.IsNullOrWhiteSpace(u)) u = GetResolvedHomeUrl();
+                        HardResetCompositionNavigate(u, "reload_key");
+                    }
                 }
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F6, UnderNetBrowserConfig.KeyGameInputMode)))
                 {
@@ -1128,14 +1133,59 @@ namespace Firesky.UnderNetBrowser
             if (_gpuCompositionCapture != null)
             {
                 try { ReleaseAllGameKeys("navigate"); } catch { }
-                _gpuCompositionCapture.Navigate(url);
-                SetHint("");
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Navigate (composition): {url}");
+                // Hard reset on URL/home navigation to recover from hung WebGPU/WebView2 pages (e.g. browser games)
+                // that do not unload on normal navigation and can leave the TV visually/compositionally stuck.
+                HardResetCompositionNavigate(url, "navigate");
             }
             else
             {
                 if (_externalMirrorMode) return;
                 SetHint("Composition browser not available.");
+            }
+        }
+
+        private void HardResetCompositionNavigate(string targetUrl, string reason)
+        {
+            try
+            {
+                var url = string.IsNullOrWhiteSpace(targetUrl) ? GetResolvedHomeUrl() : targetUrl;
+                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset navigate ({reason}): {url}");
+
+                // Best-effort cleanup of current page (may not run if renderer is hung), then fully recreate the composition browser/controller.
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio');for(var i=0;i<ms.length;i++){try{ms[i].pause();ms[i].muted=true;}catch(e){}}}catch(e){}})();"); } catch { }
+                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
+                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                _gpuCompositionCapture = null;
+                try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+
+                int compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560);
+                int compH = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080, 480, 1440);
+                string compUserData = "";
+                try { compUserData = System.IO.Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
+                try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
+                try { UnderNetBrowserDiagnostics.OnBrowserLoadingBegin(); UnderNetBrowserDiagnostics.OnWebViewInitStart(); } catch { }
+
+                _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
+                _gpuCompositionMode = true;
+                if (_gpuCompositionCapture.TryStart(url, compW, compH, compUserData))
+                {
+                    try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { }
+                    SetHint("Reloading browser...");
+                    _compositionWebFocused = true;
+                    try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
+                }
+                else
+                {
+                    SetHint("Composition browser restart failed. Check MelonLoader log / WebView2 runtime and native renderer.");
+                    try { _gpuCompositionCapture.Dispose(); } catch { }
+                    _gpuCompositionCapture = null;
+                    _gpuCompositionMode = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                try { SetHint($"Browser reset failed: {ex.Message}"); } catch { }
+                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] HardResetCompositionNavigate failed: {ex.Message}"); } catch { }
             }
         }
 
@@ -2452,7 +2502,12 @@ namespace Firesky.UnderNetBrowser
                 _gpuCompositionCapture?.GoForward();
             }, 15);
             _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "R", new Vector2(30, 26), new Color(0.22f, 0.28f, 0.34f, 1f), () => {
-                _gpuCompositionCapture?.Reload();
+                if (_gpuCompositionCapture != null)
+                {
+                    var u = _gpuCompositionCapture.CurrentUrl;
+                    if (string.IsNullOrWhiteSpace(u)) u = GetResolvedHomeUrl();
+                    HardResetCompositionNavigate(u, "reload_button");
+                }
             }, 14);
             _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "H", new Vector2(30, 26), new Color(0.18f, 0.30f, 0.22f, 1f), () => {
                 SetUrl("undernet:home");

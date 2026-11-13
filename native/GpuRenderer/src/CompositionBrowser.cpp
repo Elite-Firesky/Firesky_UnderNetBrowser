@@ -1,4 +1,4 @@
-﻿#include "CompositionBrowser.h"
+#include "CompositionBrowser.h"
 
 #include <d3dcompiler.h>
 #include <dxgi.h>
@@ -1452,12 +1452,39 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         int urlPollTick = 0;
         while(!impl->stop.load()){
             while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){ TranslateMessage(&msg); DispatchMessageW(&msg); }
-            if(impl->urlPending.exchange(false) && impl->core){ std::wstring u; u = impl->pendingUrl; if(!u.empty()) impl->core->Navigate(u.c_str()); }
+            auto runPreNavCleanup = [&](const wchar_t* reason) {
+                (void)reason;
+                if (!impl || !impl->core) return;
+                // Best-effort cleanup before leaving heavy pages (WebGPU/canvas/media/RAF loops can otherwise appear visually stuck).
+                // Avoid blanking/destroying DOM here: it can leave a black frame if navigation doesn't immediately present new content.
+                try {
+                    const wchar_t* cleanupScript =
+                        L"(function(){try{"
+                        L"try{var ms=document.querySelectorAll('video,audio');for(var i=0;i<ms.length;i++){try{var m=ms[i];m.pause();m.muted=true;try{m.srcObject=null;}catch(e){}try{m.removeAttribute('src');}catch(e){}try{m.load();}catch(e){}}catch(e){}}}catch(e){}"
+                        L"try{window.requestAnimationFrame=function(){return 0};window.cancelAnimationFrame=function(){};}catch(e){}"
+                        L"try{var cs=document.querySelectorAll('canvas');for(var i=0;i<cs.length;i++){try{var c=cs[i];try{var gl=c.getContext&& (c.getContext('webgl2')||c.getContext('webgl')||c.getContext('experimental-webgl')); if(gl&&gl.getExtension){var ext=gl.getExtension('WEBGL_lose_context'); if(ext&&ext.loseContext) ext.loseContext();}}catch(e){}}catch(e){}}}catch(e){}"
+                        L"}catch(e){}})();";
+                    impl->core->ExecuteScript(cleanupScript, nullptr);
+                } catch (...) {}
+                // Do not call Stop() here; Navigate/GoBack/GoForward/Reload will replace the current page.
+            };
+
+            if(impl->urlPending.exchange(false) && impl->core){
+                std::wstring u; u = impl->pendingUrl;
+                if(!u.empty()) {
+                    runPreNavCleanup(L"navigate");
+                    impl->core->Navigate(u.c_str());
+                }
+            }
             if (impl->core) {
                 int nav = impl->pendingNavAction.exchange(0);
-                if (nav == 1) { BOOL can=FALSE; if (SUCCEEDED(impl->core->get_CanGoBack(&can)) && can) impl->core->GoBack(); }
-                else if (nav == 2) { BOOL can=FALSE; if (SUCCEEDED(impl->core->get_CanGoForward(&can)) && can) impl->core->GoForward(); }
-                else if (nav == 3) { impl->core->Reload(); }
+                if (nav == 1) {
+                    BOOL can=FALSE; if (SUCCEEDED(impl->core->get_CanGoBack(&can)) && can) { runPreNavCleanup(L"back"); impl->core->GoBack(); }
+                }
+                else if (nav == 2) {
+                    BOOL can=FALSE; if (SUCCEEDED(impl->core->get_CanGoForward(&can)) && can) { runPreNavCleanup(L"forward"); impl->core->GoForward(); }
+                }
+                else if (nav == 3) { runPreNavCleanup(L"reload"); impl->core->Reload(); }
             }
             if(impl->core && (++urlPollTick >= 10)){
                 urlPollTick = 0;
