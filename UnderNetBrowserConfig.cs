@@ -244,7 +244,7 @@ namespace Firesky.UnderNetBrowser
 
             // --- UI ---
             ChromeHeightFraction = _category.CreateEntry(
-                "ChromeHeightFraction", 0.08f,
+                "ChromeHeightFraction", 0.06f,
                 "UI: Chrome Height",
                 "Height of the top browser chrome/address bar area as a fraction of the TV screen height (0.04-0.20). Default 0.08.");
 
@@ -296,7 +296,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                float v = ChromeHeightFraction?.Value ?? 0.08f;
+                float v = ChromeHeightFraction?.Value ?? 0.06f;
                 if (float.IsNaN(v) || float.IsInfinity(v)) v = 0.08f;
                 return UnityEngine.Mathf.Clamp(v, 0.04f, 0.20f);
             }

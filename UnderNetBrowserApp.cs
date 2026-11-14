@@ -295,6 +295,9 @@ namespace Firesky.UnderNetBrowser
                 DumpUIDiagnostics(diagGo, "OnOpened");
             }
 
+            // Re-apply chrome layout now that the canvas has its real size (BuildUI ran before sizing).
+            try { ApplyChromeLayout(); } catch { }
+
             // UnderNet now always uses WebView2 composition mode (GPU composition browser).
             _gpuCompositionMode = true;
             try
