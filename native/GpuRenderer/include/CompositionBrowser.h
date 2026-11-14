@@ -28,6 +28,13 @@ public:
     // Pause/resume WGC capture to reduce CPU/GPU/background work while keeping WebView2 session alive (warm reopen).
     void SetCapturePaused(bool paused);
 
+    // Adaptive Rendering (visual-only, independent of audio): throttle capture/copy cadence and/or enter visual standby.
+    // captureIntervalMs <= 0 disables throttling (full rate). visualStandby=true gates expensive visual capture/copy work
+    // while keeping the WebView2 session/page/media/audio alive (last frame preserved by caller).
+    void SetAdaptiveVisualState(int captureIntervalMs, bool visualStandby);
+    int GetAdaptiveCaptureIntervalMs() const;
+    bool IsAdaptiveVisualStandby() const;
+
     // Render thread: copy latest captured frame into target texture. Returns true if a new frame was copied.
     bool CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D* target, std::string& outDiag);
 

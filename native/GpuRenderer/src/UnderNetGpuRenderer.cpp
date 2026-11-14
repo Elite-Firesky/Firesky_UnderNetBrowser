@@ -671,6 +671,21 @@ UN_EXPORT void __stdcall UnGpu_CompSetCapturePaused(int32_t paused) {
     try { g_comp.SetCapturePaused(paused != 0); } catch (...) {}
 }
 
+UN_EXPORT void __stdcall UnGpu_CompSetAdaptiveVisualState(int32_t captureIntervalMs, int32_t visualStandby) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { g_comp.SetAdaptiveVisualState(captureIntervalMs, visualStandby != 0); } catch (...) {}
+}
+
+UN_EXPORT int32_t __stdcall UnGpu_CompGetAdaptiveCaptureIntervalMs() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { return g_comp.GetAdaptiveCaptureIntervalMs(); } catch (...) { return 0; }
+}
+
+UN_EXPORT int32_t __stdcall UnGpu_CompIsAdaptiveVisualStandby() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { return g_comp.IsAdaptiveVisualStandby() ? 1 : 0; } catch (...) { return 0; }
+}
+
 UN_EXPORT void __stdcall UnGpu_CompSendKey(uint32_t msg, uint64_t wParam, uint64_t lParam) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_comp.SendKey(msg, wParam, lParam);

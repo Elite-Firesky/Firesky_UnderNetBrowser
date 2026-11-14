@@ -176,7 +176,12 @@ namespace Firesky.UnderNetBrowser
 
                 if (targetReady != 0 && !RenderingSuspended)
                 {
-                    GL.IssuePluginEvent(_renderEventFunc, UnderNetBrowserGpuNative.EventCompCopyLatest);
+                    bool adaptiveStandby = false;
+                    try { adaptiveStandby = UnderNetBrowserGpuNative.CompIsAdaptiveVisualStandby() == 1; } catch { adaptiveStandby = false; }
+                    if (!adaptiveStandby)
+                    {
+                        GL.IssuePluginEvent(_renderEventFunc, UnderNetBrowserGpuNative.EventCompCopyLatest);
+                    }
                 }
 
                 bool changed = (compStatus != _lastStatus || targetReady != _lastReady);

@@ -194,6 +194,15 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetCapturePaused")]
         public static extern void CompSetCapturePaused(int paused);
 
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetAdaptiveVisualState")]
+        public static extern void CompSetAdaptiveVisualState(int captureIntervalMs, int visualStandby);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompGetAdaptiveCaptureIntervalMs")]
+        public static extern int CompGetAdaptiveCaptureIntervalMs();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompIsAdaptiveVisualStandby")]
+        public static extern int CompIsAdaptiveVisualStandby();
+
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSendKey")]
         public static extern void CompSendKey(uint msg, ulong wParam, ulong lParam);
 

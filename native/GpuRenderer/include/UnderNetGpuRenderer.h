@@ -77,6 +77,9 @@ UN_EXPORT void __stdcall UnGpu_CompGetCurrentUrl(wchar_t* buffer, int32_t buffer
 UN_EXPORT int32_t __stdcall UnGpu_CompIsFullscreen(); // 1=fullscreen, 0=not, -1=unavailable
 UN_EXPORT void __stdcall UnGpu_CompShutdown();
 UN_EXPORT void __stdcall UnGpu_CompSetCapturePaused(int32_t paused);
+UN_EXPORT void __stdcall UnGpu_CompSetAdaptiveVisualState(int32_t captureIntervalMs, int32_t visualStandby);
+UN_EXPORT int32_t __stdcall UnGpu_CompGetAdaptiveCaptureIntervalMs();
+UN_EXPORT int32_t __stdcall UnGpu_CompIsAdaptiveVisualStandby();
 UN_EXPORT void __stdcall UnGpu_CompSendKey(uint32_t msg, uint64_t wParam, uint64_t lParam);
 UN_EXPORT void __stdcall UnGpu_CompSendText(const wchar_t* text);
 UN_EXPORT void __stdcall UnGpu_CompExecuteScript(const wchar_t* script);

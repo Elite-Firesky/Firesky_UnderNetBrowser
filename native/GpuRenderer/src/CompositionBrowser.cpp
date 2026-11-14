@@ -120,6 +120,12 @@ struct CompositionBrowser::Impl {
     std::string initTimingSummary; // preserved for diagnostics (not overwritten by frame blit diag)
     std::atomic<bool> capturePaused{false};
 
+    // Adaptive Rendering (visual-only): capture/copy throttling and visual standby (keeps WebView2 session/audio alive).
+    std::atomic<int> adaptiveCaptureIntervalMs{0}; // <=0 = uncapped/full
+    std::atomic<bool> adaptiveVisualStandby{false};
+    std::atomic<uint64_t> lastFrameAcceptMs{0};
+    std::atomic<uint64_t> lastCopyMs{0};
+
     // Stage 4.1 startup timeline markers (ms since Start thread baseline; -1 = not observed)
     std::atomic<uint64_t> startTickMs{0};
     std::atomic<int64_t> tEnvReqMs{-1};
@@ -1416,7 +1422,14 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                               impl->pool.FrameArrived([impl](auto const& sender, auto const&){
                                 try{
                                     auto frame=sender.TryGetNextFrame(); if(!frame) return;
-                                    if (impl->capturePaused.load(std::memory_order_relaxed)) return;
+                                    if (impl->capturePaused.load(std::memory_order_relaxed) || impl->adaptiveVisualStandby.load(std::memory_order_relaxed)) return;
+                                    int intervalMs = impl->adaptiveCaptureIntervalMs.load(std::memory_order_relaxed);
+                                    if (intervalMs > 0) {
+                                        uint64_t now = GetTickCount64();
+                                        uint64_t last = impl->lastFrameAcceptMs.load(std::memory_order_relaxed);
+                                        if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) return;
+                                        impl->lastFrameAcceptMs.store(now, std::memory_order_relaxed);
+                                    }
                                     int64_t exp=-1; uint64_t s=impl->startTickMs.load(std::memory_order_relaxed);
                                     impl->tFirstFrameArrivedMs.compare_exchange_strong(exp, s? (int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed);
                                     auto cs=frame.ContentSize(); auto surface=frame.Surface();
@@ -1883,6 +1896,24 @@ void CompositionBrowser::SetCapturePaused(bool paused) {
     m_impl->capturePaused.store(paused, std::memory_order_relaxed);
 }
 
+void CompositionBrowser::SetAdaptiveVisualState(int captureIntervalMs, bool visualStandby) {
+    if (!m_impl) return;
+    if (captureIntervalMs < 0) captureIntervalMs = 0;
+    m_impl->adaptiveCaptureIntervalMs.store(captureIntervalMs, std::memory_order_relaxed);
+    m_impl->adaptiveVisualStandby.store(visualStandby, std::memory_order_relaxed);
+    // Do not modify external capturePaused here; FrameArrived/CopyLatestTo honor both flags.
+}
+
+int CompositionBrowser::GetAdaptiveCaptureIntervalMs() const {
+    if (!m_impl) return 0;
+    return m_impl->adaptiveCaptureIntervalMs.load(std::memory_order_relaxed);
+}
+
+bool CompositionBrowser::IsAdaptiveVisualStandby() const {
+    if (!m_impl) return false;
+    return m_impl->adaptiveVisualStandby.load(std::memory_order_relaxed);
+}
+
 void CompositionBrowser::Shutdown(){
     Impl* impl = m_impl;
     if(!impl) { m_running.store(false); m_status.store(0); return; }
@@ -1934,6 +1965,19 @@ void CompositionBrowser::Shutdown(){
 bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D* target, std::string& outDiag){
     outDiag.clear();
     if(!ctx||!target||!m_impl){ outDiag="inactive"; return false; }
+    if (m_impl->adaptiveVisualStandby.load(std::memory_order_relaxed) || m_impl->capturePaused.load(std::memory_order_relaxed)) {
+        outDiag = "visual standby";
+        return false;
+    }
+    int intervalMs = m_impl->adaptiveCaptureIntervalMs.load(std::memory_order_relaxed);
+    if (intervalMs > 0) {
+        uint64_t now = GetTickCount64();
+        uint64_t last = m_impl->lastCopyMs.load(std::memory_order_relaxed);
+        if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) {
+            outDiag = "throttled";
+            return false;
+        }
+    }
     ID3D11Texture2D* src=nullptr; UINT cW=0,cH=0,tW=0,tH=0; DXGI_FORMAT fmt=DXGI_FORMAT_UNKNOWN; uint64_t seq=0;
     { std::lock_guard<std::mutex> lk(m_impl->frameMutex); if(!m_impl->latest){ outDiag="no frame yet"; return false; } if(m_impl->copied==m_impl->seq){ outDiag="no new frame"; return false; } src=m_impl->latest; src->AddRef(); cW=m_impl->cW;cH=m_impl->cH;tW=m_impl->tW;tH=m_impl->tH;fmt=m_impl->fmt;seq=m_impl->seq; }
     D3D11_TEXTURE2D_DESC dstDesc{}; target->GetDesc(&dstDesc); D3D11_TEXTURE2D_DESC srcDesc{}; src->GetDesc(&srcDesc);
@@ -2033,6 +2077,7 @@ bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D*
     if(dev) dev->Release();
     // cachedRtv/rtInter/srvInter are reused across frames; released in Shutdown() or on desc change
     { std::lock_guard<std::mutex> lk(m_impl->frameMutex); m_impl->copied=seq; }
+    m_impl->lastCopyMs.store(GetTickCount64(), std::memory_order_relaxed);
     {
         // Only record first blit when a real WebView2 frame has arrived
         if (m_impl->seq > 0 || m_impl->tFirstFrameArrivedMs.load(std::memory_order_relaxed) >= 0) {

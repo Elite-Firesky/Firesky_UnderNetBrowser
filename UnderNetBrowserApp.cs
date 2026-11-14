@@ -96,6 +96,19 @@ namespace Firesky.UnderNetBrowser
         private float _lastDistanceVolumeUpdateTime = -999f;
         private float _lastDistanceVolumeApplied = 1f;
         private bool _distanceVolumeWasEnabled;
+
+        // Adaptive Rendering (visual-only quality/performance; independent of audio)
+        private enum AdaptiveVisualTier { Full = 0, Reduced = 1, Low = 2, VisualStandby = 3 }
+        private AdaptiveVisualTier _adaptiveCurrentTier = AdaptiveVisualTier.Full;
+        private AdaptiveVisualTier _adaptivePendingTier = AdaptiveVisualTier.Full;
+        private float _adaptivePendingTierSince = -999f;
+        private float _adaptiveLastEvalTime = -999f;
+        private int _adaptiveAppliedCaptureIntervalMs = 0;
+        private bool _adaptiveAppliedStandby = false;
+        private string _adaptiveLastReason = "init";
+        private bool _adaptiveLastTvVisible = true;
+        private float _adaptiveLastDistance = -1f;
+        private float _adaptiveLastDiagLogTime = -999f;
         // Arrow-key media control repeat (seek/volume) for attached/detached browser playback
         private float _nextMediaArrowRepeatLeft = -1f;
         private float _nextMediaArrowRepeatRight = -1f;
@@ -212,6 +225,7 @@ namespace Firesky.UnderNetBrowser
                 _distanceVolumeWasEnabled = false;
                 _lastDistanceVolumeApplied = 1f;
                 _distanceVolumeTvTransform = null;
+                try { ResetAdaptiveRenderingState("shutdown:" + reason); } catch { }
 
                 // Best-effort: stop media/playback before teardown in case native stop event is delayed/missed during unload.
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
@@ -295,6 +309,7 @@ namespace Firesky.UnderNetBrowser
                         if (compStatus > 0 && _gpuCompositionCapture.Texture != null)
                         {
                             _gpuCompositionCapture.RenderingSuspended = false;
+                            try { ResetAdaptiveRenderingState("warm_reopen"); } catch { }
                             try { ReleaseAllGameKeys("warm_reopen_navigate"); } catch { }
                             try { _gpuCompositionCapture.Navigate(home); } catch { }
                             try { _gpuCompositionCapture.RequestFocus(); } catch { }
@@ -318,14 +333,14 @@ namespace Firesky.UnderNetBrowser
                     }
 
                     _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
-                    int compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560);
-                    int compH = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080, 480, 1440);
+                    GetDesiredCompositionRenderSize(out int compW, out int compH);
                     string compUserData = "";
                     try { compUserData = System.IO.Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
                     try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
                     try { UnderNetBrowserDiagnostics.OnBrowserLoadingBegin(); UnderNetBrowserDiagnostics.OnWebViewInitStart(); } catch { }
                     if (_gpuCompositionCapture.TryStart(home, compW, compH, compUserData))
                     {
+                        try { ResetAdaptiveRenderingState("cold_start"); } catch { }
                         try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { } // start request issued; async init continues natively
                         SetHint("Starting UnderNet browser (initializing...)");
                         _compositionWebFocused = true; // default to web interaction; URL bar focus will override when activated
@@ -384,6 +399,7 @@ namespace Firesky.UnderNetBrowser
             if (explicitXClose)
             {
                 // Explicit app close (X): fully shut down browser/WebView2 to avoid lingering processes.
+                try { ResetAdaptiveRenderingState("close_x"); } catch { }
                 try { StopExternalWindowMirror("closed_x"); } catch { }
                 try { StopSpatialAudioPlayback("closed_x"); } catch { }
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
@@ -398,6 +414,7 @@ namespace Firesky.UnderNetBrowser
             {
                 // Normal/framework close path: stop media and park browser for fast warm reopen (avoid ~12s controller recreation).
                 // Full native shutdown remains in ShutdownBrowserRuntime/world unload.
+                try { ResetAdaptiveRenderingState("warm_close"); } catch { }
                 try { StopSpatialAudioPlayback("closed"); } catch { }
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
                 try { ReleaseAllGameKeys("close_navigate_blank"); } catch { }
@@ -494,6 +511,8 @@ namespace Firesky.UnderNetBrowser
                             try { UpdateExternalMirrorTick(); } catch { }
                             if (!_externalMirrorMode) { try { _gpuCompositionCapture?.Tick(); } catch { } }
                             try { MaintainDetachedAppVisualState(); } catch { }
+                            try { TryUpdateAdaptiveRendering(); } catch { }
+                            try { TryLogAdaptiveDiagnostics(); } catch { }
                             try { TryUpdateDistanceBasedVolume(); } catch { }
                             try { UnderNetBrowserInputHooks.LogDiagnostics(); } catch { }
                             return;
@@ -506,6 +525,8 @@ namespace Firesky.UnderNetBrowser
                         try { HandleDetachedBrowserMediaKeys(); } catch { }
                         try { _gpuCompositionCapture?.Tick(); } catch { }
                         try { MaintainDetachedAppVisualState(); } catch { }
+                        try { TryUpdateAdaptiveRendering(); } catch { }
+                        try { TryLogAdaptiveDiagnostics(); } catch { }
                         try { TryUpdateDistanceBasedVolume(); } catch { }
                         try { UnderNetBrowserInputHooks.LogDiagnostics(); } catch { }
                         return;
@@ -612,6 +633,7 @@ namespace Firesky.UnderNetBrowser
                 {
                     _gpuCompositionCapture.Tick();
                     try { UpdateSpatialAudioPlayback(); } catch { }
+                    try { TryUpdateAdaptiveRendering(); } catch { }
                     try { TryUpdateDistanceBasedVolume(); } catch { }
                     if (_gpuCompositionCapture.Texture != null && _videoDisplay != null && _videoDisplay.texture != _gpuCompositionCapture.Texture)
                         _videoDisplay.texture = _gpuCompositionCapture.Texture;
@@ -678,7 +700,10 @@ namespace Firesky.UnderNetBrowser
                             try { diag = UnderNetBrowserGpuNative.GetCompDiagString() ?? ""; } catch { }
                             float texAspect = th > 0 ? (float)tw / th : 0f;
                             float rectAspect = vrect.height > 0.01f ? vrect.width / vrect.height : 0f;
-                            UnderNetBrowserConfig.Log($"[UnderNetBrowser][VisualDiag] compStatus={compSt} unityTex={tw}x{th} compFrame={cw}x{ch} videoRect={vrect.width:F1}x{vrect.height:F1} rectAspect={rectAspect:F3} texAspect={texAspect:F3} videoLossy=({vlossy.x:F3},{vlossy.y:F3},{vlossy.z:F3}) canvasScale={canvasScale:F3} texFilter={(_gpuCompositionCapture.Texture!=null?_gpuCompositionCapture.Texture.filterMode.ToString():"n/a")} diag='{diag}'");
+                            string arTier = _adaptiveCurrentTier.ToString();
+                            int arInterval = _adaptiveAppliedCaptureIntervalMs;
+                            float arFps = arInterval > 0 ? (1000f / arInterval) : 0f;
+                            UnderNetBrowserConfig.Log($"[UnderNetBrowser][VisualDiag] compStatus={compSt} unityTex={tw}x{th} compFrame={cw}x{ch} videoRect={vrect.width:F1}x{vrect.height:F1} rectAspect={rectAspect:F3} texAspect={texAspect:F3} videoLossy=({vlossy.x:F3},{vlossy.y:F3},{vlossy.z:F3}) canvasScale={canvasScale:F3} texFilter={(_gpuCompositionCapture.Texture!=null?_gpuCompositionCapture.Texture.filterMode.ToString():"n/a")} adaptive(tier={arTier} reason='{_adaptiveLastReason}' intervalMs={arInterval} fps={(arFps>0?arFps.ToString("0.#"):"full")} standby={_adaptiveAppliedStandby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}) diag='{diag}'");
                         }
                         catch { }
                     }
@@ -1278,8 +1303,7 @@ namespace Firesky.UnderNetBrowser
                 _gpuCompositionCapture = null;
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
 
-                int compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560);
-                int compH = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080, 480, 1440);
+                GetDesiredCompositionRenderSize(out int compW, out int compH);
                 string compUserData = "";
                 try { compUserData = System.IO.Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
                 try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
@@ -6439,6 +6463,369 @@ namespace Firesky.UnderNetBrowser
         }
 
         // --- Stage 3/4 PoC: spatial TV audio playback (WASAPI process-loopback capture -> Unity 3D AudioSource) ---
+        private void GetDesiredCompositionRenderSize(out int width, out int height)
+        {
+            // Prefer player's native display resolution as a quality cap, fitted to the TV/video viewport aspect ratio.
+            int nativeW = 1920;
+            int nativeH = 1080;
+            try
+            {
+                int rw = 0, rh = 0;
+                try { rw = Screen.currentResolution.width; rh = Screen.currentResolution.height; } catch { rw = 0; rh = 0; }
+                if (rw <= 0 || rh <= 0) { try { rw = Screen.width; rh = Screen.height; } catch { rw = 0; rh = 0; } }
+                if (rw > 0) nativeW = rw;
+                if (rh > 0) nativeH = rh;
+            }
+            catch { nativeW = 1920; nativeH = 1080; }
+
+            // Respect configured values as an upper bound/cap when explicitly set within valid range.
+            int capW = nativeW;
+            int capH = nativeH;
+            try
+            {
+                int cfgW = UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920;
+                int cfgH = UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080;
+                if (cfgW > 0) capW = Mathf.Min(capW, Mathf.Clamp(cfgW, 854, 3840));
+                if (cfgH > 0) capH = Mathf.Min(capH, Mathf.Clamp(cfgH, 480, 2160));
+            }
+            catch { }
+
+            float targetAspect = 16f / 9f;
+            try
+            {
+                var vrt = _videoDisplay != null ? _videoDisplay.rectTransform : null;
+                if (vrt != null)
+                {
+                    var r = vrt.rect;
+                    if (r.height > 1f && r.width > 1f)
+                        targetAspect = Mathf.Clamp(r.width / r.height, 0.5f, 4f);
+                }
+            }
+            catch { targetAspect = 16f / 9f; }
+
+            int w, h;
+            if ((float)capW / (float)capH > targetAspect)
+            {
+                w = capW;
+                h = Mathf.RoundToInt(w / targetAspect);
+            }
+            else
+            {
+                h = capH;
+                w = Mathf.RoundToInt(h * targetAspect);
+            }
+
+            // Align to even dimensions (encoder/capture friendliness) and clamp.
+            if ((w & 1) == 1) w--;
+            if ((h & 1) == 1) h--;
+            w = Mathf.Clamp(w, 854, 3840);
+            h = Mathf.Clamp(h, 480, 2160);
+
+            width = w;
+            height = h;
+        }
+
+        private void TryUpdateAdaptiveRendering(bool force = false)
+        {
+            try
+            {
+                // Safety: do not race with teardown or apply when no active composition session.
+                if (_gpuCompositionCapture == null || !_gpuCompositionMode)
+                {
+                    _adaptiveCurrentTier = AdaptiveVisualTier.Full;
+                    _adaptivePendingTier = AdaptiveVisualTier.Full;
+                    _adaptivePendingTierSince = -999f;
+                    _adaptiveLastReason = "inactive";
+                    _adaptiveAppliedCaptureIntervalMs = 0;
+                    _adaptiveAppliedStandby = false;
+                    return;
+                }
+
+                bool master = UnderNetBrowserConfig.AdaptiveRenderingEnabled?.Value == true;
+                if (!master)
+                {
+                    ApplyAdaptiveTier(AdaptiveVisualTier.Full, "disabled", forceApply: force);
+                    _adaptivePendingTier = AdaptiveVisualTier.Full;
+                    _adaptivePendingTierSince = -999f;
+                    return;
+                }
+
+                // If rendering is explicitly suspended for lifecycle reasons (warm-close background, etc.), do not fight it.
+                try { if (_gpuCompositionCapture.RenderingSuspended) { _adaptiveLastReason = "suspended"; return; } } catch { }
+
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (!force && now > 0f && (now - _adaptiveLastEvalTime) < 0.25f)
+                    return;
+                _adaptiveLastEvalTime = now;
+
+                // Resolve listener (camera/player view) and TV position (reuse distance-volume TV transform cache when possible)
+                Camera? cam = null;
+                try { cam = Camera.main; } catch { cam = null; }
+                bool hasListener = cam != null;
+                bool hasTv = false;
+                Vector3 listenerPos = default;
+                Vector3 tvPos = default;
+                Transform? tvTransform = null;
+                if (hasListener)
+                {
+                    try { listenerPos = cam!.transform.position; } catch { hasListener = false; }
+                }
+
+                try
+                {
+                    // Reuse cached TV transform from distance-volume logic if available; refresh opportunistically.
+                    tvTransform = _distanceVolumeTvTransform;
+                    bool needResolve = tvTransform == null;
+                    if (!needResolve)
+                    {
+                        try { if (!tvTransform!.gameObject.activeInHierarchy) needResolve = true; } catch { needResolve = true; }
+                    }
+                    if (needResolve || (now - _lastDistanceVolumeTvResolveTime) > 2.0f)
+                    {
+                        // Minimal inline resolve compatible with TryUpdateDistanceBasedVolume.
+                        try
+                        {
+                            _lastDistanceVolumeTvResolveTime = now;
+                            Transform? t = null;
+                            GameObject? go = null;
+                            try { go = GameObject.Find("TVInterface"); } catch { go = null; }
+                            if (go == null) { try { go = GameObject.Find("TV_Built(Clone)/TVInterface"); } catch { go = null; } }
+                            if (go == null) { try { go = GameObject.Find("TV_Built/TVInterface"); } catch { go = null; } }
+                            if (go == null) { try { go = GameObject.Find("TV_Built(Clone)"); } catch { go = null; } }
+                            if (go == null) { try { go = GameObject.Find("TV_Built"); } catch { go = null; } }
+                            if (go != null) t = go.transform;
+                            if (t != null) { _distanceVolumeTvTransform = t; tvTransform = t; }
+                        }
+                        catch { }
+                    }
+                    if (tvTransform != null)
+                    {
+                        try { tvPos = tvTransform.position; hasTv = true; } catch { hasTv = false; }
+                    }
+                }
+                catch { hasTv = false; }
+
+                float dist = -1f;
+                if (hasListener && hasTv)
+                {
+                    try { dist = Vector3.Distance(listenerPos, tvPos); } catch { dist = -1f; }
+                }
+                _adaptiveLastDistance = dist;
+
+                // Cheap visibility check (frustum/approx). Only used conservatively to avoid upgrading and to allow downgrade when clearly not visible.
+                bool tvVisible = true;
+                try
+                {
+                    if (cam != null && tvTransform != null)
+                    {
+                        // Prefer renderer bounds test if available, else viewport-point test.
+                        Renderer? rend = null;
+                        try { rend = tvTransform.GetComponentInChildren<Renderer>(); } catch { rend = null; }
+                        if (rend != null)
+                        {
+                            try
+                            {
+                                var planes = GeometryUtility.CalculateFrustumPlanes(cam);
+                                tvVisible = GeometryUtility.TestPlanesAABB(planes, rend.bounds);
+                            }
+                            catch { tvVisible = true; }
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var vp = cam.WorldToViewportPoint(tvPos);
+                                tvVisible = vp.z > 0f && vp.x >= -0.1f && vp.x <= 1.1f && vp.y >= -0.1f && vp.y <= 1.1f;
+                            }
+                            catch { tvVisible = true; }
+                        }
+                    }
+                }
+                catch { tvVisible = true; }
+                _adaptiveLastTvVisible = tvVisible;
+
+                // Compute desired tier from distance (independent of audio). If distance unknown, stay Full.
+                AdaptiveVisualTier desired = AdaptiveVisualTier.Full;
+                string reason = "full";
+                bool distanceScaling = UnderNetBrowserConfig.AdaptiveDistanceQualityScaling?.Value == true;
+                bool standbyEnabled = UnderNetBrowserConfig.AdaptiveVisualStandbyEnabled?.Value == true;
+
+                float dFull = Mathf.Max(0f, UnderNetBrowserConfig.AdaptiveFullDistance?.Value ?? 7f);
+                float dReduced = Mathf.Max(dFull + 0.1f, UnderNetBrowserConfig.AdaptiveReducedDistance?.Value ?? 14f);
+                float dLow = Mathf.Max(dReduced + 0.1f, UnderNetBrowserConfig.AdaptiveLowDistance?.Value ?? 22f);
+                float dStandby = Mathf.Max(dLow + 0.1f, UnderNetBrowserConfig.AdaptiveStandbyDistance?.Value ?? 30f);
+                float hyst = Mathf.Clamp(UnderNetBrowserConfig.AdaptiveHysteresisDistance?.Value ?? 1f, 0f, 10f);
+                float dwell = Mathf.Clamp(UnderNetBrowserConfig.AdaptiveTransitionDelaySeconds?.Value ?? 0.5f, 0f, 10f);
+
+                if (distanceScaling && dist >= 0f)
+                {
+                    // Base by distance with simple hysteresis-aware thresholds relative to current tier.
+                    // Upgrades restore quickly; downgrades respect hysteresis margins.
+                    AdaptiveVisualTier byDist = AdaptiveVisualTier.Full;
+                    if (dist >= dStandby) byDist = AdaptiveVisualTier.VisualStandby;
+                    else if (dist >= dLow) byDist = AdaptiveVisualTier.Low;
+                    else if (dist >= dReduced) byDist = AdaptiveVisualTier.Reduced;
+                    else byDist = AdaptiveVisualTier.Full;
+
+                    // Apply hysteresis around boundaries to avoid oscillation.
+                    var cur = _adaptiveCurrentTier;
+                    if (byDist > cur)
+                    {
+                        desired = byDist;
+                        reason = byDist == AdaptiveVisualTier.VisualStandby ? "distance-standby" : (byDist == AdaptiveVisualTier.Low ? "distance-low" : "distance-reduced");
+                    }
+                    else if (byDist < cur)
+                    {
+                        // Upgrade: allow when comfortably inside better tier (distance minus hysteresis below boundary) for fast restore.
+                        desired = byDist;
+                        if (cur == AdaptiveVisualTier.VisualStandby && dist > dStandby - hyst) desired = cur;
+                        else if (cur == AdaptiveVisualTier.Low && dist > dLow - hyst) desired = cur;
+                        else if (cur == AdaptiveVisualTier.Reduced && dist > dReduced - hyst) desired = cur;
+                        reason = "distance-restore";
+                    }
+                    else
+                    {
+                        desired = cur;
+                        reason = "steady";
+                    }
+                }
+                else
+                {
+                    desired = AdaptiveVisualTier.Full;
+                    reason = (!distanceScaling || dist < 0f) ? "distance-unavailable/full" : "full";
+                }
+
+                // Cheap visibility can conservatively bias toward lower visual work (never force higher quality).
+                if (!tvVisible && desired < AdaptiveVisualTier.Reduced)
+                {
+                    desired = AdaptiveVisualTier.Reduced;
+                    reason = "not-visible";
+                }
+                else if (!tvVisible && desired == AdaptiveVisualTier.Reduced)
+                {
+                    reason = _adaptiveCurrentTier == desired ? "not-visible-steady" : "not-visible";
+                }
+
+                if (desired == AdaptiveVisualTier.VisualStandby && !standbyEnabled)
+                {
+                    desired = AdaptiveVisualTier.Low;
+                    reason = "standby-disabled";
+                }
+
+                // Hysteresis/dwell: downgrades wait; upgrades apply quickly.
+                if (desired > _adaptiveCurrentTier)
+                {
+                    if (_adaptivePendingTier != desired) { _adaptivePendingTier = desired; _adaptivePendingTierSince = now; }
+                    if (now - _adaptivePendingTierSince >= dwell || force)
+                    {
+                        ApplyAdaptiveTier(desired, reason, forceApply: force);
+                    }
+                }
+                else if (desired < _adaptiveCurrentTier)
+                {
+                    _adaptivePendingTier = desired;
+                    _adaptivePendingTierSince = now;
+                    ApplyAdaptiveTier(desired, reason, forceApply: true); // fast restore
+                }
+                else
+                {
+                    _adaptivePendingTier = desired;
+                    _adaptivePendingTierSince = now;
+                    // Keep applied state in sync if config changed.
+                    ApplyAdaptiveTier(desired, reason, forceApply: false);
+                }
+            }
+            catch { }
+        }
+
+        private void ApplyAdaptiveTier(AdaptiveVisualTier tier, string reason, bool forceApply)
+        {
+            try
+            {
+                int intervalMs = 0;
+                bool standby = false;
+                switch (tier)
+                {
+                    case AdaptiveVisualTier.Full:
+                        intervalMs = 0; standby = false; break;
+                    case AdaptiveVisualTier.Reduced:
+                        {
+                            int fps = Mathf.Clamp(UnderNetBrowserConfig.AdaptiveReducedCaptureFps?.Value ?? 15, 1, 60);
+                            intervalMs = Mathf.Max(1, Mathf.RoundToInt(1000f / fps));
+                            standby = false;
+                            break;
+                        }
+                    case AdaptiveVisualTier.Low:
+                        {
+                            int fps = Mathf.Clamp(UnderNetBrowserConfig.AdaptiveLowCaptureFps?.Value ?? 8, 1, 60);
+                            intervalMs = Mathf.Max(1, Mathf.RoundToInt(1000f / fps));
+                            standby = false;
+                            break;
+                        }
+                    case AdaptiveVisualTier.VisualStandby:
+                        intervalMs = 0; standby = true; break;
+                }
+
+                bool changed = forceApply || tier != _adaptiveCurrentTier || intervalMs != _adaptiveAppliedCaptureIntervalMs || standby != _adaptiveAppliedStandby;
+                _adaptiveCurrentTier = tier;
+                _adaptiveLastReason = reason ?? "";
+
+                if (changed && _gpuCompositionCapture != null)
+                {
+                    try { UnderNetBrowserGpuNative.CompSetAdaptiveVisualState(intervalMs, standby ? 1 : 0); } catch { }
+                    _adaptiveAppliedCaptureIntervalMs = intervalMs;
+                    _adaptiveAppliedStandby = standby;
+                    try
+                    {
+                        string tname = tier.ToString();
+                        float arFps = intervalMs > 0 ? (1000f / intervalMs) : 0f;
+                        UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][Adaptive] tier={tname} reason='{_adaptiveLastReason}' intervalMs={intervalMs} fps={(arFps>0?arFps.ToString("0.#"):"full")} standby={standby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
+                    }
+                    catch { }
+                }
+
+                // Resolution scaling intentionally conservative in v1: disabled by default and not applied dynamically to avoid session churn/risk.
+            }
+            catch { }
+        }
+
+        private void ResetAdaptiveRenderingState(string reason)
+        {
+            try
+            {
+                _adaptiveCurrentTier = AdaptiveVisualTier.Full;
+                _adaptivePendingTier = AdaptiveVisualTier.Full;
+                _adaptivePendingTierSince = -999f;
+                _adaptiveLastEvalTime = -999f;
+                _adaptiveAppliedCaptureIntervalMs = 0;
+                _adaptiveAppliedStandby = false;
+                _adaptiveLastReason = reason ?? "reset";
+                _adaptiveLastDiagLogTime = -999f;
+                try { UnderNetBrowserGpuNative.CompSetAdaptiveVisualState(0, 0); } catch { }
+            }
+            catch { }
+        }
+
+        private void TryLogAdaptiveDiagnostics(bool force = false)
+        {
+            try
+            {
+                if (UnderNetBrowserConfig.AdaptiveRenderingEnabled?.Value != true) return;
+                if (_gpuCompositionCapture == null || !_gpuCompositionMode) return;
+
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (!force && now > 0f && (now - _adaptiveLastDiagLogTime) < 5f) return;
+                _adaptiveLastDiagLogTime = now;
+
+                string tname = _adaptiveCurrentTier.ToString();
+                float arFps = _adaptiveAppliedCaptureIntervalMs > 0 ? (1000f / _adaptiveAppliedCaptureIntervalMs) : 0f;
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][AdaptiveDiag] tier={tname} reason='{_adaptiveLastReason}' intervalMs={_adaptiveAppliedCaptureIntervalMs} fps={(arFps > 0 ? arFps.ToString("0.#") : "full")} standby={_adaptiveAppliedStandby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
+            }
+            catch { }
+        }
+        // --- Stage 3/4 PoC: spatial TV audio playback (WASAPI process-loopback capture -> Unity 3D AudioSource) ---
         private void TryUpdateDistanceBasedVolume(bool force = false)
         {
             try
@@ -6558,6 +6945,8 @@ namespace Firesky.UnderNetBrowser
                 else if (dist >= silent) vol = 0f;
                 else vol = 1f - Mathf.InverseLerp(full, silent, dist);
                 vol = Mathf.Clamp01(vol);
+                // Snap near-silent residuals to true zero (avoids ~1-2% process volume at/beyond effective silent range).
+                if (vol <= 0.025f || dist >= (silent - 0.05f)) vol = 0f;
 
                 if (!force && Mathf.Abs(vol - _lastDistanceVolumeApplied) < 0.02f)
                     return;
@@ -7062,9 +7451,7 @@ namespace Firesky.UnderNetBrowser
                 try { compUserData = Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
                 try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
                 _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
-                int compW = 1920, compH = 1080;
-                try { compW = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920, 854, 2560); } catch { }
-                try { compH = Mathf.Clamp(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080, 480, 1440); } catch { }
+                GetDesiredCompositionRenderSize(out int compW, out int compH);
                 bool ok = false;
                 try { ok = _gpuCompositionCapture.TryStart(home, compW, compH, compUserData); } catch { ok = false; }
                 if (ok)

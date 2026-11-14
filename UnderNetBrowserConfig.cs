@@ -44,6 +44,20 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<bool>? WebView2ArgDisableFrameRateLimit { get; private set; }
         public static MelonPreferences_Entry<string>? WebView2CustomBrowserArguments { get; private set; }
 
+        // --- Adaptive Rendering (visual quality/performance; independent of audio distance-volume) ---
+        public static MelonPreferences_Entry<bool>? AdaptiveRenderingEnabled { get; private set; }
+        public static MelonPreferences_Entry<bool>? AdaptiveDistanceQualityScaling { get; private set; }
+        public static MelonPreferences_Entry<bool>? AdaptiveVisualStandbyEnabled { get; private set; }
+        public static MelonPreferences_Entry<bool>? AdaptiveResolutionScalingEnabled { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveFullDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveReducedDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveLowDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveStandbyDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveHysteresisDistance { get; private set; }
+        public static MelonPreferences_Entry<float>? AdaptiveTransitionDelaySeconds { get; private set; }
+        public static MelonPreferences_Entry<int>? AdaptiveReducedCaptureFps { get; private set; }
+        public static MelonPreferences_Entry<int>? AdaptiveLowCaptureFps { get; private set; }
+
         public static void Initialize()
         {
             // Keep the original category identifier for compatibility with existing saved MelonPreferences.
@@ -119,9 +133,9 @@ namespace Firesky.UnderNetBrowser
                 "Enable verbose debug logging for troubleshooting.");
 
             AlwaysLogDiagnostics = _category.CreateEntry(
-                "AlwaysLogDiagnostics", true,
+                "AlwaysLogDiagnostics", false,
                 "Advanced: Key Diagnostics Logging",
-                "Always log key diagnostics (input/HUD/navigation) even when verbose debug logging is disabled.");
+                "Always log key diagnostics (input/HUD/navigation) even when verbose debug logging is disabled. Keep disabled for normal use to reduce log noise/performance impact.");
 
             PerformanceDiagnosticsEnabled = _category.CreateEntry(
                 "PerformanceDiagnosticsEnabled", false,
@@ -163,6 +177,67 @@ namespace Firesky.UnderNetBrowser
                 "WebView2CustomBrowserArguments", "",
                 "Testing: Custom WebView2 Browser Arguments",
                 "Optional additional Chromium/WebView2 switches appended to the environment (space-separated), e.g. --enable-features=... Use for testing only; invalid/risky flags can break rendering, input, security, or stability. Applied on WebView2 environment creation (restart/reopen or Home hard-reset).");
+
+            // --- Adaptive Rendering ---
+            AdaptiveRenderingEnabled = _category.CreateEntry(
+                "AdaptiveRenderingEnabled", true,
+                "Adaptive Rendering: Enable",
+                "Reduce TV browser visual workload when far away or not meaningfully visible (independent of audio). Keeps WebView2 session/audio/state; does not restart the browser.");
+
+            AdaptiveDistanceQualityScaling = _category.CreateEntry(
+                "AdaptiveDistanceQualityScaling", true,
+                "Adaptive Rendering: Distance Quality Scaling",
+                "Use player-to-TV distance to select visual quality tiers (capture throttling/resolution/standby).");
+
+            AdaptiveVisualStandbyEnabled = _category.CreateEntry(
+                "AdaptiveVisualStandbyEnabled", true,
+                "Adaptive Rendering: Visual Standby",
+                "At far distance tiers, pause expensive visual capture/frame updates and show the last frame while keeping WebView2, page state, and audio running.");
+
+            AdaptiveResolutionScalingEnabled = _category.CreateEntry(
+                "AdaptiveResolutionScalingEnabled", false,
+                "Adaptive Rendering: Resolution Scaling (Experimental)",
+                "Allow lower composition/render resolution in reduced tiers. Disabled by default for safety/compatibility; applied conservatively to avoid session churn.");
+
+            AdaptiveFullDistance = _category.CreateEntry(
+                "AdaptiveFullDistance", 7.0f,
+                "Adaptive Rendering: Full Quality Distance (m)",
+                "Distance at/below which full visual quality is preferred.");
+
+            AdaptiveReducedDistance = _category.CreateEntry(
+                "AdaptiveReducedDistance", 14.0f,
+                "Adaptive Rendering: Reduced Quality Distance (m)",
+                "Distance beyond full-quality range where capture/update rate is reduced.");
+
+            AdaptiveLowDistance = _category.CreateEntry(
+                "AdaptiveLowDistance", 22.0f,
+                "Adaptive Rendering: Low Quality Distance (m)",
+                "Distance where capture/update rate is reduced further (and optional resolution scaling may apply if enabled).");
+
+            AdaptiveStandbyDistance = _category.CreateEntry(
+                "AdaptiveStandbyDistance", 30.0f,
+                "Adaptive Rendering: Visual Standby Distance (m)",
+                "Distance beyond which visual standby may activate (if enabled), pausing visual capture/updates while keeping browser/audio alive.");
+
+            AdaptiveHysteresisDistance = _category.CreateEntry(
+                "AdaptiveHysteresisDistance", 1.0f,
+                "Adaptive Rendering: Hysteresis Distance (m)",
+                "Buffer distance used to prevent rapid tier switching near boundaries.");
+
+            AdaptiveTransitionDelaySeconds = _category.CreateEntry(
+                "AdaptiveTransitionDelaySeconds", 0.5f,
+                "Adaptive Rendering: Transition Delay (s)",
+                "Minimum time a new visual tier condition must hold before switching (reduces oscillation). Upgrades to higher quality restore quickly.");
+
+            AdaptiveReducedCaptureFps = _category.CreateEntry(
+                "AdaptiveReducedCaptureFps", 15,
+                "Adaptive Rendering: Reduced Tier Capture FPS",
+                "Target capture/update rate for the Reduced tier (1-60). Lower values save more CPU/GPU/capture work.");
+
+            AdaptiveLowCaptureFps = _category.CreateEntry(
+                "AdaptiveLowCaptureFps", 8,
+                "Adaptive Rendering: Low Tier Capture FPS",
+                "Target capture/update rate for the Low tier (1-60). Lower values save more CPU/GPU/capture work.");
 
             SpatialAudioPocEnabled = _category.CreateEntry(
                 "SpatialAudioPocEnabled", false,
