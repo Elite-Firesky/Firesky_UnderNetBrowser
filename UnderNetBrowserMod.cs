@@ -133,10 +133,6 @@ namespace Firesky.UnderNetBrowser
 
             // Stage 4 diagnostics (opt-in). Starts baseline session if enabled in config.
             try { UnderNetBrowserDiagnostics.InitializeIfEnabled(); } catch (Exception ex) { MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] init failed (non-fatal): {ex.Message}"); }
-
-            // Stage A (architecture migration): WebView2 compatibility proof probe.
-            // Does not change playback behavior; logs detection/loader probe results for in-game validation.
-            UnderNetBrowserWebView2Probe.RunStageA();
         }
 
         private static void TryPatchTvAppCloseMethods()
