@@ -517,7 +517,7 @@ namespace Firesky.UnderNetBrowser
                 }
             }
             catch { }
-            return Path.Combine(MelonEnvironment.UserDataDirectory, "FireskyUnderNetBrowser", "Diagnostics");
+            return Path.Combine(MelonEnvironment.UserDataDirectory, "UnderNetBrowser", "Diagnostics");
         }
         private static string Csv(string s) { if (s == null) return ""; if (s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0) return "\"" + s.Replace("\"", "\"\"") + "\""; return s; }
         private static string F(float v) => v.ToString("0.###", CultureInfo.InvariantCulture);

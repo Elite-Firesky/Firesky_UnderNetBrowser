@@ -111,11 +111,11 @@ namespace Firesky.UnderNetBrowser
                 try
                 {
                     var ud = MelonLoader.Utils.MelonEnvironment.UserDataDirectory;
-                    userDataFolder = Path.Combine(string.IsNullOrWhiteSpace(ud) ? AppContext.BaseDirectory : ud, "FireskyUnderNetBrowser", "WebView2", "UserData");
+                    userDataFolder = Path.Combine(string.IsNullOrWhiteSpace(ud) ? AppContext.BaseDirectory : ud, "UnderNetBrowser", "WebView2", "UserData");
                 }
                 catch
                 {
-                    userDataFolder = Path.Combine(AppContext.BaseDirectory, "FireskyUnderNetBrowser_WebView2_UserData");
+                    userDataFolder = Path.Combine(AppContext.BaseDirectory, "UnderNetBrowser_WebView2_UserData");
                 }
                 Directory.CreateDirectory(userDataFolder);
 

@@ -876,10 +876,83 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
                             // Security hardening (Stage 2): centralized navigation policy (main + frame)
                             try {
-                                auto isAllowedUri = [impl](const std::wstring& uri) -> bool {
+                                auto toLowerW = [](std::wstring s) {
+                                    std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+                                    return s;
+                                };
+                                auto trimSlashW = [](std::wstring s) {
+                                    while (!s.empty() && (s.back() == L'\\' || s.back() == L'/')) s.pop_back();
+                                    return s;
+                                };
+                                auto isSafeAppId = [](const std::wstring& id) -> bool {
+                                    if (id.empty() || id.size() > 64) return false;
+                                    for (wchar_t c : id) {
+                                        bool ok = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-' || c == L'_';
+                                        if (!ok) return false;
+                                    }
+                                    return true;
+                                };
+                                auto pathToFileUri = [](std::wstring p) -> std::wstring {
+                                    for (auto& c : p) if (c == L'\\') c = L'/';
+                                    // Minimal percent-encoding for common path characters.
+                                    std::wstring out; out.reserve(p.size() + 16);
+                                    for (wchar_t c : p) {
+                                        if (c == L' ') out += L"%20";
+                                        else if (c == L'#') out += L"%23";
+                                        else if (c == L'%') out += L"%25";
+                                        else out += c;
+                                    }
+                                    return L"file:///" + out;
+                                };
+                                auto resolveUnderNetRouteToFileUri = [impl, toLowerW, trimSlashW, isSafeAppId, pathToFileUri](const std::wstring& uri) -> std::wstring {
                                     try {
-                                        std::wstring lower = uri;
-                                        std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t c){ return (wchar_t)towlower(c); });
+                                        if (uri.empty() || impl->userDataFolder.empty()) return L"";
+                                        std::wstring lower = toLowerW(uri);
+                                        bool isHome = (lower == L"undernet:home" || lower == L"about:home" || lower == L"home:home" || lower == L"home:homepage");
+                                        std::wstring appId;
+                                        if (!isHome) {
+                                            if (lower.rfind(L"home:", 0) == 0) appId = uri.substr(5);
+                                            else if (lower.rfind(L"undernet:app/", 0) == 0) appId = uri.substr(13);
+                                            else if (lower.rfind(L"undernet:", 0) == 0) {
+                                                std::wstring rest = uri.substr(9);
+                                                std::wstring restLower = toLowerW(rest);
+                                                if (restLower == L"home" || restLower == L"homepage") isHome = true;
+                                                else appId = rest;
+                                            } else {
+                                                return L"";
+                                            }
+                                        }
+                                        // impl->userDataFolder is ...\UserData\UnderNetBrowser\WebView2Composition (composition profile)
+                                        std::wstring udRoot = trimSlashW(impl->userDataFolder);
+                                        size_t sep = udRoot.find_last_of(L"\\/");
+                                        if (sep == std::wstring::npos) return L"";
+                                        udRoot = udRoot.substr(0, sep); // ...\UserData\UnderNetBrowser
+                                        if (isHome) {
+                                            std::wstring p = udRoot + L"\\root\\Homepage\\index.html";
+                                            if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+                                            return pathToFileUri(p);
+                                        }
+                                        // normalize app id
+                                        while (!appId.empty() && (appId.front() == L'/' || appId.front() == L'\\')) appId.erase(appId.begin());
+                                        while (!appId.empty() && (appId.back() == L'/' || appId.back() == L'\\')) appId.pop_back();
+                                        size_t q = appId.find_first_of(L"?#");
+                                        if (q != std::wstring::npos) appId = appId.substr(0, q);
+                                        if (!isSafeAppId(appId)) return L"";
+                                        std::wstring lowerId = toLowerW(appId);
+                                        if (lowerId == L"home" || lowerId == L"homepage") {
+                                            std::wstring p = udRoot + L"\\root\\Homepage\\index.html";
+                                            if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+                                            return pathToFileUri(p);
+                                        }
+                                        std::wstring p = udRoot + L"\\root\\Apps\\" + appId + L"\\index.html";
+                                        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+                                        return pathToFileUri(p);
+                                    } catch (...) {}
+                                    return L"";
+                                };
+                                auto isAllowedUri = [impl, toLowerW](const std::wstring& uri) -> bool {
+                                    try {
+                                        std::wstring lower = toLowerW(uri);
                                         if (lower.empty()) return false;
                                         if (lower.rfind(L"javascript:", 0) == 0 || lower.rfind(L"vbscript:", 0) == 0 ||
                                             lower.rfind(L"shell:", 0) == 0 || lower.rfind(L"ms-appx:", 0) == 0 ||
@@ -887,6 +960,8 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                             lower.rfind(L"ms-cxh:", 0) == 0) {
                                             return false;
                                         }
+                                        // Custom local app/home routes are resolved and redirected in NavigationStarting.
+                                        if (lower.rfind(L"home:", 0) == 0 || lower.rfind(L"undernet:", 0) == 0) return false;
                                         if (lower.rfind(L"file://", 0) == 0) {
                                             // Allow only verified internal UnderNetBrowser pages/routes under our UserData root.
                                             std::string luri = NarrowUtf8(uri);
@@ -899,7 +974,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                                 // file:/// URIs may use forward slashes; do a tolerant containment check.
                                                 if (!ud.empty() && ll.find(ud) != std::string::npos) return true;
                                             }
-                                            if (ll.find("fireskyundernetbrowser") != std::string::npos || ll.find("/home/home.html") != std::string::npos || ll.find("undernet") != std::string::npos) return true;
+                                            if (ll.find("undernetbrowser") != std::string::npos || ll.find("/home/home.html") != std::string::npos || ll.find("/root/homepage/index.html") != std::string::npos || ll.find("/root/apps/") != std::string::npos) return true;
                                             return false;
                                         }
                                         if (lower.rfind(L"https://", 0) == 0 || lower.rfind(L"http://", 0) == 0) return true;
@@ -911,7 +986,22 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     return false;
                                 };
                                 impl->core->add_NavigationStarting(
-                                    Callback<ICoreWebView2NavigationStartingEventHandler>([impl, isAllowedUri](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                    Callback<ICoreWebView2NavigationStartingEventHandler>([impl, isAllowedUri, resolveUnderNetRouteToFileUri](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                        try {
+                                            if (args) {
+                                                LPWSTR uriW = nullptr;
+                                                if (SUCCEEDED(args->get_Uri(&uriW)) && uriW) {
+                                                    std::wstring uri(uriW);
+                                                    CoTaskMemFree(uriW);
+                                                    std::wstring resolved = resolveUnderNetRouteToFileUri(uri);
+                                                    if (!resolved.empty() && impl->core) {
+                                                        args->put_Cancel(TRUE);
+                                                        try { impl->core->Navigate(resolved.c_str()); } catch (...) {}
+                                                        return S_OK;
+                                                    }
+                                                }
+                                            }
+                                        } catch (...) {}
                                         try {
                                             int64_t expected = -1;
                                             uint64_t s = impl->startTickMs.load(std::memory_order_relaxed);
@@ -1213,8 +1303,8 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                 std::vector<std::wstring> extRoots;
                                 if (!impl->userDataFolder.empty()) {
                                     std::wstring ud = trimSlash(impl->userDataFolder);
-                                    extRoots.push_back(ud + L"\\Extensions"); // e.g. ...\FireskyUnderNetBrowser\WebView2Composition\Extensions
-                                    // Also support parent-level Extensions for convenience: ...\FireskyUnderNetBrowser\Extensions
+                                    extRoots.push_back(ud + L"\\Extensions"); // e.g. ...\UnderNetBrowser\WebView2Composition\Extensions
+                                    // Also support parent-level Extensions for convenience: ...\UnderNetBrowser\Extensions
                                     size_t sep = ud.find_last_of(L"\\/");
                                     if (sep != std::wstring::npos) {
                                         extRoots.push_back(ud.substr(0, sep) + L"\\Extensions");

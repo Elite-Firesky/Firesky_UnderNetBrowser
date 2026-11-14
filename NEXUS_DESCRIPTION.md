@@ -71,7 +71,7 @@ Some features are experimental or best-effort (see Known Issues).
    - `Mods\UnderNetBrowser\Microsoft.Web.WebView2.Core.dll`
    - `Mods\UnderNetBrowser\WebView2Loader.dll`
    - `Schedule I_Data\Plugins\x86_64\UnderNetGpuRenderer.dll`
-   - `UserData\FireskyUnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` *(default extension, pre-seeded)*
+   - `UserData\UnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` *(default extension, pre-seeded)*
 6. Launch the game and open the **UnderNet** app from the in-game TV.
 
 ## Usage & Controls
@@ -94,7 +94,7 @@ Keybinds are stored as Unity `KeyCode` names in mod preferences and can be chang
 
 ## Configuration
 
-Configuration is stored in MelonPreferences under the `FireskyUnderNetBrowser` category (editable via MelonLoader prefs/Mod Manager, depending on your setup).
+Configuration is stored in MelonPreferences under the `FireskyUnderNetBrowser` category (displayed as "Firesky UnderNet Browser"; editable via MelonLoader prefs/Mod Manager, depending on your setup).
 
 Common options:
 - **Enabled**: Enable/disable the UnderNet app.
@@ -107,7 +107,7 @@ Common options:
 - **PerformanceDiagnosticsEnabled / DiagnosticsSampleIntervalSeconds / DiagnosticsOutputDirectory**: Optional low-overhead diagnostics.
 
 Runtime data (WebView2 profile/cache, home page, diagnostics output when enabled) is stored under:
-- `UserData\FireskyUnderNetBrowser\`
+- `UserData\UnderNetBrowser\`
 
 ## Known Issues & Limitations
 

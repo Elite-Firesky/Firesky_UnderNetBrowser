@@ -74,14 +74,14 @@ Deploy to a **local** Schedule I install (paths vary by user). Do not commit gam
 | `Microsoft.Web.WebView2.Core.dll`, `WebView2Loader.dll` (WebView2 dependencies) | `<Schedule I>\Mods\UnderNetBrowser\` (or alongside the mod DLL in `<Schedule I>\Mods\`; mod resolves both locations) |
 | `UnderNetIcon.png` (app icon) | embedded in `Firesky_UnderNetBrowser.dll` (no separate file required; loose-file fallback still supported) |
 | `UnderNetGpuRenderer.dll` (native) | `<Schedule I>\Schedule I_Data\Plugins\x86_64\` (Unity native plugin path; restart game after changes) |
-| Default browser extension (`uBlockOriginLite`) | pre-seed in `<Schedule I>\UserData\FireskyUnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` for clients, or keep a source copy (e.g. `BrowserExtensions\uBlockOriginLite` in repo) for auto-deploy; runtime uses the WebView2 composition profile under `UserData\FireskyUnderNetBrowser\WebView2Composition\` (do not duplicate into extra `UserData\...\Extensions` or game `Mods` folders at runtime) |
+| Default browser extension (`uBlockOriginLite`) | pre-seed in `<Schedule I>\UserData\UnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` for clients, or keep a source copy (e.g. `BrowserExtensions\uBlockOriginLite` in repo) for auto-deploy; runtime uses the WebView2 composition profile under `UserData\UnderNetBrowser\WebView2Composition\` (do not duplicate into extra `UserData\...\Extensions` or game `Mods` folders at runtime) |
 
 A local `for_client/`-style package folder may be used to stage these files for distribution/testing, but it is a deployment artifact and is excluded from version control. The staged client package should contain only files required by the client runtime (no redundant extension copies).
 
 ### Notes
 
 - **Restart the game** after updating native plugins/DLLs to ensure clean loads and correct Unity graphics device integration.
-- After changes, verify in-game behavior and check MelonLoader logs. Runtime diagnostics (if enabled) and WebView2 user/profile data are written under `UserData/FireskyUnderNetBrowser/` in the game directory (local, not committed).
+- After changes, verify in-game behavior and check MelonLoader logs. Runtime diagnostics (if enabled) and WebView2 user/profile data are written under `UserData/UnderNetBrowser/` in the game directory (local, not committed).
 - Ensure the Evergreen WebView2 Runtime is installed on the target machine.
 - Keep managed and native binaries in sync when interfaces/behavior change.
 

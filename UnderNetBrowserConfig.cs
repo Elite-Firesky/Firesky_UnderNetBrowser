@@ -60,8 +60,8 @@ namespace Firesky.UnderNetBrowser
 
         public static void Initialize()
         {
-            // Keep the original category identifier for compatibility with existing saved MelonPreferences.
-            _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser", "Firesky UnderNet Browser");
+            // Category identifier aligned with renamed UserData/preferences namespace.
+            _category = MelonPreferences.CreateCategory("UnderNetBrowser", "Firesky UnderNet Browser");
 
             // --- Basic ---
             Enabled = _category.CreateEntry(
@@ -72,7 +72,7 @@ namespace Firesky.UnderNetBrowser
             HomeUrl = _category.CreateEntry(
                 "HomeUrl", "undernet:home",
                 "Home URL",
-                "Default page loaded when UnderNet opens. Use undernet:home for the built-in homepage, or home:<app-id> for a local app in UserData/FireskyUnderNetBrowser/root/Apps/<app-id>/index.html.");
+                "Default page loaded when UnderNet opens. Use undernet:home for the built-in homepage, or home:<app-id> for a local app in UserData/UnderNetBrowser/root/Apps/<app-id>/index.html.");
 
             BasicAdBlockEnabled = _category.CreateEntry(
                 "BasicAdBlockEnabled", true,
@@ -150,7 +150,7 @@ namespace Firesky.UnderNetBrowser
             DiagnosticsOutputDirectory = _category.CreateEntry(
                 "DiagnosticsOutputDirectory", "",
                 "Advanced: Diagnostics Output Folder",
-                "Custom output folder for diagnostics files. Leave empty to use UserData/FireskyUnderNetBrowser/Diagnostics.");
+                "Custom output folder for diagnostics files. Leave empty to use UserData/UnderNetBrowser/Diagnostics.");
 
             // --- Advanced / WebView2 Browser Arguments (testing) ---
             WebView2ArgDisableBackgroundTimerThrottling = _category.CreateEntry(

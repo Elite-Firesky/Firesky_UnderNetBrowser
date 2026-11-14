@@ -49,7 +49,7 @@
 - **WebView2 audio-state diagnostics (read-only, `ICoreWebView2_8`):** `audio: known=1 playing=1 muted=0` confirmed during active playback (e.g. ~11:12:08–11:12:18). Earlier session (2026-11-12 11:04–11:05) also showed correct transitions `playing=0→1→0→1` with detach/background/reattach while `playing=1`.
   - **Interpretation:** WebView2 core correctly reports document-playing-audio state for correlation. **Not** evidence of capture feasibility, isolation, endpoint duplication, or mute-vs-capture behavior.
 
-- **Live WebView2 process tree captured while `audio: playing=1`** (2026-11-12 ~11:12, WMI/`Win32_Process`; `Schedule I.exe` PID **8776**, user-data-dir `...\UserData\FireskyUnderNetBrowser\WebView2Composition\EBWebView`, WebView2 **148.0.3967.70**):
+- **Live WebView2 process tree captured while `audio: playing=1`** (2026-11-12 ~11:12, WMI/`Win32_Process`; `Schedule I.exe` PID **8776**, user-data-dir `...\UserData\UnderNetBrowser\WebView2Composition\EBWebView`, WebView2 **148.0.3967.70**):
   | PID | PPID | Role / notes |
   |---:|---:|---|
   | 13636 | 3180 | **Browser/main** (`--embedded-browser-webview=1 --webview-exe-name="Schedule I.exe" --user-data-dir=...\WebView2Composition\EBWebView`) |

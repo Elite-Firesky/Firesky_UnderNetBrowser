@@ -781,10 +781,10 @@ namespace Firesky.UnderNetBrowser
             {
                 var ud = MelonLoader.Utils.MelonEnvironment.UserDataDirectory;
                 if (!string.IsNullOrWhiteSpace(ud))
-                    return Path.Combine(ud, "FireskyUnderNetBrowser");
+                    return Path.Combine(ud, "UnderNetBrowser");
             }
             catch { }
-            return Path.Combine(AppContext.BaseDirectory, "FireskyUnderNetBrowser");
+            return Path.Combine(AppContext.BaseDirectory, "UnderNetBrowser");
         }
 
         private static string GetWebContentRoot() => Path.Combine(GetUserDataRoot(), "root");
@@ -875,6 +875,19 @@ namespace Firesky.UnderNetBrowser
             {
                 if (!TryParseLocalAppRoute(routeInput, out var appId)) return null;
                 EnsureWebAppsFoundation();
+                // Safety net: ensure built-in example app exists when requested.
+                if (string.Equals(appId, "example", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var exampleDir = Path.Combine(GetAppsRootDir(), "example");
+                        Directory.CreateDirectory(exampleDir);
+                        var exampleIndex = Path.Combine(exampleDir, "index.html");
+                        if (!File.Exists(exampleIndex))
+                            File.WriteAllText(exampleIndex, BuildExampleAppHtml());
+                    }
+                    catch { }
+                }
                 var indexPath = TryGetAppIndexPath(appId);
                 if (string.IsNullOrWhiteSpace(indexPath)) return null;
                 return new Uri(indexPath).AbsoluteUri;
@@ -1161,21 +1174,24 @@ namespace Firesky.UnderNetBrowser
             <div class=""icon gg"">G</div>
             <div class=""meta""><p class=""name"">Google</p><p class=""desc"">Search the web from inside Schedule I.</p><p class=""url"">google.com</p></div>
           </a>
-          <a class=""card"" href=""home:example"">
-            <div class=""icon app"">A</div>
-            <div class=""meta""><p class=""name"">Example App</p><p class=""desc"">Built-in sample local UI page (plug-and-play template).</p><p class=""url"">home:example</p></div>
+          <a class=""card"" href=""https://nfsu2.xyz/"">
+            <div class=""icon app"">N</div>
+            <div class=""meta""><p class=""name"">NFS Underground 2</p><p class=""desc"">Play Need for Speed: Underground 2 in-browser.</p><p class=""url"">nfsu2.xyz</p></div>
           </a>
           <a class=""card"" href=""https://discord.com/app"">
             <div class=""icon dc"">D</div>
             <div class=""meta""><p class=""name"">Discord</p><p class=""desc"">Mirror Discord if running, or open Discord Web.</p><p class=""url"">discord.com/app</p></div>
           </a>
-        </div>
+          <a class=""card"" href=""home:example"">
+            <div class=""icon gg"">A</div>
+            <div class=""meta""><p class=""name"">Example App</p><p class=""desc"">Built-in sample local UI page (plug-and-play template).</p><p class=""url"">home:example</p></div>
+          </a>
       </section>
 
       <aside class=""side"">
         <div class=""info"">
           <h3>Local Apps (Simple)</h3>
-          <p>Drop a folder at <code>UserData/FireskyUnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code> and open it with <code>home:&lt;app-id&gt;</code>.</p>
+          <p>Drop a folder at <code>UserData/UnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code> and open it with <code>home:&lt;app-id&gt;</code>.</p>
         </div>
         <div class=""info"">
           <h3>Homepage</h3>
@@ -1225,7 +1241,7 @@ namespace Firesky.UnderNetBrowser
       <div class=""box"">
         <h2>How it works</h2>
         <ul>
-          <li>Folder: <code>UserData/FireskyUnderNetBrowser/root/Apps/example/</code></li>
+          <li>Folder: <code>UserData/UnderNetBrowser/root/Apps/example/</code></li>
           <li>Entry file: <code>index.html</code></li>
           <li>Open with: <code>home:example</code></li>
         </ul>

@@ -444,8 +444,8 @@ namespace Firesky.UnderNetBrowser
                 var type = __instance.GetType();
 
                 // Menu config UI and phone app UI use different content roots.
-                TryReorderModManagerCategoryEntries(__instance, type, "_menuConfigContent", "FireskyUnderNetBrowser");
-                TryReorderModManagerCategoryEntries(__instance, type, "rightPanelContent", "FireskyUnderNetBrowser");
+                TryReorderModManagerCategoryEntries(__instance, type, "_menuConfigContent", "UnderNetBrowser");
+                TryReorderModManagerCategoryEntries(__instance, type, "rightPanelContent", "UnderNetBrowser");
             }
             catch (Exception ex)
             {

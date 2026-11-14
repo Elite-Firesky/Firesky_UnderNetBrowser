@@ -46,7 +46,7 @@ See **[BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md)** for step-by-step instructions
 
 ## Configuration & data (runtime, not in repo)
 
-- Mod config and diagnostics (when enabled) are written under the game's MelonLoader `UserData` area (e.g. `UserData/FireskyUnderNetBrowser/`), including WebView2 user-data/profile folders and perf diagnostics. These are local/runtime artifacts and are excluded from source control.
+- Mod config and diagnostics (when enabled) are written under the game's MelonLoader `UserData` area (e.g. `UserData/UnderNetBrowser/`), including WebView2 user-data/profile folders and perf diagnostics. These are local/runtime artifacts and are excluded from source control.
 - Local game paths, deployment targets, and machine-specific secrets must not be committed.
 
 ## License / third-party notices

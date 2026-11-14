@@ -14,7 +14,7 @@ Think of it like an in-game "computer/browser" where apps/pages are just folders
 
 Content root:
 ```text
-Schedule I/UserData/FireskyUnderNetBrowser/root/
+Schedule I/UserData/UnderNetBrowser/root/
   Homepage/
     index.html              # Built-in/home page (customizable)
   Apps/
@@ -42,7 +42,7 @@ If an app route is requested but the app folder/index is missing, UnderNet falls
 ## How other mods can integrate (simple)
 
 ### Option A — Drop-in content (no UnderNet API required)
-1. Create/copy files to `UserData/FireskyUnderNetBrowser/root/Apps/<app-id>/index.html`
+1. Create/copy files to `UserData/UnderNetBrowser/root/Apps/<app-id>/index.html`
 2. Ask the user (or your mod/docs) to open `home:<app-id>` in UnderNet
 3. Your MelonLoader/S1API mod handles game logic; the HTML page is the UI/view
 
@@ -55,7 +55,7 @@ Current foundation already supports the routing/resolution side; launching is ju
 ## Homepage behavior
 
 - Default homepage is deployed to `root/Homepage/index.html` if missing.
-- Legacy `UserData/FireskyUnderNetBrowser/Home/home.html` is migrated/copied to `root/Homepage/index.html` once if the new homepage does not exist yet (to preserve user edits where possible).
+- Legacy `UserData/UnderNetBrowser/Home/home.html` is migrated/copied to `root/Homepage/index.html` once if the new homepage does not exist yet (to preserve user edits where possible).
 - You can customize `root/Homepage/index.html` to act as a launcher/desktop for your apps.
 
 ## Built-in example
@@ -75,7 +75,7 @@ Use it as a starting template for your own UI.
 
 ## Minimal example app
 
-`UserData/FireskyUnderNetBrowser/root/Apps/hello/index.html`
+`UserData/UnderNetBrowser/root/Apps/hello/index.html`
 ```html
 <!doctype html>
 <html>
