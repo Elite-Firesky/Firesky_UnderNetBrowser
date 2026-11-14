@@ -2210,27 +2210,6 @@ bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D*
             m_impl->diagAudioStateKnown.load(std::memory_order_relaxed),
             m_impl->diagDocumentPlayingAudio.load(std::memory_order_relaxed),
             m_impl->diagIsMuted.load(std::memory_order_relaxed));
-        std::string spatial;
-        {
-            std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-            spatial = m_impl->spatialDiag;
-        }
-        if (!spatial.empty()) {
-            // Append compact spatial PoC diagnostics (Gate A instrumentation). No behavior change.
-            char sfx[320];
-            sprintf_s(sfx, " | %s st=%d pid=%u pk=%llu fr=%llu by=%llu und=%llu err=%llu fmt=%u/%uch",
-                spatial.c_str(),
-                m_impl->spatialCaptureStatus.load(std::memory_order_relaxed),
-                (unsigned)m_impl->spatialTargetPid.load(std::memory_order_relaxed),
-                (unsigned long long)m_impl->spatialPackets.load(std::memory_order_relaxed),
-                (unsigned long long)m_impl->spatialFrames.load(std::memory_order_relaxed),
-                (unsigned long long)m_impl->spatialBytes.load(std::memory_order_relaxed),
-                (unsigned long long)m_impl->spatialUnderruns.load(std::memory_order_relaxed),
-                (unsigned long long)m_impl->spatialErrors.load(std::memory_order_relaxed),
-                (unsigned)m_impl->spatialSampleRate.load(std::memory_order_relaxed),
-                (unsigned)m_impl->spatialChannels.load(std::memory_order_relaxed));
-            strncat_s(info, sfx, _TRUNCATE);
-        }
         std::string full = info;
         if (m_impl) {
             char st[440];
