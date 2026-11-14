@@ -2245,9 +2245,9 @@ namespace Firesky.UnderNetBrowser
 
                 void SendVk(ulong vk, bool asChar = false, char ch = '\0')
                 {
-                    _gpuCompositionCapture.SendKey(WM_KD, vk, 0);
+                    _gpuCompositionCapture.SendKey(WM_KD, vk, MakeKeyLParam((int)vk, false));
                     if (asChar && ch != '\0') _gpuCompositionCapture.SendKey(WM_CH, ch, 0);
-                    _gpuCompositionCapture.SendKey(WM_KU, vk, 0);
+                    _gpuCompositionCapture.SendKey(WM_KU, vk, MakeKeyLParam((int)vk, true));
                     sentVks++;
                 }
 
@@ -2324,7 +2324,17 @@ namespace Firesky.UnderNetBrowser
                     Input.GetKey(KeyCode.LeftArrow), Input.GetKey(KeyCode.RightArrow),
                     Input.GetKey(KeyCode.UpArrow), Input.GetKey(KeyCode.DownArrow),
                     sendVkTaps: true, sendScriptFallbacks: true);
-                if (Input.GetKeyDown(KeyCode.Delete)) { SendVk(0x2E); MarkWebTextEntryActivity("deleteKey"); }
+                if (Input.GetKeyDown(KeyCode.Delete)) { SendVk(0x2E); MarkWebTextEntryActivity("deleteKey");
+                    try
+                    {
+                        _gpuCompositionCapture.ExecuteScript(
+                            "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Delete',code:'Delete',keyCode:46,which:46,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
+                            "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} " +
+                            "else if(e.isContentEditable){try{document.execCommand('deleteForward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
+                            "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
+                    }
+                    catch { }
+                }
                 if (Input.GetKeyDown(KeyCode.Space))
                 {
                     // Let DOM-aware script handle space to avoid double actions:
@@ -2429,7 +2439,6 @@ namespace Firesky.UnderNetBrowser
                     // Left/right: dispatch keys and keep direct seek fallback for reliable media control.
                     "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
                     "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
-                    // Up/down: dispatch keys for page/search suggestion/result navigation; avoid forcing volume changes that break UI navigation.
                     "up" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowUp',code:'ArrowUp',keyCode:38,which:38,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     "down" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowDown',code:'ArrowDown',keyCode:40,which:40,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     _ => ""
@@ -2470,8 +2479,8 @@ namespace Firesky.UnderNetBrowser
             {
                 if (_gpuCompositionCapture == null) return;
                 const uint WM_KD = 0x0100, WM_KU = 0x0101;
-                _gpuCompositionCapture.SendKey(WM_KD, vk, 0);
-                _gpuCompositionCapture.SendKey(WM_KU, vk, 0);
+                _gpuCompositionCapture.SendKey(WM_KD, vk, MakeKeyLParam((int)vk, false));
+                _gpuCompositionCapture.SendKey(WM_KU, vk, MakeKeyLParam((int)vk, true));
             }
             catch { }
         }
