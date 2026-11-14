@@ -153,6 +153,31 @@ struct CompositionBrowser::Impl {
     std::atomic<int64_t> tExtInstallPassDoneMs{-1};
     std::atomic<int64_t> tInitTotalMs{-1};
 
+    // Stage 3 Gate A PoC (experimental, dev-only): WASAPI process-loopback capture attempt/diagnostics.
+    // Controlled via SetSpatialAudioPoc(); must not affect render/input/lifecycle when disabled.
+    std::atomic<bool> spatialPocEnabled{false};
+    std::atomic<uint32_t> spatialTargetPid{0};
+    std::atomic<uint32_t> spatialBrowserPid{0};
+    std::atomic<int> spatialCaptureStatus{0}; // 0=idle/disabled,1=starting,2=capturing,<0 error
+    std::atomic<uint64_t> spatialPackets{0};
+    std::atomic<uint64_t> spatialFrames{0};
+    std::atomic<uint64_t> spatialBytes{0};
+    std::atomic<uint64_t> spatialUnderruns{0};
+    std::atomic<uint64_t> spatialErrors{0};
+    std::atomic<uint32_t> spatialSampleRate{0};
+    std::atomic<uint32_t> spatialChannels{0};
+    std::atomic<uint64_t> spatialReadyTicks{0};
+    std::atomic<bool> spatialMuteApplied{false};
+    std::mutex spatialDiagMutex;
+    std::string spatialDiag = "spatial: disabled";
+    // PCM ring buffer for Unity spatial playback (float32 interleaved). Preallocated on capture start.
+    std::mutex spatialPcmMutex;
+    std::vector<float> spatialPcmRing;
+    size_t spatialPcmWrite = 0;
+    size_t spatialPcmRead = 0;
+    size_t spatialPcmCount = 0; // frames queued (not samples) or samples? store as frames
+    uint32_t spatialPcmRate = 0;
+    uint32_t spatialPcmCh = 0;
     mutable std::mutex stateMutex;
     std::wstring currentUrl;
     std::atomic<bool> isFullscreen{false};
@@ -215,7 +240,452 @@ static LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l){ return Def
 void CompositionBrowser::SetDiag(const std::string& s){ std::lock_guard<std::mutex> lk(m_diagMutex); m_diag=s; }
 void CompositionBrowser::SetError(const std::string& s){ std::lock_guard<std::mutex> lk(m_diagMutex); m_diag=s; m_status.store(-1); }
 
+namespace {
+    // Minimal Gate A PoC: WASAPI process-loopback capture attempt for a target PID.
+    // Experimental/dev-only; best-effort diagnostics. Runs on a dedicated thread when enabled.
+    struct SpatialPocCaptureState {
+        std::atomic<bool> stop{false};
+        std::thread thread;
+    };
+    static std::mutex g_spatialPocGlobalMutex;
+    static SpatialPocCaptureState* g_spatialPoc = nullptr;
 
+    static void SetSpatialDiag(CompositionBrowser::Impl* impl, const char* msg) {
+        if (!impl) return;
+        std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+        impl->spatialDiag = msg ? msg : "";
+    }
+    static void SetSpatialDiagStr(CompositionBrowser::Impl* impl, const std::string& msg) {
+        if (!impl) return;
+        std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+        impl->spatialDiag = msg;
+    }
+
+    class ActivateAudioInterfaceCompletionHandler : public Microsoft::WRL::RuntimeClass<
+        Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, Microsoft::WRL::FtmBase, IActivateAudioInterfaceCompletionHandler> {
+    public:
+        HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
+            HRESULT hrActivate = E_UNEXPECTED;
+            IUnknown* punk = nullptr;
+            HRESULT hrGet = operation ? operation->GetActivateResult(&hrActivate, &punk) : E_INVALIDARG;
+            m_hrGetResult = hrGet;
+            m_hrActivate = hrActivate;
+            m_hr = SUCCEEDED(hrGet) ? hrActivate : hrGet; // legacy combined (prefer separate fields)
+            if (punk) { m_unk = punk; punk->Release(); }
+            if (m_event) SetEvent(m_event);
+            return S_OK;
+        }
+        HANDLE m_event = nullptr;
+        HRESULT m_hr = E_FAIL;           // combined (legacy)
+        HRESULT m_hrGetResult = E_FAIL;  // HRESULT from GetActivateResult call
+        HRESULT m_hrActivate = E_FAIL;   // activation HRESULT from GetActivateResult out param
+        Microsoft::WRL::ComPtr<IUnknown> m_unk;
+    };
+
+    static void SpatialPocCaptureThread(CompositionBrowser::Impl* impl, uint32_t targetPid) {
+        if (!impl) return;
+        impl->spatialPackets.store(0, std::memory_order_relaxed);
+        impl->spatialFrames.store(0, std::memory_order_relaxed);
+        impl->spatialBytes.store(0, std::memory_order_relaxed);
+        impl->spatialUnderruns.store(0, std::memory_order_relaxed);
+        impl->spatialErrors.store(0, std::memory_order_relaxed);
+        impl->spatialSampleRate.store(0, std::memory_order_relaxed);
+        impl->spatialChannels.store(0, std::memory_order_relaxed);
+
+        auto fail = [&](const std::string& msg) {
+            impl->spatialCaptureStatus.store(-1, std::memory_order_relaxed);
+            impl->spatialErrors.fetch_add(1, std::memory_order_relaxed);
+            SetSpatialDiagStr(impl, "spatial: " + msg);
+        };
+
+        // Resolve target PID: explicit targetPid wins; otherwise wait for browser PID resolved by browser init thread.
+        if (targetPid == 0) {
+            SetSpatialDiag(impl, "spatial: resolving browser pid");
+            for (int i = 0; i < 200 && targetPid == 0; ++i) { // ~20s max wait
+                if (impl->stop.load(std::memory_order_relaxed) || !impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                    SetSpatialDiag(impl, "spatial: resolve cancelled");
+                    impl->spatialCaptureStatus.store(0, std::memory_order_relaxed);
+                    return;
+                }
+                uint32_t bpid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+                if (bpid != 0) {
+                    targetPid = bpid;
+                    impl->spatialTargetPid.store(targetPid, std::memory_order_relaxed);
+                    break;
+                }
+                Sleep(100);
+            }
+        }
+
+        if (targetPid == 0) { fail("no target pid (browser pid unresolved)"); return; }
+
+        HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        bool comInit = SUCCEEDED(hrCo) || hrCo == RPC_E_CHANGED_MODE;
+        if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE) { fail("CoInitializeEx failed"); return; }
+
+        impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+
+        auto getDescendants = [](uint32_t rootPid) -> std::vector<uint32_t> {
+            std::vector<uint32_t> all;
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snap == INVALID_HANDLE_VALUE) return all;
+            struct Node { uint32_t pid; uint32_t ppid; };
+            std::vector<Node> procs;
+            PROCESSENTRY32W pe{}; pe.dwSize = sizeof(pe);
+            if (Process32FirstW(snap, &pe)) {
+                do { procs.push_back({ pe.th32ProcessID, pe.th32ParentProcessID }); } while (Process32NextW(snap, &pe));
+            }
+            CloseHandle(snap);
+            std::vector<uint32_t> q; q.push_back(rootPid);
+            for (size_t i = 0; i < q.size(); ++i) {
+                uint32_t cur = q[i];
+                for (auto& n : procs) {
+                    if (n.ppid == cur && n.pid != 0) {
+                        // avoid cycles/dupes
+                        bool seen = (n.pid == rootPid);
+                        for (auto v : all) if (v == n.pid) { seen = true; break; }
+                        if (!seen) { all.push_back(n.pid); q.push_back(n.pid); }
+                    }
+                }
+            }
+            return all;
+        };
+
+        std::vector<uint32_t> candidates;
+        candidates.push_back(targetPid);
+        {
+            auto desc = getDescendants(targetPid);
+            // Try browser pid first (tree), then individual descendants (often audio is in a utility/renderer process).
+            for (auto d : desc) {
+                bool dup = false; for (auto c : candidates) if (c == d) { dup = true; break; }
+                if (!dup) candidates.push_back(d);
+            }
+        }
+        // Cap attempts to avoid long stalls.
+        if (candidates.size() > 24) candidates.resize(24);
+
+        Microsoft::WRL::ComPtr<IAudioClient> audioClient;
+        uint32_t activatedPid = 0;
+        HRESULT lastHr = E_FAIL;
+        std::string lastErr;
+
+        auto tryActivatePid = [&](uint32_t pid, PROCESS_LOOPBACK_MODE mode, const char* modeTag) -> bool {
+            AUDIOCLIENT_ACTIVATION_PARAMS* actParams = (AUDIOCLIENT_ACTIVATION_PARAMS*)CoTaskMemAlloc(sizeof(AUDIOCLIENT_ACTIVATION_PARAMS));
+            if (!actParams) { lastErr = "CoTaskMemAlloc"; return false; }
+            memset(actParams, 0, sizeof(AUDIOCLIENT_ACTIVATION_PARAMS));
+            actParams->ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+            actParams->ProcessLoopbackParams.TargetProcessId = pid;
+            actParams->ProcessLoopbackParams.ProcessLoopbackMode = mode;
+
+            PROPVARIANT pv{}; PropVariantInit(&pv);
+            pv.vt = VT_BLOB; pv.blob.cbSize = sizeof(AUDIOCLIENT_ACTIVATION_PARAMS); pv.blob.pBlobData = reinterpret_cast<BYTE*>(actParams);
+
+            auto handler = Microsoft::WRL::Make<ActivateAudioInterfaceCompletionHandler>();
+            if (!handler) {
+                CoTaskMemFree(actParams); lastErr = "handler alloc"; return false;
+            }
+            handler->m_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (!handler->m_event) { CoTaskMemFree(actParams); lastErr = "CreateEvent"; return false; }
+
+            Microsoft::WRL::ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+            HRESULT hrA = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &pv, handler.Get(), &asyncOp);
+            if (FAILED(hrA)) {
+                lastHr = hrA;
+                char buf[220]; sprintf_s(buf, "ActivateAudioInterfaceAsync hr=0x%08X pid=%u %s", (unsigned)hrA, (unsigned)pid, modeTag);
+                lastErr = buf;
+                CoTaskMemFree(actParams);
+                CloseHandle(handler->m_event);
+                return false;
+            }
+
+            DWORD waited = 0;
+            while (waited < 8000) {
+                if (impl->stop.load(std::memory_order_relaxed) || !impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                    CoTaskMemFree(actParams); CloseHandle(handler->m_event);
+                    lastErr = "cancelled"; return false;
+                }
+                DWORD wr = WaitForSingleObject(handler->m_event, 100);
+                if (wr == WAIT_OBJECT_0) break;
+                waited += 100;
+            }
+            if (WaitForSingleObject(handler->m_event, 0) != WAIT_OBJECT_0) {
+                CoTaskMemFree(actParams); CloseHandle(handler->m_event);
+                lastHr = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+                char buf[160]; sprintf_s(buf, "activation timeout pid=%u %s", (unsigned)pid, modeTag);
+                lastErr = buf; return false;
+            }
+            CloseHandle(handler->m_event);
+            CoTaskMemFree(actParams);
+
+            if (FAILED(handler->m_hrGetResult) || FAILED(handler->m_hrActivate) || !handler->m_unk) {
+                lastHr = FAILED(handler->m_hrGetResult) ? handler->m_hrGetResult : handler->m_hrActivate;
+                char buf[280]; sprintf_s(buf, "activation complete: GetActivateResult=0x%08X activate=0x%08X pid=%u %s",
+                    (unsigned)handler->m_hrGetResult, (unsigned)handler->m_hrActivate, (unsigned)pid, modeTag);
+                lastErr = buf; return false;
+            }
+            Microsoft::WRL::ComPtr<IAudioClient> ac;
+            HRESULT hrQ = handler->m_unk.As(&ac);
+            if (FAILED(hrQ) || !ac) {
+                lastHr = hrQ; char buf[160]; sprintf_s(buf, "QI IAudioClient failed pid=%u", (unsigned)pid); lastErr = buf; return false;
+            }
+            audioClient = ac; activatedPid = pid; return true;
+        };
+
+        for (size_t i = 0; i < candidates.size() && !audioClient; ++i) {
+            uint32_t pid = candidates[i];
+            // First candidate (browser/root) try include-tree; descendants try include-tree then target-only.
+            PROCESS_LOOPBACK_MODE modes[2] = { PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE };
+            const char* tags[2] = { "tree", "exclude" };
+            int modeCount = (i == 0) ? 1 : 2;
+            // For descendants, prefer include-tree as well? "exclude target but include children" not useful for leaf; try include-tree only.
+            if (i != 0) { modes[0] = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE; tags[0] = "tree"; modeCount = 1; }
+            for (int m = 0; m < modeCount && !audioClient; ++m) {
+                if (impl->stop.load(std::memory_order_relaxed) || !impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                    SetSpatialDiag(impl, "spatial: activation cancelled");
+                    impl->spatialCaptureStatus.store(0, std::memory_order_relaxed);
+                    CoUninitialize(); return;
+                }
+                {
+                    char buf[220]; sprintf_s(buf, "spatial: activating pid=%u (%u/%u) %s", (unsigned)pid, (unsigned)(i + 1), (unsigned)candidates.size(), tags[m]);
+                    SetSpatialDiag(impl, buf);
+                }
+                if (tryActivatePid(pid, modes[m], tags[m])) break;
+            }
+        }
+
+        if (!audioClient) {
+            char buf[260];
+            sprintf_s(buf, "%s (tried %u pids, root=%u)", lastErr.empty() ? "activation failed" : lastErr.c_str(), (unsigned)candidates.size(), (unsigned)targetPid);
+            fail(buf);
+            CoUninitialize();
+            return;
+        }
+
+        HRESULT hr = S_OK;
+        targetPid = activatedPid; // for diag below
+        impl->spatialTargetPid.store(activatedPid, std::memory_order_relaxed);
+
+        WAVEFORMATEX* mixFmt = nullptr;
+        hr = audioClient->GetMixFormat(&mixFmt);
+        if (FAILED(hr) || !mixFmt) {
+            char buf[160]; sprintf_s(buf, "GetMixFormat hr=0x%08X", (unsigned)hr);
+            fail(buf);
+            CoUninitialize();
+            return;
+        }
+
+        // Initialize loopback capture (polling, no event callback handle required).
+        REFERENCE_TIME hnsBuffer = 200000; // 20ms
+        hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            hnsBuffer, 0, mixFmt, nullptr);
+        if (FAILED(hr)) {
+            hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, hnsBuffer, 0, mixFmt, nullptr);
+        }
+        if (FAILED(hr)) {
+            char buf[160]; sprintf_s(buf, "IAudioClient::Initialize hr=0x%08X", (unsigned)hr);
+            fail(buf);
+            CoTaskMemFree(mixFmt);
+            CoUninitialize();
+            return;
+        }
+
+        UINT32 bufferFrames = 0;
+        audioClient->GetBufferSize(&bufferFrames);
+        Microsoft::WRL::ComPtr<IAudioCaptureClient> captureClient;
+        hr = audioClient->GetService(__uuidof(IAudioCaptureClient), &captureClient);
+        if (FAILED(hr) || !captureClient) {
+            char buf[160]; sprintf_s(buf, "GetService(IAudioCaptureClient) hr=0x%08X", (unsigned)hr);
+            fail(buf);
+            CoTaskMemFree(mixFmt);
+            CoUninitialize();
+            return;
+        }
+
+        hr = audioClient->Start();
+        if (FAILED(hr)) {
+            char buf[160]; sprintf_s(buf, "IAudioClient::Start hr=0x%08X", (unsigned)hr);
+            fail(buf);
+            CoTaskMemFree(mixFmt);
+            CoUninitialize();
+            return;
+        }
+
+        // Determine format for Unity output (float32 interleaved)
+        bool isFloat = false, isPcmInt = false, isExt = false;
+        WORD bits = mixFmt->wBitsPerSample;
+        WORD tag = mixFmt->wFormatTag;
+        WORD ch = mixFmt->nChannels ? mixFmt->nChannels : 2;
+        DWORD sr = mixFmt->nSamplesPerSec ? mixFmt->nSamplesPerSec : 48000;
+        WAVEFORMATEXTENSIBLE* ext = (WAVEFORMATEXTENSIBLE*)mixFmt;
+        if (tag == WAVE_FORMAT_IEEE_FLOAT && bits == 32) isFloat = true;
+        else if (tag == WAVE_FORMAT_PCM && (bits == 16 || bits == 32)) isPcmInt = true;
+        else if (tag == WAVE_FORMAT_EXTENSIBLE && mixFmt->cbSize >= (sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))) {
+            isExt = true;
+            if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) && bits == 32) isFloat = true;
+            else if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) && (bits == 16 || bits == 32)) isPcmInt = true;
+        }
+        if (!isFloat && !isPcmInt) { isFloat = true; bits = 32; } // best-effort assumption with AUTOCONVERTPCM
+
+        {
+            std::lock_guard<std::mutex> lk(impl->spatialPcmMutex);
+            impl->spatialPcmRate = sr;
+            impl->spatialPcmCh = ch;
+            size_t capFrames = (size_t)sr * 2; // ~2s ring
+            if (capFrames < 4096) capFrames = 4096;
+            impl->spatialPcmRing.assign(capFrames * (size_t)ch, 0.0f);
+            impl->spatialPcmWrite = 0; impl->spatialPcmRead = 0; impl->spatialPcmCount = 0;
+        }
+        impl->spatialSampleRate.store(sr, std::memory_order_relaxed);
+        impl->spatialChannels.store(ch, std::memory_order_relaxed);
+        impl->spatialCaptureStatus.store(2, std::memory_order_relaxed);
+        {
+            char buf[240];
+            sprintf_s(buf, "spatial: capturing pid=%u %uHz %uch %ubit tag=%u%s", (unsigned)targetPid, (unsigned)sr, (unsigned)ch, (unsigned)bits, (unsigned)tag, isExt ? " ext" : "");
+            SetSpatialDiag(impl, buf);
+        }
+
+        while (!impl->stop.load(std::memory_order_relaxed) && impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+            UINT32 packetFrames = 0;
+            hr = captureClient->GetNextPacketSize(&packetFrames);
+            if (FAILED(hr)) { impl->spatialErrors.fetch_add(1, std::memory_order_relaxed); Sleep(5); continue; }
+            if (packetFrames == 0) { impl->spatialUnderruns.fetch_add(1, std::memory_order_relaxed); Sleep(2); continue; }
+
+            while (packetFrames != 0) {
+                BYTE* data = nullptr;
+                UINT32 framesAvailable = 0;
+                DWORD flags = 0;
+                hr = captureClient->GetBuffer(&data, &framesAvailable, &flags, nullptr, nullptr);
+                if (FAILED(hr)) { impl->spatialErrors.fetch_add(1, std::memory_order_relaxed); break; }
+                if (framesAvailable > 0) {
+                    impl->spatialPackets.fetch_add(1, std::memory_order_relaxed);
+                    impl->spatialFrames.fetch_add((uint64_t)framesAvailable, std::memory_order_relaxed);
+                    impl->spatialBytes.fetch_add((uint64_t)framesAvailable * (uint64_t)mixFmt->nBlockAlign, std::memory_order_relaxed);
+
+                    if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && data) {
+                        std::lock_guard<std::mutex> lk(impl->spatialPcmMutex);
+                        auto& ring = impl->spatialPcmRing;
+                        if (!ring.empty() && impl->spatialPcmCh > 0) {
+                            size_t capFramesRing = ring.size() / (size_t)impl->spatialPcmCh;
+                            for (UINT32 f = 0; f < framesAvailable; ++f) {
+                                // Overwrite-oldest ring: if full, drop oldest frame
+                                if (impl->spatialPcmCount >= capFramesRing) {
+                                    impl->spatialPcmRead = (impl->spatialPcmRead + 1) % capFramesRing;
+                                    impl->spatialPcmCount--;
+                                }
+                                size_t wFrame = impl->spatialPcmWrite;
+                                for (UINT32 c = 0; c < impl->spatialPcmCh; ++c) {
+                                    float sample = 0.0f;
+                                    size_t si = (size_t)f * (size_t)ch + (size_t)(c < ch ? c : (ch - 1));
+                                    if (isFloat && bits == 32) {
+                                        const float* src = reinterpret_cast<const float*>(data);
+                                        sample = src[si];
+                                    } else if (isPcmInt && bits == 16) {
+                                        const int16_t* src = reinterpret_cast<const int16_t*>(data);
+                                        sample = (float)src[si] / 32768.0f;
+                                    } else if (isPcmInt && bits == 32) {
+                                        const int32_t* src = reinterpret_cast<const int32_t*>(data);
+                                        sample = (float)((double)src[si] / 2147483648.0);
+                                    } else {
+                                        // fallback treat as float32
+                                        const float* src = reinterpret_cast<const float*>(data);
+                                        sample = src[si];
+                                    }
+                                    if (sample > 1.0f) sample = 1.0f; else if (sample < -1.0f) sample = -1.0f;
+                                    ring[wFrame * (size_t)impl->spatialPcmCh + c] = sample;
+                                }
+                                impl->spatialPcmWrite = (wFrame + 1) % capFramesRing;
+                                impl->spatialPcmCount++;
+                            }
+                        }
+                    } else if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+                        // write silence frames to keep timing reasonable
+                        std::lock_guard<std::mutex> lk(impl->spatialPcmMutex);
+                        auto& ring = impl->spatialPcmRing;
+                        if (!ring.empty() && impl->spatialPcmCh > 0) {
+                            size_t capFramesRing = ring.size() / (size_t)impl->spatialPcmCh;
+                            for (UINT32 f = 0; f < framesAvailable; ++f) {
+                                if (impl->spatialPcmCount >= capFramesRing) {
+                                    impl->spatialPcmRead = (impl->spatialPcmRead + 1) % capFramesRing;
+                                    impl->spatialPcmCount--;
+                                }
+                                size_t wFrame = impl->spatialPcmWrite;
+                                for (UINT32 c = 0; c < impl->spatialPcmCh; ++c) ring[wFrame * (size_t)impl->spatialPcmCh + c] = 0.0f;
+                                impl->spatialPcmWrite = (wFrame + 1) % capFramesRing;
+                                impl->spatialPcmCount++;
+                            }
+                        }
+                    }
+                } else if (framesAvailable == 0) {
+                    impl->spatialUnderruns.fetch_add(1, std::memory_order_relaxed);
+                }
+                captureClient->ReleaseBuffer(framesAvailable);
+                hr = captureClient->GetNextPacketSize(&packetFrames);
+                if (FAILED(hr)) { impl->spatialErrors.fetch_add(1, std::memory_order_relaxed); packetFrames = 0; }
+            }
+        }
+
+        audioClient->Stop();
+        CoTaskMemFree(mixFmt);
+        impl->spatialCaptureStatus.store(impl->spatialPocEnabled.load(std::memory_order_relaxed) ? 1 : 0, std::memory_order_relaxed);
+        SetSpatialDiag(impl, "spatial: capture stopped");
+        CoUninitialize();
+    }
+
+    static void StartOrUpdateSpatialPocCapture(CompositionBrowser::Impl* impl) {
+        if (!impl) return;
+        bool enabled = impl->spatialPocEnabled.load(std::memory_order_relaxed);
+        uint32_t pid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+        if (pid == 0) pid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+        std::lock_guard<std::mutex> g(g_spatialPocGlobalMutex);
+        if (!enabled || impl->stop.load(std::memory_order_relaxed)) {
+            if (g_spatialPoc) {
+                g_spatialPoc->stop.store(true, std::memory_order_relaxed);
+            }
+            return;
+        }
+        if (pid == 0) return; // wait for resolved browser PID
+        int st = impl->spatialCaptureStatus.load(std::memory_order_relaxed);
+        // If a capture thread is actively running (not stopped), leave it alone unless it failed.
+        if (g_spatialPoc && g_spatialPoc->thread.joinable() && !g_spatialPoc->stop.load(std::memory_order_relaxed)) {
+            if (st >= 0) return;
+        }
+        if (g_spatialPoc) {
+            try { g_spatialPoc->stop.store(true, std::memory_order_relaxed); if (g_spatialPoc->thread.joinable()) g_spatialPoc->thread.join(); } catch (...) {}
+            delete g_spatialPoc; g_spatialPoc = nullptr;
+        }
+        impl->spatialTargetPid.store(pid, std::memory_order_relaxed);
+        if (st >= 0) impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+        g_spatialPoc = new SpatialPocCaptureState();
+        g_spatialPoc->thread = std::thread([impl, pid]() {
+            try {
+                SpatialPocCaptureThread(impl, pid);
+            } catch (...) {
+                if (impl) {
+                    impl->spatialCaptureStatus.store(-1, std::memory_order_relaxed);
+                    impl->spatialErrors.fetch_add(1, std::memory_order_relaxed);
+                    std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+                    if (impl->spatialDiag.rfind("spatial:", 0) != 0 || impl->spatialDiag.find("failed") == std::string::npos)
+                        impl->spatialDiag = "spatial: capture thread exception";
+                }
+            }
+            // If thread exits without setting terminal/success state, mark as failed so retry can proceed.
+            if (impl) {
+                int st = impl->spatialCaptureStatus.load(std::memory_order_relaxed);
+                if (st == 1) {
+                    impl->spatialCaptureStatus.store(-1, std::memory_order_relaxed);
+                    impl->spatialErrors.fetch_add(1, std::memory_order_relaxed);
+                    std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+                    if (impl->spatialDiag == "spatial: enabled (pid=" + std::to_string(pid) + ", capture pending)" ||
+                        impl->spatialDiag == "spatial: enabled (waiting for browser pid, capture pending)" ||
+                        impl->spatialDiag.find("retrying") != std::string::npos || impl->spatialDiag.empty()) {
+                        impl->spatialDiag = "spatial: capture ended without activation (check logs/runtime support)";
+                    }
+                }
+            }
+        });
+    }
+}
 
 static std::vector<uint32_t> CollectProcessTreePids(uint32_t rootPid);
 static void ApplyDistanceAudioVolumeToProcessTree(CompositionBrowser::Impl* impl, bool enabled, float volume01);
@@ -340,6 +810,28 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
                         if(FAILED(hr)||!cc){ impl->startError="CreateCompositionController failed"; m_running.store(false); m_status.store(-1); SetDiag("Start failed: compCtrl | " + tt); SetEvent(impl->readyEvent); return hr; }
                         impl->compController=cc; cc->QueryInterface(IID_PPV_ARGS(&impl->controller)); if(impl->controller) impl->controller->get_CoreWebView2(&impl->core);
+                        // Resolve browser PID once core is ready (used for spatial PoC and as last-resort shutdown cleanup).
+                        try {
+                            if (impl->core) {
+                                UINT32 bpid = 0;
+                                if (SUCCEEDED(impl->core->get_BrowserProcessId(&bpid)) && bpid != 0) {
+                                    impl->spatialBrowserPid.store((uint32_t)bpid, std::memory_order_relaxed);
+                                    if (impl->spatialTargetPid.load(std::memory_order_relaxed) == 0) {
+                                        impl->spatialTargetPid.store((uint32_t)bpid, std::memory_order_relaxed);
+                                    }
+                                }
+                                // Spatial PoC activation state/diag (capture worker auto-start deferred).
+                                if (impl->spatialPocEnabled.load(std::memory_order_relaxed)) {
+                                    std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+                                    uint32_t pid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+                                    char buf[128];
+                                    if (pid != 0) sprintf_s(buf, "spatial: enabled (pid=%u, capture deferred)", (unsigned)pid);
+                                    else sprintf_s(buf, "spatial: enabled (browser pid unresolved, capture deferred)");
+                                    impl->spatialDiag = buf;
+                                    impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+                                }
+                            }
+                        } catch (...) {}
                         if (impl->core) {
                             ComPtr<ICoreWebView2Settings> settings;
                             if (SUCCEEDED(impl->core->get_Settings(&settings)) && settings) {
@@ -1120,6 +1612,75 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                     } catch (...) {}
                 }
             }
+            if(impl->compController){
+                // Stage 3 PoC: delayed capture start after stable init/frames; best-effort mute to avoid double audio when capturing.
+                try {
+                    if (impl->spatialPocEnabled.load(std::memory_order_relaxed) && !impl->stop.load(std::memory_order_relaxed)) {
+                        uint32_t bpid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+                        if (bpid != 0 && impl->spatialTargetPid.load(std::memory_order_relaxed) == 0)
+                            impl->spatialTargetPid.store(bpid, std::memory_order_relaxed);
+                        bool hasFrame = false;
+                        { std::lock_guard<std::mutex> lk(impl->frameMutex); hasFrame = (impl->copied > 0 || impl->seq > 0); }
+                        if (hasFrame || impl->ready.load(std::memory_order_relaxed)) impl->spatialReadyTicks.fetch_add(1, std::memory_order_relaxed);
+                        int st = impl->spatialCaptureStatus.load(std::memory_order_relaxed);
+                        uint64_t ticks = impl->spatialReadyTicks.load(std::memory_order_relaxed);
+                        static std::atomic<uint64_t> s_lastSpatialRetryTick{0};
+                        static std::atomic<uint64_t> s_lastSpatialStartTick{0};
+                        // Start once after ~1.5-2s of readiness; retry periodically on failure.
+                        if (ticks > 1500 && st != 2) {
+                            bool shouldStart = false;
+                            if (st == 0) {
+                                shouldStart = true;
+                            } else if (st == 1) {
+                                // Avoid spamming start calls while capture thread is starting/attempting.
+                                uint64_t lastS = s_lastSpatialStartTick.load(std::memory_order_relaxed);
+                                if (lastS == 0 || (ticks - lastS > 20000)) { // watchdog restart if stuck >20s
+                                    shouldStart = true;
+                                }
+                            } else if (st < 0) {
+                                uint64_t last = s_lastSpatialRetryTick.load(std::memory_order_relaxed);
+                                // ~10s retry interval (loop sleeps ~1ms)
+                                if (last == 0 || (ticks - last > 10000)) {
+                                    shouldStart = true;
+                                    s_lastSpatialRetryTick.store(ticks, std::memory_order_relaxed);
+                                }
+                            }
+                            if (shouldStart) {
+                                if (st < 0) {
+                                    // Preserve last failure diag for visibility; append retry note.
+                                    std::string prev;
+                                    {
+                                        std::lock_guard<std::mutex> lk(impl->spatialDiagMutex);
+                                        prev = impl->spatialDiag;
+                                        if (prev.size() > 120) prev.resize(120);
+                                        impl->spatialDiag = "spatial: retrying (prev: " + prev + ")";
+                                    }
+                                    impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
+                                    // keep error counters cumulative for diagnosis
+                                }
+                                s_lastSpatialStartTick.store(ticks, std::memory_order_relaxed);
+                                StartOrUpdateSpatialPocCapture(impl);
+                            }
+                        }
+                        // If capture becomes active, mute WebView2 core output to prevent duplicate endpoint audio (PoC behavior).
+                        if (impl->spatialCaptureStatus.load(std::memory_order_relaxed) == 2 && impl->core) {
+                            try {
+                                ComPtr<ICoreWebView2_8> core8;
+                                if (SUCCEEDED(impl->core->QueryInterface(IID_PPV_ARGS(&core8))) && core8) {
+                                    BOOL muted = FALSE;
+                                    if (SUCCEEDED(core8->get_IsMuted(&muted)) && !muted) core8->put_IsMuted(TRUE);
+                                    impl->spatialMuteApplied.store(true, std::memory_order_relaxed);
+                                }
+                            } catch (...) {}
+                        }
+                    } else if (!impl->spatialPocEnabled.load(std::memory_order_relaxed) && impl->spatialMuteApplied.load(std::memory_order_relaxed) && impl->core) {
+                        try {
+                            ComPtr<ICoreWebView2_8> core8;
+                            if (SUCCEEDED(impl->core->QueryInterface(IID_PPV_ARGS(&core8))) && core8) core8->put_IsMuted(FALSE);
+                        } catch (...) {}
+                        impl->spatialMuteApplied.store(false, std::memory_order_relaxed);
+                    }
+                } catch (...) {}
 
                 // Focus: request WebView controller focus and best-effort focus the host HWND on its own thread.
                 // IMPORTANT: do not spam MoveFocus on every key batch/keystroke; repeated programmatic focus moves can
@@ -1228,6 +1789,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                             } catch (...) {}
                         }
                     }
+                }
             } else {
                 std::lock_guard<std::mutex> lk(impl->inputMutex);
                 impl->mouseQueue.clear();
@@ -1349,13 +1911,8 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         // Last resort: if WebView2 browser process for this session is still alive, terminate its process tree.
         // This prevents orphaned msedgewebview2.exe processes in cases where graceful shutdown doesn't complete.
         try {
-            uint32_t browserPid = 0;
-            try {
-                if (impl->core) {
-                    UINT32 bpid = 0;
-                    if (SUCCEEDED(impl->core->get_BrowserProcessId(&bpid)) && bpid != 0) browserPid = (uint32_t)bpid;
-                }
-            } catch (...) {}
+            uint32_t browserPid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+            if (browserPid == 0) browserPid = impl->spatialTargetPid.load(std::memory_order_relaxed);
             if (browserPid != 0) {
                 auto processExists = [](DWORD pid) -> bool {
                     if (pid == 0) return false;
@@ -1458,6 +2015,20 @@ void CompositionBrowser::Shutdown(){
     Impl* impl = m_impl;
     if(!impl) { m_running.store(false); m_status.store(0); return; }
 
+    // Stop Stage 3 spatial PoC capture (if running) before tearing down browser/impl.
+    try {
+        std::thread toJoin;
+        {
+            std::lock_guard<std::mutex> g(g_spatialPocGlobalMutex);
+            if (g_spatialPoc) {
+                g_spatialPoc->stop.store(true, std::memory_order_relaxed);
+                if (g_spatialPoc->thread.joinable()) toJoin = std::move(g_spatialPoc->thread);
+                delete g_spatialPoc;
+                g_spatialPoc = nullptr;
+            }
+        }
+        if (toJoin.joinable()) { try { toJoin.join(); } catch (...) {} }
+    } catch (...) {}
 
     // Detach early so re-entrant/concurrent callers see stopped state and we avoid double teardown.
     m_impl = nullptr;
@@ -1838,13 +2409,11 @@ static void ApplyDistanceAudioVolumeToProcessTree(CompositionBrowser::Impl* impl
     if (volume01 < 0.0f) volume01 = 0.0f;
     if (volume01 > 1.0f) volume01 = 1.0f;
 
-    uint32_t browserPid = 0;
-    try {
-        if (impl->core) {
-            UINT32 bpid = 0;
-            if (SUCCEEDED(impl->core->get_BrowserProcessId(&bpid)) && bpid != 0) browserPid = (uint32_t)bpid;
-        }
-    } catch (...) {}
+    uint32_t browserPid = impl->spatialBrowserPid.load(std::memory_order_relaxed);
+    if (browserPid == 0) {
+        // Fallback: target pid field may be used in some contexts; prefer browser pid for this feature.
+        browserPid = impl->spatialTargetPid.load(std::memory_order_relaxed);
+    }
     if (browserPid == 0) return;
 
     auto pids = CollectProcessTreePids(browserPid);
