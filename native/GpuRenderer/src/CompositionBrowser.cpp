@@ -700,25 +700,6 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
     m_impl->userDataFolder = userDataFolder;
     m_impl->additionalBrowserArguments = additionalBrowserArguments;
     m_impl->readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    // Apply pending spatial PoC config (may be set before Start/impl creation). Defer capture start until browser/core PID is ready.
-    if (m_spatialPocPendingSet.load(std::memory_order_relaxed)) {
-        bool en = m_spatialPocPendingEnabled.load(std::memory_order_relaxed);
-        uint32_t pid = m_spatialPocPendingTargetPid.load(std::memory_order_relaxed);
-        m_impl->spatialPocEnabled.store(en, std::memory_order_relaxed);
-        m_impl->spatialTargetPid.store(pid, std::memory_order_relaxed);
-        if (!en) {
-            m_impl->spatialCaptureStatus.store(0, std::memory_order_relaxed);
-            std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-            m_impl->spatialDiag = "spatial: disabled";
-        } else {
-            m_impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
-            std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-            m_impl->spatialDiag = (pid != 0) ? "spatial: enabled (starting capture)" : "spatial: enabled (waiting for browser pid)";
-            // If explicit target PID provided, safe to start now; auto-target waits for browser PID resolution after core init.
-            // Explicit target PID path: keep capture deferred for stability (activation state recorded only).
-        }
-    }
-
     // Create WinRT D3D device wrapper from Unity device (fast; do on calling thread before async browser startup).
     auto t0 = std::chrono::steady_clock::now();
     try {
@@ -2533,75 +2514,3 @@ void CompositionBrowser::SetDistanceAudioVolume(bool enabled, float volume01)
     m_impl->lastDistanceAudioAppliedMilli = enabled ? milli : 1000;
 }
 
-void CompositionBrowser::SetSpatialAudioPoc(bool enabled, uint32_t targetPid){
-    // Persist pending config so activation is deterministic even if called before Start()/impl creation.
-    m_spatialPocPendingEnabled.store(enabled, std::memory_order_relaxed);
-    m_spatialPocPendingTargetPid.store(targetPid, std::memory_order_relaxed);
-    m_spatialPocPendingSet.store(true, std::memory_order_relaxed);
-    if(!m_impl) return;
-    m_impl->spatialPocEnabled.store(enabled, std::memory_order_relaxed);
-    m_impl->spatialTargetPid.store(targetPid, std::memory_order_relaxed);
-    if (!enabled) {
-        m_impl->spatialCaptureStatus.store(0, std::memory_order_relaxed);
-        m_impl->spatialMuteApplied.store(false, std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-            m_impl->spatialDiag = "spatial: disabled";
-        }
-        // Stop capture worker and clear PCM ring
-        StartOrUpdateSpatialPocCapture(m_impl);
-        try {
-            std::lock_guard<std::mutex> lk(m_impl->spatialPcmMutex);
-            m_impl->spatialPcmRing.clear();
-            m_impl->spatialPcmRead = m_impl->spatialPcmWrite = m_impl->spatialPcmCount = 0;
-            m_impl->spatialPcmRate = m_impl->spatialPcmCh = 0;
-        } catch (...) {}
-        return;
-    }
-    // Capture worker start is delayed until stable/ready (browser loop) to avoid startup crashes.
-    if (m_impl->spatialCaptureStatus.load(std::memory_order_relaxed) == 0)
-        m_impl->spatialCaptureStatus.store(1, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lk(m_impl->spatialDiagMutex);
-        uint32_t pid = (targetPid != 0) ? targetPid : m_impl->spatialBrowserPid.load(std::memory_order_relaxed);
-        char buf[128];
-        if (pid != 0) sprintf_s(buf, "spatial: enabled (pid=%u, capture pending)", (unsigned)pid);
-        else sprintf_s(buf, "spatial: enabled (waiting for browser pid, capture pending)");
-        m_impl->spatialDiag = buf;
-    }
-}
-
-void CompositionBrowser::GetSpatialAudioFormat(uint32_t& sampleRate, uint32_t& channels) const {
-    sampleRate = 0; channels = 0;
-    if (!m_impl) return;
-    sampleRate = m_impl->spatialSampleRate.load(std::memory_order_relaxed);
-    channels = m_impl->spatialChannels.load(std::memory_order_relaxed);
-    if (sampleRate == 0 || channels == 0) {
-        std::lock_guard<std::mutex> lk(m_impl->spatialPcmMutex);
-        if (m_impl->spatialPcmRate) sampleRate = m_impl->spatialPcmRate;
-        if (m_impl->spatialPcmCh) channels = m_impl->spatialPcmCh;
-    }
-}
-
-uint32_t CompositionBrowser::ReadSpatialAudioSamples(float* dstInterleaved, uint32_t maxFrames) {
-    if (!m_impl || !dstInterleaved || maxFrames == 0) return 0;
-    std::lock_guard<std::mutex> lk(m_impl->spatialPcmMutex);
-    if (m_impl->spatialPcmRing.empty() || m_impl->spatialPcmCh == 0 || m_impl->spatialPcmCount == 0) return 0;
-    uint32_t ch = m_impl->spatialPcmCh;
-    size_t capFrames = m_impl->spatialPcmRing.size() / (size_t)ch;
-    if (capFrames == 0) return 0;
-    uint32_t frames = (uint32_t)((std::min)((size_t)maxFrames, m_impl->spatialPcmCount));
-    for (uint32_t i = 0; i < frames; ++i) {
-        size_t r = m_impl->spatialPcmRead;
-        float* src = &m_impl->spatialPcmRing[r * (size_t)ch];
-        memcpy(dstInterleaved + (size_t)i * ch, src, (size_t)ch * sizeof(float));
-        m_impl->spatialPcmRead = (r + 1) % capFrames;
-    }
-    m_impl->spatialPcmCount -= frames;
-    return frames;
-}
-
-bool CompositionBrowser::IsSpatialCaptureActive() const {
-    if (!m_impl) return false;
-    return m_impl->spatialCaptureStatus.load(std::memory_order_relaxed) == 2;
-}

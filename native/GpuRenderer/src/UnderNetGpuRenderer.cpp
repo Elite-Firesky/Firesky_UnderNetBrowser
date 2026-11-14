@@ -723,35 +723,6 @@ UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float
     g_comp.SetDistanceAudioVolume(enabled != 0, volume01);
 }
 
-UN_EXPORT void __stdcall UnGpu_CompSetSpatialAudioPoc(int32_t enabled, uint32_t targetPid) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    char msg[160];
-    sprintf_s(msg, "SpatialPoC native boundary: UnGpu_CompSetSpatialAudioPoc enabled=%d targetPid=%u", (int)enabled, (unsigned)targetPid);
-    Log(0, std::string("UnderNetGpuRenderer: ") + msg);
-    g_comp.SetSpatialAudioPoc(enabled != 0, targetPid);
-}
-
-UN_EXPORT void __stdcall UnGpu_CompGetSpatialAudioFormat(uint32_t* sampleRate, uint32_t* channels) {
-    uint32_t sr = 0, ch = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        g_comp.GetSpatialAudioFormat(sr, ch);
-    }
-    if (sampleRate) *sampleRate = sr;
-    if (channels) *channels = ch;
-}
-
-UN_EXPORT uint32_t __stdcall UnGpu_CompReadSpatialAudioSamples(float* dstInterleaved, uint32_t maxFrames) {
-    if (!dstInterleaved || maxFrames == 0) return 0;
-    std::lock_guard<std::mutex> lock(g_mutex);
-    return g_comp.ReadSpatialAudioSamples(dstInterleaved, maxFrames);
-}
-
-UN_EXPORT int32_t __stdcall UnGpu_CompIsSpatialCaptureActive() {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    return g_comp.IsSpatialCaptureActive() ? 1 : 0;
-}
-
 UN_EXPORT void __stdcall UnGpu_ClearTargetTexture() {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_comp.Shutdown();

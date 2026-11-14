@@ -90,10 +90,6 @@ UN_EXPORT double __stdcall UnGpu_CompGetZoomFactor();
 // Stage 3 Gate A PoC (dev-only): configure experimental WASAPI process-loopback capture diagnostics.
 // targetPid: WebView2 process PID to target (e.g. audio.mojom.AudioService). 0 disables target selection.
 UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float volume01);
-UN_EXPORT void __stdcall UnGpu_CompSetSpatialAudioPoc(int32_t enabled, uint32_t targetPid);
-UN_EXPORT void __stdcall UnGpu_CompGetSpatialAudioFormat(uint32_t* sampleRate, uint32_t* channels);
-UN_EXPORT uint32_t __stdcall UnGpu_CompReadSpatialAudioSamples(float* dstInterleaved, uint32_t maxFrames);
-UN_EXPORT int32_t __stdcall UnGpu_CompIsSpatialCaptureActive();
 
 // Unity plugin exports are defined in .cpp (UnityPluginLoad/Unload, GetRenderEventFunc)
 UN_EXPORT void* __stdcall UnGpu_GetRenderEventFuncPtr();

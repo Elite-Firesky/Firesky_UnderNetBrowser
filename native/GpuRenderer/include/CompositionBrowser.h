@@ -59,14 +59,6 @@ public:
     void SetZoomFactor(double zoomFactor);
     double GetZoomFactor() const;
 
-    // Stage 3 Gate A PoC (dev-only, experimental): WASAPI process-loopback capture diagnostics/control.
-    // No effect on rendering/input/lifecycle behavior when disabled.
-    void SetSpatialAudioPoc(bool enabled, uint32_t targetPid);
-    // Spatial audio playback support (PoC): format/read captured PCM (float32 interleaved) for Unity streaming AudioSource.
-    void GetSpatialAudioFormat(uint32_t& sampleRate, uint32_t& channels) const;
-    uint32_t ReadSpatialAudioSamples(float* dstInterleaved, uint32_t maxFrames);
-    bool IsSpatialCaptureActive() const;
-
     // Best-effort: attenuate default-render audio sessions belonging to this WebView2 browser process tree.
     // volume01 is clamped to [0,1]. When disabled, restores affected sessions to 1.0.
     void SetDistanceAudioVolume(bool enabled, float volume01);
@@ -78,10 +70,6 @@ private:
     std::atomic<int> m_status{ 0 };
     mutable std::mutex m_diagMutex;
     std::string m_diag;
-    // Spatial PoC config can be set before impl/Start; keep pending and apply when impl is ready.
-    std::atomic<bool> m_spatialPocPendingEnabled{ false };
-    std::atomic<uint32_t> m_spatialPocPendingTargetPid{ 0 };
-    std::atomic<bool> m_spatialPocPendingSet{ false };
 
     void SetDiag(const std::string& s);
     void SetError(const std::string& s);
