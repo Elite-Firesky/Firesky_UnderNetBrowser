@@ -377,8 +377,7 @@ namespace Firesky.UnderNetBrowser
             "WebView2ArgDisableRendererBackgrounding",
             "WebView2ArgAutoplayNoUserGesture",
             "WebView2ArgDisableFrameRateLimit",
-            "WebView2CustomBrowserArguments",
-            "SpatialAudioPocEnabled"
+            "WebView2CustomBrowserArguments"
         };
 
         private static void TryPatchModManagerPreferencesOrder()

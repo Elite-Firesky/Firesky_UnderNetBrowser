@@ -19,7 +19,6 @@ namespace Firesky.UnderNetBrowser
 
         public static MelonPreferences_Entry<bool>? AutoConsentEnabled { get; private set; }
         public static MelonPreferences_Entry<bool>? AlwaysLogDiagnostics { get; private set; }
-        public static MelonPreferences_Entry<bool>? SpatialAudioPocEnabled { get; private set; }
         public static MelonPreferences_Entry<bool>? DistanceVolumeEnabled { get; private set; }
         public static MelonPreferences_Entry<float>? DistanceVolumeFullDistance { get; private set; }
         public static MelonPreferences_Entry<float>? DistanceVolumeSilentDistance { get; private set; }
@@ -249,26 +248,8 @@ namespace Firesky.UnderNetBrowser
                 "UI: Chrome Height",
                 "Height of the top browser chrome/address bar area as a fraction of the TV screen height (0.04-0.20). Default 0.08.");
 
-            SpatialAudioPocEnabled = _category.CreateEntry(
-                "SpatialAudioPocEnabled", false,
-                "Developer: Spatial Audio PoC",
-                "[DEV/PoC] Experimental spatial audio proof-of-concept (off by default). No effect unless a validated PoC implementation is enabled.");
-
-            // Boundary diagnostics (Stage 3 activation): confirm registered/read values at startup.
-            try
-            {
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [SpatialPoC] Config.Initialize: SpatialAudioPocEnabled registered value={SpatialAudioPocEnabled?.Value} default={SpatialAudioPocEnabled?.DefaultValue} (category={_category?.Identifier}) beforeLoad");
-            }
-            catch { }
-
             // Ensure saved preferences are applied to created entries (deterministic activation across restarts/load order).
             try { _category?.LoadFromFile(false); } catch { try { MelonPreferences.Load(); } catch { } }
-
-            try
-            {
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [SpatialPoC] Config.Initialize: SpatialAudioPocEnabled value={SpatialAudioPocEnabled?.Value} default={SpatialAudioPocEnabled?.DefaultValue} (category={_category?.Identifier}) afterLoad");
-            }
-            catch { }
 
             // Persist newly registered entries/defaults so they appear in the MelonPreferences cfg without requiring Mod Manager to save first.
             try { MelonPreferences.Save(); } catch { try { _category?.SaveToFile(false); } catch { } }

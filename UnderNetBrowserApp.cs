@@ -85,15 +85,6 @@ namespace Firesky.UnderNetBrowser
         private float _gameVirtualMouseY;
         private float _lastGameModeFocusNudge = -999f;
         private string? _externalMirrorReturnUrl;
-        // Stage 3/4 PoC: spatial audio playback from captured WebView2 process-loopback PCM (dev-only, behind config)
-        private GameObject? _spatialAudioGo;
-        private AudioSource? _spatialAudioSource;
-        private AudioClip? _spatialAudioClip;
-        private uint _spatialAudioRate;
-        private uint _spatialAudioChannels;
-        private bool _spatialAudioStarted;
-        private float _lastSpatialAudioSetupAttempt;
-        private float[]? _spatialAudioReadBuffer;
         // Distance-based browser media volume attenuation (best-effort, HTML video/audio elements)
         private Transform? _distanceVolumeTvTransform;
         private float _lastDistanceVolumeTvResolveTime = -999f;
@@ -216,7 +207,6 @@ namespace Firesky.UnderNetBrowser
                 try { TryRestoreGameInput(); } catch { }
                 try { TryRestoreGameHud(); } catch { }
                 try { RestoreDetachedHomeScreenObjects(); } catch { }
-                try { StopSpatialAudioPlayback("shutdown:" + reason); } catch { }
             }
             catch { }
 
@@ -436,7 +426,6 @@ namespace Firesky.UnderNetBrowser
                 // before teardown, as they can block on native synchronization and freeze the game.
                 try { ResetAdaptiveRenderingState("close_x"); } catch { }
                 try { StopExternalWindowMirror("closed_x"); } catch { }
-                try { StopSpatialAudioPlayback("closed_x"); } catch { }
                 var captureToDispose = _gpuCompositionCapture;
                 _gpuCompositionCapture = null;
                 _gpuCompositionMode = false;
@@ -453,7 +442,6 @@ namespace Firesky.UnderNetBrowser
                 // Normal/framework close path: stop media and park browser for fast warm reopen (avoid ~12s controller recreation).
                 // Full native shutdown remains in ShutdownBrowserRuntime/world unload.
                 try { ResetAdaptiveRenderingState("warm_close"); } catch { }
-                try { StopSpatialAudioPlayback("closed"); } catch { }
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
                 try { ReleaseAllGameKeys("close_navigate_blank"); } catch { }
                 try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
@@ -698,7 +686,6 @@ namespace Firesky.UnderNetBrowser
                 else if (_gpuCompositionCapture != null)
                 {
                     _gpuCompositionCapture.Tick();
-                    try { UpdateSpatialAudioPlayback(); } catch { }
                     try { TryUpdateAdaptiveRendering(); } catch { }
                     try { TryUpdateDistanceBasedVolume(); } catch { }
                     if (_gpuCompositionCapture.Texture != null && _videoDisplay != null && _videoDisplay.texture != _gpuCompositionCapture.Texture)
@@ -8757,262 +8744,6 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
         }
-
-        private void UpdateSpatialAudioPlayback()
-        {
-            try
-            {
-                bool poc = false;
-                try { poc = UnderNetBrowserConfig.SpatialAudioPocEnabled?.Value == true; } catch { poc = false; }
-                if (!_gpuCompositionMode || _gpuCompositionCapture == null || !IsOpen || !poc)
-                {
-                    if (_spatialAudioStarted || _spatialAudioSource != null || _spatialAudioClip != null)
-                        StopSpatialAudioPlayback(poc ? "inactive" : "disabled");
-                    return;
-                }
-
-                uint sr = 0, ch = 0;
-                int active = 0;
-                try { UnderNetBrowserGpuNative.CompGetSpatialAudioFormat(out sr, out ch); } catch { sr = 0; ch = 0; }
-                try { active = UnderNetBrowserGpuNative.CompIsSpatialCaptureActive(); } catch { active = 0; }
-
-                // Update emitter position to follow TV while detached/open.
-                TryUpdateSpatialAudioEmitterTransform();
-
-                if (active == 0 || sr == 0 || ch == 0)
-                {
-                    // Not capturing yet (deferred start/pending/failed). Keep current playback stopped until active+format ready.
-                    if (_spatialAudioStarted) StopSpatialAudioPlayback("capture-not-active");
-                    return;
-                }
-
-                if (ch > 8) ch = 2;
-                if (_spatialAudioStarted && _spatialAudioSource != null && _spatialAudioClip != null && _spatialAudioRate == sr && _spatialAudioChannels == ch)
-                {
-                    if (!_spatialAudioSource.isPlaying) { try { _spatialAudioSource.Play(); } catch { } }
-                    return;
-                }
-
-                // (Re)create streaming clip/source when format becomes available or changes.
-                if (Time.realtimeSinceStartup - _lastSpatialAudioSetupAttempt < 0.5f) return;
-                _lastSpatialAudioSetupAttempt = Time.realtimeSinceStartup;
-                StopSpatialAudioPlayback("reinit");
-                StartSpatialAudioPlayback(sr, ch);
-            }
-            catch (Exception ex)
-            {
-                // Non-fatal; preserve browser behavior.
-                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] [SpatialPoC] UpdateSpatialAudioPlayback error: {ex.Message}"); } catch { }
-            }
-        }
-
-        private void StartSpatialAudioPlayback(uint sampleRate, uint channels)
-        {
-            try
-            {
-                if (sampleRate == 0 || channels == 0) return;
-                var emitter = TryGetOrCreateSpatialAudioEmitter();
-                if (emitter == null) return;
-
-                int clipSamples = (int)(sampleRate / 2); // ~0.5s ring for streaming callback
-                if (clipSamples < 1024) clipSamples = 1024;
-                _spatialAudioReadBuffer = new float[4096 * (int)channels];
-                _spatialAudioRate = sampleRate;
-                _spatialAudioChannels = channels;
-                // IL2CPP Unity bindings may expect Il2Cpp array delegate types
-                _spatialAudioClip = AudioClip.Create("UnderNetSpatialPoc", clipSamples, (int)channels, (int)sampleRate, true, (Action<Il2CppStructArray<float>>)OnSpatialAudioRead, (Action<int>)OnSpatialAudioSetPosition);
-                _spatialAudioSource = emitter.GetComponent<AudioSource>();
-                if (_spatialAudioSource == null) _spatialAudioSource = emitter.AddComponent<AudioSource>();
-                ConfigureSpatialAudioSource(_spatialAudioSource);
-                _spatialAudioSource.clip = _spatialAudioClip;
-                _spatialAudioSource.loop = true;
-                _spatialAudioSource.Play();
-                _spatialAudioStarted = true;
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] [SpatialPoC] Spatial playback started ({sampleRate}Hz, {channels}ch) emitter='{emitter.name}'.");
-            }
-            catch (Exception ex)
-            {
-                UnderNetBrowserConfig.Log($"[UnderNetBrowser] [SpatialPoC] StartSpatialAudioPlayback failed: {ex.Message}");
-                StopSpatialAudioPlayback("start-failed");
-            }
-        }
-
-        private void StopSpatialAudioPlayback(string reason)
-        {
-            try
-            {
-                if (_spatialAudioSource != null)
-                {
-                    try { _spatialAudioSource.Stop(); } catch { }
-                    try { _spatialAudioSource.clip = null; } catch { }
-                }
-                if (_spatialAudioClip != null)
-                {
-                    try { UnityEngine.Object.Destroy(_spatialAudioClip); } catch { }
-                }
-                _spatialAudioClip = null;
-                _spatialAudioStarted = false;
-                _spatialAudioRate = 0;
-                _spatialAudioChannels = 0;
-                _spatialAudioReadBuffer = null;
-                // Keep emitter/source GameObject for reuse; disable source.
-                try { if (_spatialAudioSource != null) _spatialAudioSource.enabled = false; } catch { }
-                // Destroy emitter when fully stopping browser/disable context
-                if (reason.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0 || reason.IndexOf("shutdown", StringComparison.OrdinalIgnoreCase) >= 0 || reason.IndexOf("closed", StringComparison.OrdinalIgnoreCase) >= 0 || reason.IndexOf("destroy", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    try { if (_spatialAudioGo != null) UnityEngine.Object.Destroy(_spatialAudioGo); } catch { }
-                    _spatialAudioGo = null;
-                    _spatialAudioSource = null;
-                }
-                if (!string.IsNullOrEmpty(reason))
-                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] [SpatialPoC] Spatial playback stopped ({reason}).");
-            }
-            catch { }
-        }
-
-        private void ConfigureSpatialAudioSource(AudioSource src)
-        {
-            try
-            {
-                src.enabled = true;
-                src.playOnAwake = false;
-                src.loop = true;
-                src.spatialBlend = 1.0f; // 3D
-                src.dopplerLevel = 0f;
-                src.rolloffMode = AudioRolloffMode.Logarithmic;
-                src.minDistance = 0.75f;
-                src.maxDistance = 18f;
-                src.spread = 0f;
-                src.volume = 1.0f;
-                src.priority = 64;
-                src.mute = false;
-                try { src.bypassEffects = false; } catch { }
-                try { src.bypassListenerEffects = false; } catch { }
-                try { src.bypassReverbZones = false; } catch { }
-            }
-            catch { }
-        }
-
-        private GameObject? TryGetOrCreateSpatialAudioEmitter()
-        {
-            try
-            {
-                var tvTransform = TryResolveTvAudioTransform();
-                if (_spatialAudioGo == null)
-                {
-                    _spatialAudioGo = new GameObject("FireskyUnderNet_SpatialAudioEmitter");
-                    try { UnityEngine.Object.DontDestroyOnLoad(_spatialAudioGo); } catch { }
-                }
-                if (tvTransform != null)
-                {
-                    try { _spatialAudioGo.transform.SetParent(tvTransform, false); _spatialAudioGo.transform.localPosition = Vector3.zero; } catch { try { _spatialAudioGo.transform.position = tvTransform.position; } catch { } }
-                }
-                else
-                {
-                    // Fallback: place near camera (not true TV spatial, but better than silence) if TV not found.
-                    try
-                    {
-                        var cam = Camera.main;
-                        if (cam != null) _spatialAudioGo.transform.position = cam.transform.position + cam.transform.forward * 1.5f;
-                    }
-                    catch { }
-                }
-                if (_spatialAudioSource == null)
-                {
-                    _spatialAudioSource = _spatialAudioGo.GetComponent<AudioSource>() ?? _spatialAudioGo.AddComponent<AudioSource>();
-                    ConfigureSpatialAudioSource(_spatialAudioSource);
-                }
-                return _spatialAudioGo;
-            }
-            catch { return null; }
-        }
-
-        private void TryUpdateSpatialAudioEmitterTransform()
-        {
-            try
-            {
-                if (_spatialAudioGo == null) return;
-                var tvTransform = TryResolveTvAudioTransform();
-                if (tvTransform == null) return;
-                // Re-parent/follow TV if it moved/recreated (best-effort)
-                if (_spatialAudioGo.transform.parent != tvTransform)
-                {
-                    try { _spatialAudioGo.transform.SetParent(tvTransform, false); _spatialAudioGo.transform.localPosition = Vector3.zero; }
-                    catch { try { _spatialAudioGo.transform.position = tvTransform.position; } catch { } }
-                }
-            }
-            catch { }
-        }
-
-        private Transform? TryResolveTvAudioTransform()
-        {
-            try
-            {
-                // Prefer a likely physical TV/screen transform for spatial origin.
-                string[] rootNames = { "TV_Built(Clone)/TVInterface", "TV_Built/TVInterface", "TVInterface" };
-                foreach (var path in rootNames)
-                {
-                    try
-                    {
-                        var go = GameObject.Find(path);
-                        if (go != null) return go.transform;
-                    }
-                    catch { }
-                }
-                // Fallback: search for TVInterface object name
-                try
-                {
-                    var go = GameObject.Find("TVInterface");
-                    if (go != null) return go.transform;
-                }
-                catch { }
-                // Fallback: common TV built root
-                foreach (var n in new[] { "TV_Built(Clone)", "TV_Built", "TV" })
-                {
-                    try { var go = GameObject.Find(n); if (go != null) return go.transform; } catch { }
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        private void OnSpatialAudioRead(Il2CppStructArray<float> data)
-        {
-            try
-            {
-                if (data == null || data.Length == 0) return;
-                int channels = (int)(_spatialAudioChannels == 0 ? 2 : _spatialAudioChannels);
-                if (channels <= 0) channels = 2;
-                int framesWanted = data.Length / channels;
-                if (framesWanted <= 0) { for (int i = 0; i < data.Length; i++) data[i] = 0f; return; }
-
-                int need = framesWanted * channels;
-                if (_spatialAudioReadBuffer == null || _spatialAudioReadBuffer.Length < need)
-                    _spatialAudioReadBuffer = new float[Math.Max(need, 4096 * channels)];
-
-                uint got = 0;
-                try
-                {
-                    got = UnderNetBrowserGpuNative.CompReadSpatialAudioSamples(_spatialAudioReadBuffer, (uint)framesWanted);
-                }
-                catch { got = 0; }
-
-                int gotSamples = (int)got * channels;
-                if (gotSamples > data.Length) gotSamples = data.Length;
-                for (int i = 0; i < gotSamples; i++) data[i] = _spatialAudioReadBuffer[i];
-                for (int i = gotSamples; i < data.Length; i++) data[i] = 0f;
-            }
-            catch
-            {
-                try { if (data != null) for (int i = 0; i < data.Length; i++) data[i] = 0f; } catch { }
-            }
-        }
-
-        private void OnSpatialAudioSetPosition(int newPosition)
-        {
-            // Streaming ring-buffer source: position resets are not meaningful; ignore.
-        }
-
 
         private void HandleExternalMirrorPointerInput()
         {

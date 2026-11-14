@@ -225,19 +225,6 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetDistanceAudioVolume")]
         public static extern void CompSetDistanceAudioVolume(int enabled, float volume01);
 
-        // Stage 3 Gate A PoC (dev-only): enable experimental WASAPI process-loopback capture diagnostics/attempt.
-        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetSpatialAudioPoc")]
-        public static extern void CompSetSpatialAudioPoc(int enabled, uint targetPid);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompGetSpatialAudioFormat")]
-        public static extern void CompGetSpatialAudioFormat(out uint sampleRate, out uint channels);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompReadSpatialAudioSamples")]
-        public static extern uint CompReadSpatialAudioSamples([Out] float[] dstInterleaved, uint maxFrames);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompIsSpatialCaptureActive")]
-        public static extern int CompIsSpatialCaptureActive();
-
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_GetRenderEventFuncPtr")]
         public static extern IntPtr GetRenderEventFuncPtr();
 

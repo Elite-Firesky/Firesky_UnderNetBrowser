@@ -76,22 +76,8 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { }
                 try { UnderNetBrowserGpuNative.CompSetParams(_lastUrl, _width, _height, userDataFolder); } catch { }
-                bool poc = false;
-                try
-                {
-                    // Stage 3 Gate A dev-only PoC: enable experimental WASAPI process-loopback capture.
-                    // targetPid=0 => native auto-discovers WebView2 browser process (ICoreWebView2::get_BrowserProcessId) and captures its process tree.
-                    bool prefValue = UnderNetBrowserConfig.SpatialAudioPocEnabled?.Value == true;
-                    poc = prefValue;
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [SpatialPoC] CompStart boundary: prefValue={prefValue} enabledArg={(poc ? 1 : 0)} targetPid=0 (auto)");
-                    UnderNetBrowserGpuNative.CompSetSpatialAudioPoc(poc ? 1 : 0, 0u);
-                }
-                catch (Exception ex)
-                {
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [SpatialPoC] CompStart boundary: failed to configure native PoC: {ex.GetType().Name}: {ex.Message}");
-                }
                 _startRequested = true;
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Requested composition browser start url='{_lastUrl}' target={_width}x{_height} userData='{userDataFolder ?? ""}' spatialPoc={poc}");
+                MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Requested composition browser start url='{_lastUrl}' target={_width}x{_height} userData='{userDataFolder ?? ""}'");
                 return true;
             }
             catch (DllNotFoundException)
