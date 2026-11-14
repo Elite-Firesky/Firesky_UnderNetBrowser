@@ -662,17 +662,30 @@ namespace Firesky.UnderNetBrowser
                 }
                 else if (_gpuCompositionCapture != null)
                 {
-                    // If a mirror request URL appears in the browser, switch to window mirror (mirror-only, no web redirect).
+                    // Intercept built-in shortcut routes from in-page navigation/clicks (e.g. homepage shortcuts).
                     try
                     {
                         var cur = _gpuCompositionCapture.CurrentUrl;
-                        if (IsDiscordMirrorRequestUrl(cur) && Time.realtimeSinceStartup - _lastExternalMirrorAttemptTime > 1.5f)
+                        if (!string.IsNullOrWhiteSpace(cur))
                         {
-                            if (TryStartDiscordMirror(cur))
+                            var n = NormalizeUrl(cur);
+                            if (n.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase) || IsDiscordMirrorRequestUrl(cur))
+                            {
+                                if (Time.realtimeSinceStartup - _lastExternalMirrorAttemptTime > 1.0f)
+                                {
+                                    if (!TryStartDiscordMirror(n))
+                                    {
+                                        try { _gpuCompositionCapture.Navigate(GetResolvedHomeUrl()); } catch { }
+                                        try { SetHint("Discord mirror unavailable (is Discord running?)."); } catch { }
+                                    }
+                                }
                                 return;
-                            // If mirror request can't be satisfied, navigate back to home (do not load Discord web).
-                            try { _gpuCompositionCapture.Navigate(GetResolvedHomeUrl()); } catch { }
-                            try { SetHint("Discord mirror unavailable (is Discord running?)."); } catch { }
+                            }
+                            if (n.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase))
+                            {
+                                try { SetUrl("https://www.google.com/ai"); } catch { }
+                                return;
+                            }
                         }
                     }
                     catch { }
@@ -794,6 +807,18 @@ namespace Firesky.UnderNetBrowser
                 return "undernet:notepad";
             if (text.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase) || text.Equals("home:ai", StringComparison.OrdinalIgnoreCase))
                 return "undernet:ai";
+            if (text.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase) || text.Equals("home:discord", StringComparison.OrdinalIgnoreCase))
+                return "undernet:discord";
+
+            // Intercept-friendly route URLs used by built-in homepage shortcuts (custom schemes may not navigate reliably in WebView2).
+            if (text.Equals("https://undernet.route/ai", StringComparison.OrdinalIgnoreCase) || text.Equals("http://undernet.route/ai", StringComparison.OrdinalIgnoreCase) ||
+                text.StartsWith("https://undernet.route/ai?", StringComparison.OrdinalIgnoreCase) || text.StartsWith("http://undernet.route/ai?", StringComparison.OrdinalIgnoreCase) ||
+                text.StartsWith("https://undernet.route/ai/", StringComparison.OrdinalIgnoreCase) || text.StartsWith("http://undernet.route/ai/", StringComparison.OrdinalIgnoreCase))
+                return "undernet:ai";
+            if (text.Equals("https://undernet.route/discord", StringComparison.OrdinalIgnoreCase) || text.Equals("http://undernet.route/discord", StringComparison.OrdinalIgnoreCase) ||
+                text.StartsWith("https://undernet.route/discord?", StringComparison.OrdinalIgnoreCase) || text.StartsWith("http://undernet.route/discord?", StringComparison.OrdinalIgnoreCase) ||
+                text.StartsWith("https://undernet.route/discord/", StringComparison.OrdinalIgnoreCase) || text.StartsWith("http://undernet.route/discord/", StringComparison.OrdinalIgnoreCase))
+                return "undernet:discord";
 
             // App routes (simple local UI host): home:<id>, undernet:<id>, undernet:app/<id>
             if (TryParseLocalAppRoute(text, out var appId))
@@ -817,6 +842,9 @@ namespace Firesky.UnderNetBrowser
                 return GetOrCreateHomepagePageUrl("notepad.html");
             if (normalized.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase))
                 return "https://www.google.com/ai";
+
+            if (normalized.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase))
+                return "undernet:discord";
 
             // Local app UI routes -> file:///.../root/Apps/<id>/index.html
             if (TryParseLocalAppRoute(normalized, out var appId))
@@ -848,6 +876,8 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
+        private const int ManagedHomepageVersion = 5;
+        private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
         {
@@ -922,7 +952,8 @@ namespace Firesky.UnderNetBrowser
                 // Reserve homepage tokens / built-in routes
                 if (candidate.Equals("home", StringComparison.OrdinalIgnoreCase) || candidate.Equals("homepage", StringComparison.OrdinalIgnoreCase) ||
                     candidate.Equals("games", StringComparison.OrdinalIgnoreCase) || candidate.Equals("settings", StringComparison.OrdinalIgnoreCase) ||
-                    candidate.Equals("notepad", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ai", StringComparison.OrdinalIgnoreCase))
+                    candidate.Equals("notepad", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
+                    candidate.Equals("discord", StringComparison.OrdinalIgnoreCase))
                     return false;
 
                 appId = candidate.ToLowerInvariant();
@@ -995,34 +1026,15 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                // Ensure default homepage exists.
-                if (!File.Exists(homepagePath))
-                {
-                    try { File.WriteAllText(homepagePath, BuildDefaultHomepageHtml()); } catch { }
-                }
-
-                // Ensure built-in homepage companion pages (games/settings). Create if missing; users can customize.
+                // Ensure built-in homepage pages exist. Use bundled/managed-file logic so fresh installs and
+                // managed updates come from the same source of truth (Homepage/*.html) instead of ad-hoc writes.
                 try
                 {
                     var homeDir = GetHomepageDir();
-                    var gamesPath = Path.Combine(homeDir, "games.html");
-                    if (!File.Exists(gamesPath))
-                    {
-                        try { File.WriteAllText(gamesPath, BuildGamesPageHtml()); } catch { }
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage games page at root/Homepage/games.html.");
-                    }
-                    var settingsPath = Path.Combine(homeDir, "settings.html");
-                    if (!File.Exists(settingsPath))
-                    {
-                        try { File.WriteAllText(settingsPath, BuildSettingsPageHtml()); } catch { }
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage settings page at root/Homepage/settings.html.");
-                    }
-                    var notepadPath = Path.Combine(homeDir, "notepad.html");
-                    if (!File.Exists(notepadPath))
-                    {
-                        try { EnsureHomepageFileFromBundle(notepadPath, "notepad.html"); } catch { }
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage notepad page at root/Homepage/notepad.html.");
-                    }
+                    EnsureHomepageFileFromBundle(Path.Combine(homeDir, "index.html"), "index.html");
+                    EnsureHomepageFileFromBundle(Path.Combine(homeDir, "games.html"), "games.html");
+                    EnsureHomepageFileFromBundle(Path.Combine(homeDir, "settings.html"), "settings.html");
+                    EnsureHomepageFileFromBundle(Path.Combine(homeDir, "notepad.html"), "notepad.html");
                 }
                 catch { }
 
@@ -1259,6 +1271,39 @@ namespace Firesky.UnderNetBrowser
 
         private static string ReadBundledHomepageHtmlOrFallback(string fileName, string fallbackHtml)
         {
+            // 1) Prefer embedded resource (bundled inside the DLL; no loose Homepage folder needed).
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                string? resName = null;
+                try
+                {
+                    var names = asm.GetManifestResourceNames();
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        if (names[i] != null && names[i].EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                        { resName = names[i]; break; }
+                    }
+                }
+                catch { resName = null; }
+                if (!string.IsNullOrWhiteSpace(resName))
+                {
+                    using (var s = asm.GetManifestResourceStream(resName))
+                    {
+                        if (s != null)
+                        {
+                            using (var r = new System.IO.StreamReader(s))
+                                return r.ReadToEnd();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Failed reading embedded homepage '{fileName}': {ex.Message}"); } catch { }
+            }
+
+            // 2) Backward-compatible: loose file next to mod / in Mods / game root.
             try
             {
                 var src = TryGetBundledHomepageSourcePath(fileName);
@@ -1272,41 +1317,76 @@ namespace Firesky.UnderNetBrowser
             return fallbackHtml ?? "";
         }
 
+        private static int TryGetManagedHomepageVersionFromContent(string? content)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(content)) return -1;
+                var idx = content.IndexOf(ManagedHomepageMarkerPrefix, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) return -1;
+                idx += ManagedHomepageMarkerPrefix.Length;
+                int end = idx;
+                while (end < content.Length && char.IsDigit(content[end])) end++;
+                if (end <= idx) return -1;
+                if (int.TryParse(content.Substring(idx, end - idx), out int v)) return v;
+            }
+            catch { }
+            return -1;
+        }
+
         private static void EnsureHomepageFileFromBundle(string targetPath, string fileName)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(targetPath) || File.Exists(targetPath)) return;
+                if (string.IsNullOrWhiteSpace(targetPath)) return;
                 var dir = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
 
-                var src = TryGetBundledHomepageSourcePath(fileName);
-                if (!string.IsNullOrWhiteSpace(src) && File.Exists(src))
+                string bundled = "";
+                try { bundled = ReadBundledHomepageHtmlOrFallback(fileName, ""); } catch { bundled = ""; }
+
+                if (!File.Exists(targetPath))
                 {
-                    try { File.Copy(src, targetPath, false); return; } catch { }
-                    try { File.WriteAllText(targetPath, File.ReadAllText(src)); return; } catch { }
+                    if (!string.IsNullOrWhiteSpace(bundled))
+                    {
+                        try { File.WriteAllText(targetPath, bundled); return; } catch { }
+                    }
+
+                    // Last-resort minimal fallback (source files should ship with mod). Mark as managed so future updates can auto-replace.
+                    string fallback = fileName.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>"
+                        : fileName.Equals("games.html", StringComparison.OrdinalIgnoreCase)
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        : fileName.Equals("settings.html", StringComparison.OrdinalIgnoreCase)
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        : fileName.Equals("notepad.html", StringComparison.OrdinalIgnoreCase)
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Notepad</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Notepad</h1><p>Notepad page source file missing. Reinstall mod files or restore <code>Homepage/notepad.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        : "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Page</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet</h1><p>Page source file missing.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>";
+                    try { File.WriteAllText(targetPath, fallback); } catch { }
+                    return;
                 }
 
-                // Last-resort minimal fallback (source files should ship with mod).
-                string fallback = fileName.Equals("index.html", StringComparison.OrdinalIgnoreCase)
-                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>"
-                    : fileName.Equals("games.html", StringComparison.OrdinalIgnoreCase)
-                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
-                    : fileName.Equals("settings.html", StringComparison.OrdinalIgnoreCase)
-                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
-                    : fileName.Equals("notepad.html", StringComparison.OrdinalIgnoreCase)
-                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Notepad</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Notepad</h1><p>Notepad page source file missing. Reinstall mod files or restore <code>Homepage/notepad.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
-                    : "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Page</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet</h1><p>Page source file missing.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>";
-                try { File.WriteAllText(targetPath, fallback); } catch { }
+                // Auto-update only managed built-in pages (version marker present). Preserve unmarked/customized files.
+                try
+                {
+                    string existing = File.ReadAllText(targetPath);
+                    int existingVersion = TryGetManagedHomepageVersionFromContent(existing);
+                    if (existingVersion >= 0 && existingVersion < ManagedHomepageVersion && !string.IsNullOrWhiteSpace(bundled))
+                    {
+                        File.WriteAllText(targetPath, bundled);
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Updated managed homepage file '{fileName}' ({existingVersion} -> {ManagedHomepageVersion})."); } catch { }
+                    }
+                }
+                catch { }
             }
             catch { }
         }
 
-        private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Home</title></head><body><h1>UnderNet Home</h1><p>Missing homepage source.</p></body></html>");
+        private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>");
 
-        private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Games</title></head><body><h1>Games</h1><p>Missing games source.</p></body></html>");
+        private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
 
-        private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Settings</title></head><body><h1>Settings</h1><p>Missing settings source.</p></body></html>");
+        private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
 
         private static string BuildExampleAppHtml()
         {
@@ -3535,19 +3615,31 @@ namespace Firesky.UnderNetBrowser
             ApplyChromeLayout();
             _chromeRT.offsetMin = Vector2.zero; _chromeRT.offsetMax = Vector2.zero;
             var chromeBg = _chromeRoot.AddComponent<Image>();
-            chromeBg.color = new Color(0.11f, 0.12f, 0.15f, 0.98f);
+            chromeBg.color = new Color(0.090f, 0.096f, 0.112f, 0.985f);
             chromeBg.raycastTarget = true;
+            try
+            {
+                var topLine = _chromeRoot.AddComponent<Outline>();
+                topLine.effectColor = new Color(1f, 1f, 1f, 0.04f);
+                topLine.effectDistance = new Vector2(0f, -1f);
+            }
+            catch { }
 
             var chromeLayout = _chromeRoot.AddComponent<HorizontalLayoutGroup>();
-            chromeLayout.spacing = 5f;
+            chromeLayout.spacing = 8f;
             chromeLayout.childAlignment = TextAnchor.MiddleCenter;
             chromeLayout.childForceExpandWidth = false;
             chromeLayout.childForceExpandHeight = false;
             chromeLayout.childControlWidth = true;
             chromeLayout.childControlHeight = true;
-            chromeLayout.padding = new RectOffset(6, 6, 4, 4);
+            chromeLayout.padding = new RectOffset(10, 10, 6, 6);
 
-            _backButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_BackBtn", "<", new Vector2(30, 26), new Color(0.22f, 0.24f, 0.28f, 1f), () => {
+            var navBg = new Color(0.165f, 0.176f, 0.198f, 1f);
+            var accentBg = new Color(0.150f, 0.210f, 0.235f, 1f);
+            var homeBg = new Color(0.150f, 0.205f, 0.175f, 1f);
+            var dangerBg = new Color(0.38f, 0.16f, 0.18f, 1f);
+
+            _backButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_BackBtn", "←", new Vector2(34, 30), navBg, () => {
                 if (_externalMirrorMode)
                 {
                     var ret = _externalMirrorReturnUrl;
@@ -3556,12 +3648,12 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
                 _gpuCompositionCapture?.GoBack();
-            }, 15);
-            _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", ">", new Vector2(30, 26), new Color(0.22f, 0.24f, 0.28f, 1f), () => {
+            }, 18);
+            _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", "→", new Vector2(34, 30), navBg, () => {
                 if (_externalMirrorMode) { SetHint("Discord mirror active: Back/Home to return."); return; }
                 _gpuCompositionCapture?.GoForward();
-            }, 15);
-            _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "R", new Vector2(30, 26), new Color(0.22f, 0.28f, 0.34f, 1f), () => {
+            }, 18);
+            _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "↻", new Vector2(34, 30), accentBg, () => {
                 if (_externalMirrorMode)
                 {
                     try { StopExternalWindowMirror("reload_button"); } catch { }
@@ -3573,8 +3665,8 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
                 _gpuCompositionCapture?.Reload();
-            }, 14);
-            _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "H", new Vector2(30, 26), new Color(0.18f, 0.30f, 0.22f, 1f), () => {
+            }, 17);
+            _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "⌂", new Vector2(34, 30), homeBg, () => {
                 try { ReleaseAllGameKeys("home_button"); } catch { }
                 if (_externalMirrorMode)
                 {
@@ -3596,15 +3688,15 @@ namespace Firesky.UnderNetBrowser
                     HardResetCompositionNavigate(home, "home_button");
                 else
                     SetUrl(raw);
-            }, 14);
+            }, 17);
 
-            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(300, 28), "Search or enter URL");
+            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(240, 30), "Search or enter address");
             var urlLayout = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
             urlLayout.flexibleWidth = 1f;
-            urlLayout.minWidth = 160f;
-            urlLayout.preferredWidth = 400f;
-            urlLayout.minHeight = 28f;
-            urlLayout.preferredHeight = 28f;
+            urlLayout.minWidth = 90f;
+            urlLayout.preferredWidth = 240f;
+            urlLayout.minHeight = 24f;
+            urlLayout.preferredHeight = 30f;
             urlLayout.flexibleHeight = 0f;
             // Reliable visible URL label overlay (InputField text rendering has been unreliable in this TV UI context).
             try
@@ -3613,11 +3705,11 @@ namespace Firesky.UnderNetBrowser
                 overlayGo.transform.SetParent(_urlInput.transform, false);
                 var ort = overlayGo.AddComponent<RectTransform>();
                 ort.anchorMin = Vector2.zero; ort.anchorMax = Vector2.one;
-                ort.offsetMin = new Vector2(10, 2); ort.offsetMax = new Vector2(-10, -2);
+                ort.offsetMin = new Vector2(34, 2); ort.offsetMax = new Vector2(-14, -2);
                 _urlDisplayText = overlayGo.AddComponent<Text>();
                 _urlDisplayText.font = GetUIFont();
                 _urlDisplayText.fontSize = 14;
-                _urlDisplayText.color = new Color(0.95f, 0.96f, 0.98f, 1f);
+                _urlDisplayText.color = new Color(0.97f, 0.98f, 1f, 1f);
                 _urlDisplayText.alignment = TextAnchor.MiddleLeft;
                 _urlDisplayText.supportRichText = false;
                 _urlDisplayText.raycastTarget = false;
@@ -3633,7 +3725,7 @@ namespace Firesky.UnderNetBrowser
                 if (homeDisplay.Equals("about:home", StringComparison.OrdinalIgnoreCase) || homeDisplay.Equals("https://www.youtube.com", StringComparison.OrdinalIgnoreCase)) homeDisplay = "undernet:home";
                 _urlInput.text = homeDisplay;
                 if (_urlDisplayText != null) _urlDisplayText.text = homeDisplay;
-                if (_urlInput.textComponent != null) { _urlInput.textComponent.text = homeDisplay; _urlInput.textComponent.color = new Color(0.95f, 0.96f, 0.98f, 1f); }
+                if (_urlInput.textComponent != null) { _urlInput.textComponent.text = homeDisplay; _urlInput.textComponent.color = new Color(0.97f, 0.98f, 1f, 1f); }
                 if (_urlInput.placeholder is Text ph) ph.enabled = string.IsNullOrEmpty(homeDisplay);
                 _lastSyncedUrl = homeDisplay;
                 _urlInput.interactable = true;
@@ -3649,29 +3741,37 @@ namespace Firesky.UnderNetBrowser
                 _gameModeIndicatorRoot = new GameObject("UnderNetBrowser_GameModeIndicator");
                 _gameModeIndicatorRoot.transform.SetParent(_chromeRoot.transform, false);
                 var irt = _gameModeIndicatorRoot.AddComponent<RectTransform>();
-                irt.sizeDelta = new Vector2(120, 24);
+                irt.sizeDelta = new Vector2(118, 24);
                 var ile = _gameModeIndicatorRoot.AddComponent<LayoutElement>();
-                ile.preferredWidth = 120; ile.minWidth = 110; ile.preferredHeight = 24; ile.minHeight = 24; ile.flexibleWidth = 0; ile.flexibleHeight = 0;
+                ile.preferredWidth = 118; ile.minWidth = 88; ile.preferredHeight = 24; ile.minHeight = 22; ile.flexibleWidth = 0; ile.flexibleHeight = 0;
                 var ibg = _gameModeIndicatorRoot.AddComponent<Image>();
-                ibg.color = new Color(0.18f, 0.55f, 0.24f, 0.95f);
+                ibg.color = new Color(0.16f, 0.62f, 0.34f, 0.98f);
                 ibg.raycastTarget = false;
+                try
+                {
+                    var ibgOutline = _gameModeIndicatorRoot.AddComponent<Outline>();
+                    ibgOutline.effectColor = new Color(1f, 1f, 1f, 0.10f);
+                    ibgOutline.effectDistance = new Vector2(1f, -1f);
+                }
+                catch { }
                 var igo = new GameObject("Text");
                 igo.transform.SetParent(_gameModeIndicatorRoot.transform, false);
                 var itrt = igo.AddComponent<RectTransform>();
-                itrt.anchorMin = Vector2.zero; itrt.anchorMax = Vector2.one; itrt.offsetMin = new Vector2(6, 1); itrt.offsetMax = new Vector2(-6, -1);
+                itrt.anchorMin = Vector2.zero; itrt.anchorMax = Vector2.one; itrt.offsetMin = new Vector2(10, 2); itrt.offsetMax = new Vector2(-10, -2);
                 _gameModeIndicatorText = igo.AddComponent<Text>();
                 _gameModeIndicatorText.font = GetUIFont();
                 _gameModeIndicatorText.fontSize = 12;
-                _gameModeIndicatorText.color = Color.white;
+                _gameModeIndicatorText.color = new Color(0.98f, 1f, 0.99f, 1f);
                 _gameModeIndicatorText.alignment = TextAnchor.MiddleCenter;
                 _gameModeIndicatorText.supportRichText = false;
                 _gameModeIndicatorText.raycastTarget = false;
-                _gameModeIndicatorText.text = "GAME INPUT (F6)";
+                _gameModeIndicatorText.fontStyle = FontStyle.Bold;
+                _gameModeIndicatorText.text = "● GAME MODE · F6";
                 _gameModeIndicatorRoot.SetActive(false);
             }
             catch { }
 
-            _closeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_CloseBtn", "X", new Vector2(30, 26), new Color(0.45f, 0.16f, 0.18f, 1f), CloseAppToTvHome, 15);
+            _closeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_CloseBtn", "✕", new Vector2(34, 30), dangerBg, CloseAppToTvHome, 16);
             // Opaque cap behind the close button region to hide URL overlay overflow under/around the X (RectMask2D on the input broke text visibility).
             try
             {
@@ -3681,7 +3781,7 @@ namespace Firesky.UnderNetBrowser
                     cap.transform.SetParent(_chromeRoot.transform, false);
                     cap.transform.SetSiblingIndex(_closeButton.transform.GetSiblingIndex()); // place before close button so X draws on top
                     var capImg = cap.AddComponent<UnityEngine.UI.Image>();
-                    capImg.color = new Color(0.11f, 0.12f, 0.15f, 0.98f);
+                    capImg.color = new Color(0.090f, 0.096f, 0.112f, 0.985f);
                     capImg.raycastTarget = false;
                     var capLE = cap.AddComponent<UnityEngine.UI.LayoutElement>();
                     capLE.ignoreLayout = true;
@@ -3689,7 +3789,7 @@ namespace Firesky.UnderNetBrowser
                     capRT.anchorMin = new Vector2(1f, 0f);
                     capRT.anchorMax = new Vector2(1f, 1f);
                     capRT.pivot = new Vector2(1f, 0.5f);
-                    capRT.sizeDelta = new Vector2(44f, 0f); // cover right padding + close button area
+                    capRT.sizeDelta = new Vector2(52f, 0f); // cover right padding + close button area
                     capRT.anchoredPosition = Vector2.zero;
                 }
             }
@@ -3756,7 +3856,7 @@ namespace Firesky.UnderNetBrowser
                     _chromeRT.offsetMin = Vector2.zero;
                     _chromeRT.offsetMax = Vector2.zero;
 
-                    // Scale chrome controls/padding to better match configured height.
+                    // Scale chrome controls/padding to better match configured height (stable with ChromeHeightFraction config).
                     try
                     {
                         float containerH = 1080f;
@@ -3767,19 +3867,25 @@ namespace Firesky.UnderNetBrowser
                             else if (_videoRT != null && _videoRT.parent is RectTransform prt && prt.rect.height > 10f) containerH = prt.rect.height;
                         }
                         catch { }
-                        float chromePx = Mathf.Clamp(containerH * chromeHFrac, 24f, 180f);
-                        float controlH = Mathf.Clamp(chromePx - 10f, 20f, 64f);
-                        float btnW = Mathf.Clamp(controlH * 1.15f, 24f, 72f);
-                        int font = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.52f), 10, 28);
-                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.50f), 10, 26);
-                        int padV = Mathf.Clamp(Mathf.RoundToInt(Mathf.Max(2f, (chromePx - controlH) * 0.5f)), 2, 16);
-                        int padH = Mathf.Clamp(Mathf.RoundToInt(6f + (controlH - 26f) * 0.15f), 4, 18);
+                        float chromePx = Mathf.Clamp(containerH * chromeHFrac, 24f, 220f);
+                        int padV = Mathf.Clamp(Mathf.RoundToInt(chromePx * 0.14f), 3, 14);
+                        int padH = Mathf.Clamp(Mathf.RoundToInt(chromePx * 0.22f), 6, 22);
+                        int padTop = Mathf.Clamp(padV + 2, 3, 16);
+                        int padBottom = Mathf.Max(2, padV - 1);
+                        float innerH = Mathf.Max(16f, chromePx - padTop - padBottom - 1f);
+                        float controlH = Mathf.Clamp(innerH, 16f, 56f);
+                        if (chromePx < 38f) controlH = Mathf.Max(14f, chromePx - (padTop + padBottom + 1f));
+                        float btnW = Mathf.Clamp(controlH * 1.05f, 24f, 64f);
+                        int font = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.58f), 11, 26);
+                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.46f), 10, 22);
 
                         var hlg = _chromeRoot != null ? _chromeRoot.GetComponent<HorizontalLayoutGroup>() : null;
                         if (hlg != null)
                         {
-                            hlg.padding = new RectOffset(padH, padH, padV, padV);
-                            hlg.spacing = Mathf.Clamp(4f + (controlH - 26f) * 0.08f, 3f, 12f);
+                            hlg.childAlignment = TextAnchor.MiddleLeft;
+                            // Extra top padding reduces content clipping under TV screen/canvas edge masks.
+                            hlg.padding = new RectOffset(padH, padH, padTop, padBottom);
+                            hlg.spacing = Mathf.Clamp(chromePx * 0.10f, 4f, 12f);
                         }
 
                         void ApplyButtonSizing(Button? b)
@@ -3788,7 +3894,7 @@ namespace Firesky.UnderNetBrowser
                             try
                             {
                                 var le = b.GetComponent<LayoutElement>() ?? b.gameObject.AddComponent<LayoutElement>();
-                                le.preferredWidth = btnW; le.minWidth = Mathf.Max(20f, btnW * 0.85f);
+                                le.preferredWidth = btnW; le.minWidth = Mathf.Max(22f, btnW * 0.9f);
                                 le.preferredHeight = controlH; le.minHeight = controlH;
                                 var t = b.GetComponentInChildren<Text>(true);
                                 if (t != null) t.fontSize = font;
@@ -3802,17 +3908,52 @@ namespace Firesky.UnderNetBrowser
                         ApplyButtonSizing(_homeButton);
                         ApplyButtonSizing(_closeButton);
 
+                        float containerW = 685f;
+                        try
+                        {
+                            if (_chromeRT != null && _chromeRT.rect.width > 10f) containerW = _chromeRT.rect.width;
+                            else
+                            {
+                                var rootRt = _chromeRT != null ? _chromeRT.root as RectTransform : null;
+                                if (rootRt != null && rootRt.rect.width > 10f) containerW = rootRt.rect.width;
+                            }
+                        }
+                        catch { }
+
                         if (_urlInput != null)
                         {
                             try
                             {
                                 var le = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
+                                le.flexibleWidth = 1f;
                                 le.preferredHeight = controlH; le.minHeight = controlH;
-                                le.minWidth = Mathf.Max(120f, chromePx * 4f);
+                                // Keep URL bar shrinkable on small in-game TV canvases (e.g. ~685px wide).
+                                le.minWidth = Mathf.Clamp(containerW * 0.22f, 90f, 180f);
+                                le.preferredWidth = Mathf.Clamp(containerW * 0.42f, 140f, 520f);
                                 if (_urlInput.textComponent != null) _urlInput.textComponent.fontSize = urlFont;
-                                if (_urlInput.placeholder is Text ph) ph.fontSize = urlFont;
+                                if (_urlInput.placeholder is Text ph) ph.fontSize = Mathf.Max(10, urlFont - 1);
                                 if (_urlDisplayText != null) _urlDisplayText.fontSize = urlFont;
-                                if (_gameModeIndicatorText != null) _gameModeIndicatorText.fontSize = Mathf.Max(9, font - 2);
+                            }
+                            catch { }
+                        }
+
+                        if (_gameModeIndicatorRoot != null)
+                        {
+                            try
+                            {
+                                var ile = _gameModeIndicatorRoot.GetComponent<LayoutElement>() ?? _gameModeIndicatorRoot.AddComponent<LayoutElement>();
+                                ile.preferredHeight = Mathf.Max(22f, controlH * 0.92f);
+                                ile.minHeight = Mathf.Max(20f, controlH * 0.85f);
+                                // Compact status pill so it doesn't crowd small widths.
+                                ile.preferredWidth = Mathf.Clamp(controlH * 4.2f, 96f, 150f);
+                                ile.minWidth = Mathf.Max(88f, ile.preferredWidth * 0.85f);
+                                if (_gameModeIndicatorText != null)
+                                {
+                                    _gameModeIndicatorText.fontSize = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.34f), 9, 14);
+                                    _gameModeIndicatorText.resizeTextForBestFit = true;
+                                    _gameModeIndicatorText.resizeTextMinSize = 8;
+                                    _gameModeIndicatorText.resizeTextMaxSize = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.34f), 9, 14);
+                                }
                             }
                             catch { }
                         }
@@ -3824,10 +3965,9 @@ namespace Firesky.UnderNetBrowser
                 {
                     if (showChrome)
                     {
-                        // Keep minimal edge gaps and leave room for chrome strip.
-                        float maxY = Mathf.Clamp(topYMin - 0.002f, 0.05f, 0.998f);
-                        _videoRT.anchorMin = new Vector2(0.002f, 0.002f);
-                        _videoRT.anchorMax = new Vector2(0.998f, maxY);
+                        // Flush join to chrome strip to avoid visible seam/gap artifacts.
+                        _videoRT.anchorMin = new Vector2(0f, 0f);
+                        _videoRT.anchorMax = new Vector2(1f, topYMin);
                     }
                     else
                     {
@@ -6425,18 +6565,19 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
 
-                // Intercept in-page navigations to built-in undernet routes (e.g. href="undernet:ai", "undernet:discord")
+                // Intercept in-page navigations to built-in undernet routes (custom scheme or intercept-friendly https routes).
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     var u = url.Trim();
-                    if (u.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) ||
-                        u.Equals("undernet:games", StringComparison.OrdinalIgnoreCase) ||
-                        u.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase) ||
-                        u.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase) ||
-                        u.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase) ||
-                        u.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase))
+                    var n = NormalizeUrl(u);
+                    if (n.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) ||
+                        n.Equals("undernet:games", StringComparison.OrdinalIgnoreCase) ||
+                        n.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase) ||
+                        n.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase) ||
+                        n.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase) ||
+                        n.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase))
                     {
-                        try { SetUrl(u); } catch { }
+                        try { SetUrl(n); } catch { }
                         return;
                     }
                 }
@@ -6526,19 +6667,8 @@ namespace Firesky.UnderNetBrowser
                 catch { }
 
                 display = CleanDisplayUrl(display);
-                // Special display for AI page (Google AI wrapped as built-in app)
-                try
-                {
-                    if (Uri.TryCreate(url, UriKind.Absolute, out var curUri))
-                    {
-                        var host = (curUri.Host ?? "").ToLowerInvariant();
-                        var path = (curUri.AbsolutePath ?? "").TrimEnd('/').ToLowerInvariant();
-                        var q = (curUri.Query ?? "").ToLowerInvariant();
-                        if (host.EndsWith("google.com") && (path == "/ai" || path.StartsWith("/ai/") || q.Contains("udm=50")))
-                            display = "undernet:ai";
-                    }
-                }
-                catch { }
+                // AI page (Google AI) keeps its real URL in the address bar; no undernet:ai alias display.
+                try { } catch { }
                 if (string.IsNullOrWhiteSpace(display)) display = GetHomeDisplay();
                 if (string.Equals(_lastSyncedUrl, display, StringComparison.Ordinal) && !string.IsNullOrEmpty(_urlInput.text))
                 {
@@ -7469,18 +7599,46 @@ namespace Firesky.UnderNetBrowser
             rt.sizeDelta = size;
             var le = go.AddComponent<LayoutElement>();
             le.preferredWidth = size.x; le.preferredHeight = size.y; le.minWidth = size.x; le.minHeight = size.y;
+
             var img = go.AddComponent<Image>();
-            img.color = bg;
+            img.color = Color.white;
+            img.raycastTarget = true;
+
+            // Subtle depth/stroke so flat UI primitives feel premium
+            try
+            {
+                var outline = go.AddComponent<Outline>();
+                outline.effectColor = new Color(1f, 1f, 1f, 0.07f);
+                outline.effectDistance = new Vector2(1f, -1f);
+            }
+            catch { }
+            try
+            {
+                var shadow = go.AddComponent<Shadow>();
+                shadow.effectColor = new Color(0f, 0f, 0f, 0.28f);
+                shadow.effectDistance = new Vector2(0f, -1f);
+            }
+            catch { }
+
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = img;
             var colors = btn.colors;
-            colors.highlightedColor = Color.Lerp(bg, Color.white, 0.12f);
-            colors.pressedColor = Color.Lerp(bg, Color.black, 0.15f);
+            colors.normalColor = bg;
+            colors.highlightedColor = Color.Lerp(bg, Color.white, 0.16f);
+            colors.pressedColor = Color.Lerp(bg, Color.black, 0.18f);
             colors.selectedColor = colors.highlightedColor;
+            colors.disabledColor = new Color(bg.r * 0.6f, bg.g * 0.6f, bg.b * 0.6f, 0.55f);
+            colors.colorMultiplier = 1f;
+            colors.fadeDuration = 0.07f;
             btn.colors = colors;
             EventHelper.AddListener(onClick, btn.onClick);
-            var txt = CreateText(go, label, fontSize, Color.white);
+
+            var txt = CreateText(go, label, fontSize, new Color(0.94f, 0.96f, 0.99f, 1f));
             txt.alignment = TextAnchor.MiddleCenter;
+            txt.fontStyle = FontStyle.Bold;
+            txt.resizeTextForBestFit = true;
+            txt.resizeTextMinSize = Mathf.Max(10, fontSize - 4);
+            txt.resizeTextMaxSize = fontSize;
             return btn;
         }
 
@@ -7491,43 +7649,83 @@ namespace Firesky.UnderNetBrowser
             var rt = go.AddComponent<RectTransform>();
             rt.sizeDelta = size;
             var img = go.AddComponent<Image>();
-            img.color = new Color(0.16f, 0.17f, 0.20f, 1f);
+            img.color = new Color(0.145f, 0.155f, 0.175f, 1f);
             img.raycastTarget = true;
             // NOTE: RectMask2D on the input root caused address bar text/overlay visibility regressions in this UI setup.
             // TODO: implement clipping via a dedicated masked text viewport without hiding InputField/overlay content.
-            var outline = go.AddComponent<Outline>();
-            outline.effectColor = new Color(1f, 1f, 1f, 0.08f);
-            outline.effectDistance = new Vector2(1, -1);
+            try
+            {
+                var outline = go.AddComponent<Outline>();
+                outline.effectColor = new Color(1f, 1f, 1f, 0.07f);
+                outline.effectDistance = new Vector2(1, -1);
+            }
+            catch { }
+            try
+            {
+                var shadow = go.AddComponent<Shadow>();
+                shadow.effectColor = new Color(0f, 0f, 0f, 0.22f);
+                shadow.effectDistance = new Vector2(0f, -1f);
+            }
+            catch { }
 
             var input = go.AddComponent<InputField>();
             input.targetGraphic = img;
             input.transition = Selectable.Transition.ColorTint;
+            var colors = input.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(1f, 1f, 1f, 1.02f);
+            colors.pressedColor = Color.white;
+            colors.selectedColor = Color.white;
+            colors.colorMultiplier = 1f;
+            colors.fadeDuration = 0.08f;
+            input.colors = colors;
             input.interactable = true;
             input.lineType = InputField.LineType.SingleLine;
             input.contentType = InputField.ContentType.Standard;
             input.keyboardType = TouchScreenKeyboardType.Default;
             input.characterLimit = 2048;
-            input.caretColor = new Color(0.95f, 0.96f, 0.98f, 1f);
+            input.caretColor = new Color(0.58f, 0.78f, 1f, 1f);
             input.customCaretColor = true;
-            input.selectionColor = new Color(0.30f, 0.55f, 0.95f, 0.45f);
+            input.selectionColor = new Color(0.28f, 0.52f, 0.95f, 0.40f);
             input.caretBlinkRate = 0.85f;
             input.caretWidth = 2;
 
             var textGo = new GameObject("Text");
             textGo.transform.SetParent(go.transform, false);
             var trt = textGo.AddComponent<RectTransform>();
-            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(10, 2); trt.offsetMax = new Vector2(-10, -2);
+            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(34, 2); trt.offsetMax = new Vector2(-14, -2);
             var txt = textGo.AddComponent<Text>();
-            txt.font = GetUIFont(); txt.fontSize = 14; txt.color = new Color(0.95f, 0.96f, 0.98f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
+            txt.font = GetUIFont(); txt.fontSize = 14; txt.color = new Color(0.97f, 0.98f, 1f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
             input.textComponent = txt;
 
             var phGo = new GameObject("Placeholder");
             phGo.transform.SetParent(go.transform, false);
             var prt = phGo.AddComponent<RectTransform>();
-            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(10, 2); prt.offsetMax = new Vector2(-10, -2);
+            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(34, 2); prt.offsetMax = new Vector2(-14, -2);
             var ptxt = phGo.AddComponent<Text>();
-            ptxt.font = GetUIFont(); ptxt.fontSize = 13; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.62f, 0.65f, 0.70f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter URL";
+            ptxt.font = GetUIFont(); ptxt.fontSize = 13; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.60f, 0.66f, 0.74f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter address";
             input.placeholder = ptxt;
+
+            // Leading search/site glyph for a browser-like omnibox feel
+            try
+            {
+                var leadGo = new GameObject("LeadingIcon");
+                leadGo.transform.SetParent(go.transform, false);
+                var lrt = leadGo.AddComponent<RectTransform>();
+                lrt.anchorMin = new Vector2(0f, 0f); lrt.anchorMax = new Vector2(0f, 1f);
+                lrt.pivot = new Vector2(0f, 0.5f);
+                lrt.anchoredPosition = new Vector2(8f, 0f);
+                lrt.sizeDelta = new Vector2(22f, 0f);
+                var lt = leadGo.AddComponent<Text>();
+                lt.font = GetUIFont();
+                lt.text = "⌕";
+                lt.fontSize = 15;
+                lt.color = new Color(0.62f, 0.74f, 0.95f, 0.95f);
+                lt.alignment = TextAnchor.MiddleCenter;
+                lt.raycastTarget = false;
+                lt.supportRichText = false;
+            }
+            catch { }
 
             input.text = "";
             try { input.ForceLabelUpdate(); } catch { }
@@ -8967,9 +9165,17 @@ namespace Firesky.UnderNetBrowser
         private bool IsDiscordMirrorRequestUrl(string? url)
         {
             if (string.IsNullOrWhiteSpace(url)) return false;
-            return url.IndexOf("discord.com/app", StringComparison.OrdinalIgnoreCase) >= 0
-                || url.IndexOf("discord.com/channels", StringComparison.OrdinalIgnoreCase) >= 0
-                || url.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase);
+            var u = url.Trim();
+            return u.IndexOf("discord.com/app", StringComparison.OrdinalIgnoreCase) >= 0
+                || u.IndexOf("discord.com/channels", StringComparison.OrdinalIgnoreCase) >= 0
+                || u.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase)
+                || u.Equals("home:discord", StringComparison.OrdinalIgnoreCase)
+                || u.Equals("https://undernet.route/discord", StringComparison.OrdinalIgnoreCase)
+                || u.Equals("http://undernet.route/discord", StringComparison.OrdinalIgnoreCase)
+                || u.StartsWith("https://undernet.route/discord?", StringComparison.OrdinalIgnoreCase)
+                || u.StartsWith("http://undernet.route/discord?", StringComparison.OrdinalIgnoreCase)
+                || u.StartsWith("https://undernet.route/discord/", StringComparison.OrdinalIgnoreCase)
+                || u.StartsWith("http://undernet.route/discord/", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryStartDiscordMirror(string? requestedUrl)

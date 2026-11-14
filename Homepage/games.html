@@ -3,79 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- UnderNetBrowser:managed-homepage version=5 -->
 <title>UnderNet Games</title>
 <style>
-  :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
+  :root { --bg:#07110d; --panel:#0f1b16; --edge:#214033; --text:#e9f7ee; --muted:#9bb7aa; --accent:#7cff6b; }
   *{box-sizing:border-box} html,body{height:100%;margin:0}
-  body{font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif;font-size:15px;color:var(--text);background:radial-gradient(1000px 420px at 12% -8%, rgba(53,217,123,.16), transparent 60%),radial-gradient(800px 380px at 100% 0%, rgba(102,217,255,.08), transparent 55%),linear-gradient(180deg,var(--bg0),var(--bg1) 40%,var(--bg2));}
-  .wrap{min-height:100%;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
-  .glass{border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg,rgba(14,22,18,.95),rgba(8,13,10,.97));box-shadow:0 14px 34px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.03)}
-  .hero{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:12px}
-  .mark{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px;background:linear-gradient(180deg,#ffe08a,#ffb347);color:#241607}
-  h1{margin:0;font-size:28px;letter-spacing:1.6px;text-transform:uppercase}
-  .sub{margin:4px 0 0;color:var(--muted);font-size:13px}
-  .actions{display:flex;gap:8px;flex-wrap:wrap}
-  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;text-decoration:none;font-size:13px;font-weight:600}
-  .btn:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
-  .section{padding:14px}
-  .section h2{margin:0 0 10px;font-size:14px;letter-spacing:1.3px;text-transform:uppercase;color:#d9ecdf}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
-  .card{display:flex;align-items:center;gap:12px;text-decoration:none;color:var(--text);padding:12px;border-radius:12px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));transition:transform .12s ease,border-color .12s ease}
-  .card:hover{border-color:rgba(124,255,107,.45);box-shadow:0 0 0 1px rgba(124,255,107,.08) inset;transform:translateY(-1px)}
-  .favicon{width:38px;height:38px;border-radius:10px;flex:0 0 auto;background:#0f1713;border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;overflow:hidden}
-  .favicon img{width:22px;height:22px;image-rendering:auto}
-  .meta{min-width:0}
-  .name{font-size:15px;font-weight:700;line-height:1.25}
-  .url{font-size:12px;color:#7fa893;word-break:break-all;margin-top:2px}
-  .note{font-size:12px;color:var(--muted);margin-top:2px}
-  .footer{color:#789083;font-size:12px;letter-spacing:.4px;padding:0 4px 4px}
+  body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+  .card{max-width:900px;margin:0 auto;background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:20px}
+  a{color:var(--accent);text-decoration:none}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <header class="hero glass">
-      <div class="brand"><div class="mark">🎮</div><div><h1>Games Library</h1><div class="sub">Browser titles · click to launch</div></div></div>
-      <div class="actions"><a class="btn" href="index.html">← Home</a><a class="btn" href="settings.html">⚙ Settings</a></div>
-    </header>
-
-    <section class="section glass">
-      <h2>Open-world, racing and action</h2>
-      <div class="grid">
-        <a class="card" href="https://nfsu2.xyz/"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=nfsu2.xyz&sz=64" alt=""></div><div class="meta"><div class="name">Need for Speed: Underground 2</div><div class="url">nfsu2.xyz</div></div></a>
-        <a class="card" href="https://v2.fiveplay.lol/"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=v2.fiveplay.lol&sz=64" alt=""></div><div class="meta"><div class="name">Grand Theft Auto V</div><div class="url">v2.fiveplay.lol</div></div></a>
-        <a class="card" href="https://nfsmwonline.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=nfsmwonline.com&sz=64" alt=""></div><div class="meta"><div class="name">Need for Speed: Most Wanted</div><div class="url">nfsmwonline.com</div></div></a>
-      </div>
-    </section>
-
-    <section class="section glass">
-      <h2>FPS and shooters</h2>
-      <div class="grid">
-        <a class="card" href="https://vel.gg"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=vel.gg&sz=64" alt=""></div><div class="meta"><div class="name">Call of Duty: Black Ops Zombies</div><div class="url">vel.gg</div></div></a>
-        <a class="card" href="https://q3.pieter.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=q3.pieter.com&sz=64" alt=""></div><div class="meta"><div class="name">Quake III Arena</div><div class="url">q3.pieter.com</div></div></a>
-        <a class="card" href="https://rtcw.pieter.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=rtcw.pieter.com&sz=64" alt=""></div><div class="meta"><div class="name">Return to Castle Wolfenstein</div><div class="url">rtcw.pieter.com</div></div></a>
-        <a class="card" href="https://play-cs.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=play-cs.com&sz=64" alt=""></div><div class="meta"><div class="name">Counter-Strike 1.6</div><div class="url">play-cs.com</div></div></a>
-        <a class="card" href="https://q2.pieter.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=q2.pieter.com&sz=64" alt=""></div><div class="meta"><div class="name">Quake II</div><div class="url">q2.pieter.com</div></div></a>
-        <a class="card" href="https://ut.pieter.com"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=ut.pieter.com&sz=64" alt=""></div><div class="meta"><div class="name">Urban Terror</div><div class="url">ut.pieter.com</div></div></a>
-      </div>
-    </section>
-
-    <section class="section glass">
-      <h2>RPG and sandbox</h2>
-      <div class="grid">
-        <a class="card" href="https://d07riv.github.io/diabloweb/"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=d07riv.github.io&sz=64" alt=""></div><div class="meta"><div class="name">Diablo</div><div class="url">d07riv.github.io/diabloweb/</div></div></a>
-        <a class="card" href="https://classic.minecraft.net"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=classic.minecraft.net&sz=64" alt=""></div><div class="meta"><div class="name">Minecraft Classic</div><div class="url">classic.minecraft.net</div></div></a>
-      </div>
-    </section>
-
-    <section class="section glass">
-      <h2>Puzzle and geography</h2>
-      <div class="grid">
-        <a class="card" href="https://www.geoguessr.com/"><div class="favicon"><img src="https://www.google.com/s2/favicons?domain=geoguessr.com&sz=64" alt=""></div><div class="meta"><div class="name">GeoGuessr</div><div class="url">geoguessr.com</div></div></a>
-      </div>
-    </section>
-
-    <div class="footer">Icons are loaded via Google favicon service when available. Game availability and performance depend on the destination site and WebView2.</div>
+  <div class="card">
+    <h1>Games</h1>
+    <p style="color:var(--muted)">Games page.</p>
+    <p><a href="index.html">Home</a></p>
   </div>
 </body>
 </html>

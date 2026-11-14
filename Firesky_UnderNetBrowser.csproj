@@ -100,17 +100,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- WebView2 Evergreen loader redistributable (x64). Required for loader/env init; runtime itself is system-installed. -->
+    <!-- Homepage files are embedded into the DLL and deployed to UserData at runtime (no loose Mods\...\Homepage folder needed). -->
+    <EmbeddedResource Include="Homepage\**\*" />
+    <EmbeddedResource Include="UnderNetIcon.png" />
     <Content Include="Redist\WebView2\WebView2Loader.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <TargetPath>WebView2Loader.dll</TargetPath>
     </Content>
-    <Content Include="Homepage\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <TargetPath>Homepage\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </Content>
-    <EmbeddedResource Include="UnderNetIcon.png" />
   </ItemGroup>
 </Project>

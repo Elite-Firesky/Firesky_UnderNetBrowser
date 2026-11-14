@@ -3,137 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- UnderNetBrowser:managed-homepage version=5 -->
 <title>UnderNet Notepad</title>
 <style>
-  :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
+  :root { --bg:#07110d; --panel:#0f1b16; --edge:#214033; --text:#e9f7ee; --muted:#9bb7aa; --accent:#7cff6b; }
   *{box-sizing:border-box} html,body{height:100%;margin:0}
-  body{font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif;font-size:15px;color:var(--text);background:radial-gradient(1000px 420px at 12% -8%, rgba(53,217,123,.16), transparent 60%),linear-gradient(180deg,var(--bg0),var(--bg1) 40%,var(--bg2));}
-  .wrap{min-height:100%;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
-  .glass{border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg,rgba(14,22,18,.95),rgba(8,13,10,.97));box-shadow:0 14px 34px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.03)}
-  .hero{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-  h1{margin:0;font-size:26px;letter-spacing:1.4px;text-transform:uppercase}
-  .sub{margin:4px 0 0;color:var(--muted);font-size:13px}
-  .actions,.tools{display:flex;gap:8px;flex-wrap:wrap}
-  .btn,.mini{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;text-decoration:none;font-size:13px;font-weight:600;cursor:pointer}
-  .btn:hover,.mini:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
-  .layout{display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:0;flex:1}
-  .panel{padding:14px;min-height:0;display:flex;flex-direction:column}
-  .panel h2{margin:0 0 8px;font-size:14px;letter-spacing:1.2px;text-transform:uppercase;color:#d9ecdf}
-  .list{display:grid;gap:8px;overflow:auto;padding-right:2px}
-  .note-item{padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);cursor:pointer}
-  .note-item.active{border-color:rgba(124,255,107,.4);background:rgba(124,255,107,.06)}
-  .note-item .t{font-size:14px;font-weight:700;color:#eefbf3;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .note-item .m{font-size:12px;color:var(--muted2)}
-  .editor{display:flex;flex-direction:column;gap:10px;min-height:0;flex:1}
-  input[type=text]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03);color:var(--text);font:inherit;font-size:15px;outline:none}
-  textarea{flex:1;min-height:320px;width:100%;resize:vertical;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.02);color:var(--text);font:inherit;font-size:14px;line-height:1.55;outline:none}
-  input[type=text]:focus,textarea:focus{border-color:rgba(124,255,107,.35);box-shadow:0 0 0 1px rgba(124,255,107,.08) inset}
-  .status{color:var(--muted2);font-size:12px}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-  .hint{color:var(--muted);font-size:13px;line-height:1.5}
-  @media (max-width:980px){.layout{grid-template-columns:1fr}}
+  body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+  .card{max-width:900px;margin:0 auto;background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:20px}
+  a{color:var(--accent);text-decoration:none}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <header class="hero glass">
-      <div><h1>Notepad</h1><div class="sub">Local notes saved in this browser profile (localStorage)</div></div>
-      <div class="actions"><a class="btn" href="index.html">← Home</a><a class="btn" href="settings.html">⚙ Shortcuts</a></div>
-    </header>
-    <div class="layout">
-      <aside class="panel glass">
-        <div class="row" style="margin-bottom:8px"><h2>Notes</h2><button class="mini" id="newNote" type="button">+ New</button></div>
-        <div class="list" id="noteList"></div>
-        <p class="hint" style="margin-top:10px">Notes are stored locally in the UnderNet browser profile on this PC.</p>
-      </aside>
-      <section class="panel glass">
-        <div class="editor">
-          <input id="title" type="text" placeholder="Note title…" />
-          <textarea id="body" placeholder="Write your note here…"></textarea>
-          <div class="row">
-            <div class="tools">
-              <button class="mini" id="save" type="button">Save</button>
-              <button class="mini" id="duplicate" type="button">Duplicate</button>
-              <button class="mini" id="delete" type="button">Delete</button>
-            </div>
-            <div class="status" id="status">Ready</div>
-          </div>
-        </div>
-      </section>
-    </div>
+  <div class="card">
+    <h1>Notepad</h1>
+    <p style="color:var(--muted)">Notepad page.</p>
+    <p><a href="index.html">Home</a></p>
   </div>
-<script>
-(function(){
-  var KEY='undernet_notepad_v1';
-  var notes=[], activeId=null;
-  function uid(){ return 'n_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
-  function now(){ return Date.now(); }
-  function fmt(ts){ try{ var d=new Date(ts); function p(n){return (n<10?'0':'')+n} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }catch(_){ return ''; } }
-  function load(){ try{ notes=JSON.parse(localStorage.getItem(KEY)||'[]')||[]; }catch(_){ notes=[]; } if(!Array.isArray(notes)) notes=[]; notes.sort(function(a,b){return (b.updated||0)-(a.updated||0)}); }
-  function persist(msg){ try{ localStorage.setItem(KEY, JSON.stringify(notes)); setStatus(msg||('Saved '+fmt(now()))); }catch(_){ setStatus('Save failed (storage unavailable)'); } }
-  function setStatus(t){ var el=document.getElementById('status'); if(el) el.textContent=t; }
-  function current(){ for(var i=0;i<notes.length;i++) if(notes[i].id===activeId) return notes[i]; return null; }
-  function renderList(){
-    var list=document.getElementById('noteList'); if(!list) return;
-    list.innerHTML='';
-    if(!notes.length){ var e=document.createElement('div'); e.className='hint'; e.textContent='No notes yet. Create one to get started.'; list.appendChild(e); return; }
-    for(var i=0;i<notes.length;i++){
-      (function(n){
-        var item=document.createElement('div'); item.className='note-item'+(n.id===activeId?' active':'');
-        var t=document.createElement('div'); t.className='t'; t.textContent=n.title||'Untitled note';
-        var m=document.createElement('div'); m.className='m'; m.textContent='Updated '+fmt(n.updated||n.created||now());
-        item.appendChild(t); item.appendChild(m);
-        item.addEventListener('click', function(){ select(n.id); });
-        list.appendChild(item);
-      })(notes[i]);
-    }
-  }
-  function select(id){
-    activeId=id; var n=current();
-    document.getElementById('title').value = n ? (n.title||'') : '';
-    document.getElementById('body').value = n ? (n.body||'') : '';
-    renderList();
-    setStatus(n ? ('Editing · Updated '+fmt(n.updated||n.created||now())) : 'Ready');
-  }
-  function ensureActive(){
-    if(current()) return current();
-    if(notes.length){ select(notes[0].id); return current(); }
-    return createNote(false);
-  }
-  function createNote(selectNew){
-    var n={id:uid(), title:'Untitled note', body:'', created:now(), updated:now()};
-    notes.unshift(n); persist('New note created'); if(selectNew!==false) select(n.id); else renderList(); return n;
-  }
-  function saveCurrent(){
-    var n=ensureActive(); if(!n) return;
-    n.title=(document.getElementById('title').value||'').trim() || 'Untitled note';
-    n.body=document.getElementById('body').value||'';
-    n.updated=now();
-    notes.sort(function(a,b){return (b.updated||0)-(a.updated||0)});
-    persist(); renderList();
-  }
-  function deleteCurrent(){
-    var n=current(); if(!n){ setStatus('Nothing to delete'); return; }
-    notes=notes.filter(function(x){return x.id!==n.id});
-    persist('Note deleted');
-    if(notes.length) select(notes[0].id); else { activeId=null; document.getElementById('title').value=''; document.getElementById('body').value=''; renderList(); setStatus('No notes'); }
-  }
-  function duplicateCurrent(){
-    var n=current(); if(!n){ setStatus('Nothing to duplicate'); return; }
-    var copy={id:uid(), title:(n.title||'Untitled note')+' (copy)', body:n.body||'', created:now(), updated:now()};
-    notes.unshift(copy); persist('Note duplicated'); select(copy.id);
-  }
-  document.getElementById('newNote').addEventListener('click', function(){ createNote(true); });
-  document.getElementById('save').addEventListener('click', saveCurrent);
-  document.getElementById('delete').addEventListener('click', deleteCurrent);
-  document.getElementById('duplicate').addEventListener('click', duplicateCurrent);
-  document.getElementById('title').addEventListener('input', function(){ setStatus('Unsaved changes'); });
-  document.getElementById('body').addEventListener('input', function(){ setStatus('Unsaved changes'); });
-  document.addEventListener('keydown', function(e){ if((e.ctrlKey||e.metaKey) && (e.key==='s'||e.key==='S')){ e.preventDefault(); saveCurrent(); } });
-  load();
-  if(notes.length) select(notes[0].id); else { renderList(); setStatus('Ready · Create a note'); }
-  window.addEventListener('beforeunload', function(){ try{ var n=current(); if(n){ n.title=(document.getElementById('title').value||'').trim()||'Untitled note'; n.body=document.getElementById('body').value||''; n.updated=now(); localStorage.setItem(KEY, JSON.stringify(notes)); } }catch(_){ } });
-})();
-</script>
 </body>
 </html>
