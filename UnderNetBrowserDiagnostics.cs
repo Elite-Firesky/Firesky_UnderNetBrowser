@@ -55,6 +55,7 @@ namespace Firesky.UnderNetBrowser
 
         // Warnings (dedupe)
         private static readonly HashSet<string> _warned = new(StringComparer.OrdinalIgnoreCase);
+        private static volatile bool _browserIntentionallyAlive;
 
         // Event timing metrics (measurable lifecycle timings)
         private static float _tvInteractionAt = -1f;
@@ -88,6 +89,7 @@ namespace Firesky.UnderNetBrowser
         }
 
         public static bool IsEnabled => _enabled;
+        public static void SetBrowserIntentionalAlive(bool alive) { _browserIntentionallyAlive = alive; }
 
         public static void InitializeIfEnabled()
         {
@@ -131,6 +133,7 @@ namespace Firesky.UnderNetBrowser
                     _phaseSamples.Clear();
                     foreach (Phase p in Enum.GetValues(typeof(Phase))) _phaseSamples[p] = new List<SampleSnapshot>();
                     _warned.Clear();
+                    _browserIntentionallyAlive = false;
                     _recoveryTracking = false; _recoveryStableSince = -1f; _recoveryDetectedAt = -1f; _recoveryTargetBaselineFps = 0f;
                     _tvInteractionAt = _browserVisibleAt = _webViewInitStartAt = _webViewInitDoneAt = _firstRenderedFrameAt = _detachRequestedAt = _gameplayResumedAt = -1f;
 
@@ -435,8 +438,28 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                if (s.FpsAvg > 0 && s.FpsAvg < 30f) WarnOnce($"low_fps_{_currentPhase}", $"[Diagnostics][WARN] Sustained low FPS in {_currentPhase}: avg={s.FpsAvg:0.##} 1%low={s.Fps1Low:0.##} p99={s.FrameMsP99:0.##}ms");
-                if (s.FrameMsP99 > 50f) WarnOnce($"spike_p99_{_currentPhase}_{(int)(s.SessionSec/10)}", $"[Diagnostics][WARN] Frame-time spike pressure in {_currentPhase}: p99={s.FrameMsP99:0.##}ms max={s.FrameMsMax:0.##}ms");
+                int phaseSampleCount = 0;
+                try { if (_phaseSamples.TryGetValue(_currentPhase, out var plist) && plist != null) phaseSampleCount = plist.Count; } catch { phaseSampleCount = 0; }
+                float phaseAgeSec = Mathf.Max(0f, Time.realtimeSinceStartup - _phaseStartRealtime);
+                bool warmupPhase = _currentPhase == Phase.A_GameplayBaseline || _currentPhase == Phase.B_TvInteraction || _currentPhase == Phase.C_BrowserLoading || _currentPhase == Phase.D_BrowserActive || _currentPhase == Phase.E_GameplayResumed || _currentPhase == Phase.F_Recovery;
+                bool inWarmupWindow = warmupPhase && (phaseAgeSec < 8f || phaseSampleCount < 4);
+
+                // Alt-tabbing can cap the game around ~20 FPS; avoid false positives unless we see clear drops below that floor.
+                // Treat <21 FPS as "below headroom" in worst-1% terms, but require a meaningful dip below ~20 FPS to warn.
+                float minFpsInWindow = s.FrameMsMax > 0.0001f ? 1000f / s.FrameMsMax : 0f;
+                bool hasSub20Dip = minFpsInWindow > 0f && minFpsInWindow < 20f;
+                bool sustainedLowFps = s.FpsAvg > 0f && s.FpsAvg < 30f && (s.Fps1Low < 19f || s.FpsAvg < 19.5f) && hasSub20Dip;
+                bool spikePressure = s.FrameMsP99 > 55f && hasSub20Dip;
+
+                if (!inWarmupWindow)
+                {
+                    if (sustainedLowFps)
+                        WarnOnce($"low_fps_{_currentPhase}", $"[Diagnostics][WARN] Sustained low FPS in {_currentPhase}: avg={s.FpsAvg:0.##} 1%low={s.Fps1Low:0.##} p99={s.FrameMsP99:0.##}ms min~={minFpsInWindow:0.##}fps");
+
+                    if (spikePressure)
+                        WarnOnce($"spike_p99_{_currentPhase}_{(int)(s.SessionSec/10)}", $"[Diagnostics][WARN] Frame-time spike pressure in {_currentPhase}: p99={s.FrameMsP99:0.##}ms max={s.FrameMsMax:0.##}ms min~={minFpsInWindow:0.##}fps");
+                }
+
                 if (_phaseSamples.TryGetValue(Phase.A_GameplayBaseline, out var a) && a.Count >= 2)
                 {
                     double basePriv = a.Average(x => (double)x.PrivateBytes);
@@ -445,7 +468,8 @@ namespace Firesky.UnderNetBrowser
                 }
                 if ((_currentPhase == Phase.E_GameplayResumed || _currentPhase == Phase.F_Recovery) && s.WebView2Count > 0)
                 {
-                    if (_phaseSamples[_currentPhase].Count >= 5)
+                    // Detached/warm browser sessions intentionally keep WebView2 alive; do not treat as lifecycle leak in that state.
+                    if (!_browserIntentionallyAlive && phaseSampleCount >= 5 && phaseAgeSec >= 12f)
                         WarnOnce($"webview2_linger_{_currentPhase}", $"[Diagnostics][WARN] WebView2 processes still present in {_currentPhase}: count={s.WebView2Count} ws={s.WebView2WorkingSet / (1024 * 1024)}MB (verify expected lifecycle/caching)");
                 }
             }
@@ -465,6 +489,7 @@ namespace Firesky.UnderNetBrowser
                 sw.WriteLine($"GeneratedUtc: {DateTime.UtcNow:o}");
                 sw.WriteLine($"SampleIntervalSec: {_sampleInterval:0.###}");
                 sw.WriteLine($"FinalPhase: {_currentPhase}");
+                sw.WriteLine($"BrowserIntentionallyAliveAtSummary: {_browserIntentionallyAlive}");
                 sw.WriteLine();
                 sw.WriteLine("Lifecycle timings (seconds since session start, -1 = not observed):");
                 sw.WriteLine($"  tv_interaction_begin: {_tvInteractionAt:0.###}");
@@ -492,7 +517,7 @@ namespace Firesky.UnderNetBrowser
                 sw.WriteLine("- proc_working_set / proc_private_bytes: game process (System.Diagnostics.Process).");
                 sw.WriteLine("- gc_total_memory / gc0-2: managed GC.GetTotalMemory(false) and collection counts (no forced GC).");
                 sw.WriteLine("- threads/handles: process thread/handle counts.");
-                sw.WriteLine("- webview2_*: best-effort count and summed memory of all 'msedgewebview2' processes on system (not strictly scoped to this mod/profile). Lingering processes may indicate caching or leak; correlate with lifecycle.");
+                sw.WriteLine("- webview2_*: best-effort count and summed memory of all 'msedgewebview2' processes on system (not strictly scoped to this mod/profile). Lingering processes may indicate caching or leak; correlate with lifecycle and intentional warm/detached browser state.");
                 sw.WriteLine("- Not reliably available from this managed IL2CPP mod without extra native/profiler hooks: main vs render thread timings, CPU/GPU utilization %, GPU memory, Unity texture/render-target memory, D3D11 resource create/release counts, WebView2 child-process role breakdown. These require in-game/profiler/native instrumentation.");
                 sw.WriteLine("- Event timings recorded only when lifecycle hooks fire; navigation completion time is not explicitly instrumented in this milestone.");
                 sw.WriteLine();

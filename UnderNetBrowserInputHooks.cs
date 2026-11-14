@@ -32,6 +32,8 @@ namespace Firesky.UnderNetBrowser
         private static volatile bool _urlBarFocused;
         private static volatile bool _webFocused;
         private static volatile bool _pointerOverBrowser;
+        private static volatile bool _webTextEntryActive; // best-effort: web content has active text/search typing context
+        private static volatile bool _gameInputModeActive; // F6 game input mode: forward keys to web game, suppress chat Enter etc.
 
         // Diagnostics (updated from hooks/main thread)
         private static long _wheelBlocked;
@@ -54,6 +56,7 @@ namespace Firesky.UnderNetBrowser
             _urlBarFocused = urlBarFocused;
             _webFocused = webFocused;
             _pointerOverBrowser = pointerOverBrowser;
+            if (!appOpen || urlBarFocused || !webFocused) _webTextEntryActive = false;
 
             // Input ownership model:
             // - webFocused/urlBarFocused: browser owns keyboard/wheel/number keys for web/URL interaction (forward to WebView2 as appropriate).
@@ -71,6 +74,18 @@ namespace Firesky.UnderNetBrowser
         public static bool IsBlockHotbarSelection => _blockHotbarSelection;
         public static bool IsSuppressGameplayMovement => _suppressGameplayMovement;
         public static bool IsAppOpen => _appOpen;
+
+        public static void SetWebTextEntryActive(bool active)
+        {
+            _webTextEntryActive = active && _appOpen && _webFocused && !_urlBarFocused;
+        }
+
+        public static bool IsWebTextEntryActive => _webTextEntryActive && _appOpen && _webFocused && !_urlBarFocused;
+
+        public static void SetGameInputModeActive(bool active)
+        {
+            _gameInputModeActive = active;
+        }
 
         public static void EnsureInstalled()
         {
@@ -374,9 +389,11 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (!_appOpen) return false;
-                // While browser app is open and focused on URL bar or web content, Enter should not open external chat mods.
-                // (URL bar submit / web submit are handled by the browser; ESC behavior is handled separately.)
-                return _urlBarFocused || _webFocused;
+                // Suppress in-game chat Enter when address bar is focused for typing,
+                // in Game Input Mode (web receives keys), or when a web text/search field is actively being typed into (best-effort).
+                if (_urlBarFocused) return true;
+                if (_webFocused && _gameInputModeActive) return true;
+                return _webFocused && _webTextEntryActive;
             }
             catch { return false; }
         }
@@ -388,10 +405,10 @@ namespace Firesky.UnderNetBrowser
                 if (!_appOpen) return false;
                 if (key != UnityEngine.KeyCode.Return && key != UnityEngine.KeyCode.KeypadEnter) return false;
                 if (UnityEngine.Time.realtimeSinceStartup > _suppressEnterForGameUntilRealtime) return false;
-                // Only suppress during a brief post-handling window. Continuous suppression in browser text contexts breaks
-                // UnderNetBrowser's own UnityEngine.Input-based Enter handling (and Unity Input System mods like Simple Chat
-                // are not blocked by Input.GetKey hooks anyway; Simple Chat is handled via a targeted Harmony patch).
-                return _urlBarFocused || _webFocused;
+                // Only suppress during a brief post-handling window in browser typing/game-input contexts.
+                if (_urlBarFocused) return true;
+                if (_webFocused && _gameInputModeActive) return true;
+                return _webFocused && _webTextEntryActive;
             }
             catch { return false; }
         }

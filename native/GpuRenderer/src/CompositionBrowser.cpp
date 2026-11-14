@@ -126,6 +126,11 @@ struct CompositionBrowser::Impl {
     std::atomic<uint64_t> lastFrameAcceptMs{0};
     std::atomic<uint64_t> lastCopyMs{0};
 
+    // Zoom (applied on browser thread)
+    std::atomic<bool> zoomPending{false};
+    std::atomic<int> zoomFactorMilli{1000}; // 1.0 = 1000
+    std::atomic<int> currentZoomFactorMilli{1000};
+
     // Stage 4.1 startup timeline markers (ms since Start thread baseline; -1 = not observed)
     std::atomic<uint64_t> startTickMs{0};
     std::atomic<int64_t> tEnvReqMs{-1};
@@ -1053,6 +1058,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                             impl->tNavCompletedMs.compare_exchange_strong(e, s? (int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed);
                                             if (args) { BOOL ok = FALSE; args->get_IsSuccess(&ok); COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN; try { args->get_WebErrorStatus(&st); } catch(...) {} impl->tNavCompletedStatus.store(ok ? 1 : -(int64_t)st, std::memory_order_relaxed); }
                                         } catch(...) {}
+                                        // Removed: prior best-effort playback auto-resume guard (after user pause/input) caused unwanted behavior and did not resolve the original issue.
                                         return S_OK;
                                     }).Get(), nullptr);
                             } catch (...) {}
@@ -1604,6 +1610,26 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                     impl->currentUrl = src;
                     CoTaskMemFree(src);
                 } else if (src) { CoTaskMemFree(src); }
+            }
+            if (impl->controller) {
+                try {
+                    double z = 1.0;
+                    if (SUCCEEDED(impl->controller->get_ZoomFactor(&z))) {
+                        int zm = (int)(z * 1000.0 + (z >= 0 ? 0.5 : -0.5));
+                        if (zm < 100) zm = 100; if (zm > 5000) zm = 5000;
+                        impl->currentZoomFactorMilli.store(zm, std::memory_order_relaxed);
+                    }
+                } catch (...) {}
+                if (impl->zoomPending.exchange(false, std::memory_order_relaxed)) {
+                    try {
+                        int zm = impl->zoomFactorMilli.load(std::memory_order_relaxed);
+                        if (zm < 250) zm = 250; if (zm > 5000) zm = 5000;
+                        impl->zoomFactorMilli.store(zm, std::memory_order_relaxed);
+                        double zf = (double)zm / 1000.0;
+                        impl->controller->put_ZoomFactor(zf);
+                        impl->currentZoomFactorMilli.store(zm, std::memory_order_relaxed);
+                    } catch (...) {}
+                }
             }
             if(impl->compController){
                 // Stage 3 PoC: delayed capture start after stable init/frames; best-effort mute to avoid double audio when capturing.
@@ -2359,6 +2385,25 @@ void CompositionBrowser::RequestFocus(){
     if(!m_impl) return;
     m_impl->diagFocusReqSet.fetch_add(1, std::memory_order_relaxed);
     m_impl->focusRequested.store(true);
+}
+
+void CompositionBrowser::SetZoomFactor(double zoomFactor) {
+    if (!m_impl) return;
+    if (!(zoomFactor > 0.0)) zoomFactor = 1.0;
+    if (zoomFactor < 0.25) zoomFactor = 0.25;
+    if (zoomFactor > 5.0) zoomFactor = 5.0;
+    int zm = (int)(zoomFactor * 1000.0 + 0.5);
+    if (zm < 250) zm = 250;
+    if (zm > 5000) zm = 5000;
+    m_impl->zoomFactorMilli.store(zm, std::memory_order_relaxed);
+    m_impl->zoomPending.store(true, std::memory_order_relaxed);
+}
+
+double CompositionBrowser::GetZoomFactor() const {
+    if (!m_impl) return 1.0;
+    int zm = m_impl->currentZoomFactorMilli.load(std::memory_order_relaxed);
+    if (zm <= 0) zm = 1000;
+    return (double)zm / 1000.0;
 }
 
 static std::vector<uint32_t> CollectProcessTreePids(uint32_t rootPid)

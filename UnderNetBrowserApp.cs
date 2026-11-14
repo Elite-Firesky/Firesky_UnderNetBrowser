@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using MelonLoader;
@@ -48,9 +48,12 @@ namespace Firesky.UnderNetBrowser
         private bool _gameInputMode;
         private readonly System.Collections.Generic.HashSet<int> _gameKeysHeld = new System.Collections.Generic.HashSet<int>();
         private bool _gameInputPrevUrlFocused;
-        private float _lastRepairCheck;
-        private float _lastRepairDonorSearch;
         private bool _repairStateLoggedBad;
+        private bool _repairBackoffActive;
+        private float _repairNextAllowedRealtime;
+        private float _lastRepairStateLogRealtime;
+        private string _lastRepairStateSignature = string.Empty;
+        private bool _browserUiCriticalActionInProgress;
         private float _lastInputBlockAttempt;
         private readonly List<InputStateSnapshot> _savedInputStates = new List<InputStateSnapshot>();
 
@@ -65,6 +68,7 @@ namespace Firesky.UnderNetBrowser
         private UnderNetBrowserCompositionCapture? _gpuCompositionCapture;
         private bool _gpuCompositionMode;
         private bool _compositionWebFocused;
+        private float _lastWebTextEntryActivityRealtime = -999f;
         private bool _compositionFocusPrimed;
 
         // External window mirror mode (e.g. Discord window capture via WGC)
@@ -109,6 +113,8 @@ namespace Firesky.UnderNetBrowser
         private bool _adaptiveLastTvVisible = true;
         private float _adaptiveLastDistance = -1f;
         private float _adaptiveLastDiagLogTime = -999f;
+        private float _adaptiveUnfocusedSinceRealtime = -1f;
+        private bool _browserHostCursorHidden;
         // Arrow-key media control repeat (seek/volume) for attached/detached browser playback
         private float _nextMediaArrowRepeatLeft = -1f;
         private float _nextMediaArrowRepeatRight = -1f;
@@ -203,6 +209,7 @@ namespace Firesky.UnderNetBrowser
                 _compositionWebFocused = false;
                 _browserPointerDown = false;
                 _browserPointerRightDown = false;
+                try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(false); } catch { }
                 try { ReleaseAllGameKeys("shutdown:" + reason); } catch { }
                 _gameInputMode = false;
                 try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
@@ -227,12 +234,16 @@ namespace Firesky.UnderNetBrowser
                 _distanceVolumeTvTransform = null;
                 try { ResetAdaptiveRenderingState("shutdown:" + reason); } catch { }
 
-                // Best-effort: stop media/playback before teardown in case native stop event is delayed/missed during unload.
-                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
-                try { ReleaseAllGameKeys("shutdown_navigate_blank"); } catch { }
-                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
-                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                // Best-effort teardown. Avoid script/navigation into a potentially hung WebView before dispose,
+                // as these can block on native synchronization during unload/recovery shutdowns.
+                try { ClearReattachFocusRecoveryState(); } catch { }
+                try { ReleaseAllGameKeys("shutdown_dispose"); } catch { }
+                var captureToDispose = _gpuCompositionCapture;
                 _gpuCompositionCapture = null;
+                _gpuCompositionMode = false;
+                try { captureToDispose?.SendMouseUp(0, 0, false); } catch { }
+                try { captureToDispose?.SendMouseUp(0, 0, true); } catch { }
+                try { captureToDispose?.Dispose(); } catch { }
 
                 // Always attempt native shutdown even if managed capture reference was already cleared.
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
@@ -254,15 +265,36 @@ namespace Firesky.UnderNetBrowser
             _detachRequested = false;
             AnyDetachActive = false;
             _explicitCloseRequested = false;
+            bool wasDetached = _detachedToGameplay;
+            _detachedToGameplay = false;
+            _reattachBlockedUntilRealtime = -999f;
             try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { }
             TryHideGameHud();
             try { UnderNetBrowserInputHooks.EnsureInstalled(); } catch { }
+            // If S1API/game re-opens the app while we were in detached-background state, treat as authoritative reattach and force focus.
+            if (wasDetached)
+            {
+                if (_gameInputMode && UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    UnderNetBrowserConfig.Log("[UnderNetBrowser] OnOpened(from detached): resetting GameInputMode to OFF for deterministic focus/ownership.");
+                _gameInputMode = false;
+                try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
+                try { RestoreDetachedHomeScreenObjects(restoreHiddenObjects: false); } catch { }
+                try { TryForegroundS1AppForReattach(); } catch { }
+                try { SetAppInteractionEnabled(true); } catch { }
+                try { EnsureGraphicRaycastersEnabledForApp("OnOpened_from_detached"); } catch { }
+                try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
+                try { if (_urlInput != null && _urlInput.isFocused) _urlInput.DeactivateInputField(); } catch { }
+                try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                _compositionWebFocused = true;
+            }
             UpdateInputOwnershipState();
             // Hybrid suppression: hooks for supported callbacks + verified/explicit game API toggles + reflection fallback for unhooked paths.
             // Capture once per open so states can be restored on close.
             try { TryDisableGameInput(); } catch { }
             // Learn baseline hotbar slot to pin while open (fallback for unhooked equip paths).
             try { _lastKnownHotbarSlot = -1; TryRestoreEquippedSlotIndex(forceRestore: false); } catch { }
+            // Always force web focus on open/reattach entry to avoid "opened but not interactive" states.
+            BeginReattachFocusRecovery(wasDetached ? "OnOpened_from_detached" : "OnOpened");
             UnderNetBrowserConfig.Log("[UnderNetBrowser] OnOpened");
             try { UnderNetBrowserDiagnostics.OnBrowserVisible(); } catch { }
 
@@ -396,18 +428,24 @@ namespace Firesky.UnderNetBrowser
             bool explicitXClose = _explicitCloseRequested;
             _explicitCloseRequested = false; // consume once
             _warmCloseRequested = false; // consume once (normal/warm close path)
+            try { ClearReattachFocusRecoveryState(); } catch { }
             if (explicitXClose)
             {
                 // Explicit app close (X): fully shut down browser/WebView2 to avoid lingering processes.
+                // Avoid script/navigation calls into a potentially hung WebView (e.g. active text selection/drag)
+                // before teardown, as they can block on native synchronization and freeze the game.
                 try { ResetAdaptiveRenderingState("close_x"); } catch { }
                 try { StopExternalWindowMirror("closed_x"); } catch { }
                 try { StopSpatialAudioPlayback("closed_x"); } catch { }
-                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause(); ms[i].src=''; ms[i].load();}catch(_){}}}catch(_){}})();"); } catch { }
-                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
-                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                var captureToDispose = _gpuCompositionCapture;
                 _gpuCompositionCapture = null;
-                try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
                 _gpuCompositionMode = false;
+                // Best-effort: release any active pointer drag/selection before native teardown (can reduce shutdown hangs).
+                try { captureToDispose?.SendMouseUp(0, 0, false); } catch { }
+                try { captureToDispose?.SendMouseUp(0, 0, true); } catch { }
+                try { captureToDispose?.Dispose(); } catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] X close dispose failed (non-fatal): {ex.Message}"); } catch { } }
+                try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+                try { UnderNetBrowserGpuNative.ClearTargetTexture(); } catch { }
                 UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Browser runtime fully shut down (X close).");
             }
             else
@@ -449,18 +487,30 @@ namespace Firesky.UnderNetBrowser
         protected override void OnResumed()
         {
             base.OnResumed();
+            bool wasDetached = _detachedToGameplay;
             _detachedToGameplay = false;
             _detachRequested = false;
             AnyDetachActive = false;
+            _reattachBlockedUntilRealtime = -999f;
             try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
             // Do not reactivate hidden TV home/clock objects on resume; app remains active.
             try { RestoreDetachedHomeScreenObjects(restoreHiddenObjects: false); } catch { }
+            if (wasDetached && _gameInputMode && UnderNetBrowserConfig.DebugLogging?.Value == true)
+                UnderNetBrowserConfig.Log("[UnderNetBrowser] OnResumed(from detached): resetting GameInputMode to OFF for deterministic focus/ownership.");
+            if (wasDetached) _gameInputMode = false;
+            try { if (!_gameInputMode && _gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
+            try { TryForegroundS1AppForReattach(); } catch { }
             try { SetAppInteractionEnabled(true); } catch { }
+            try { EnsureGraphicRaycastersEnabledForApp("OnResumed"); } catch { }
             try { UnderNetBrowserInputHooks.EnsureInstalled(); } catch { }
+            try { if (_urlInput != null && _urlInput.isFocused) _urlInput.DeactivateInputField(); } catch { }
+            try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+            _compositionWebFocused = true;
             UpdateInputOwnershipState();
             try { TryHideGameHud(); } catch { }
             try { TryDisableGameInput(); } catch { }
             try { if (_lastKnownHotbarSlot < 0) TryRestoreEquippedSlotIndex(forceRestore: false); } catch { }
+            BeginReattachFocusRecovery(wasDetached ? "OnResumed_from_detached" : "OnResumed");
         }
 
         protected override void OnUpdate()
@@ -468,6 +518,7 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (!IsOpen) return;
+                try { RefreshWebTextEntryState(); } catch { }
                 // Clear detach transition flags after grace period (close-block/guard windows use time checks too).
                 if ((_detachRequested || AnyDetachActive) && (Time.realtimeSinceStartup - _detachRequestedTime) > 5.0f)
                 {
@@ -535,6 +586,7 @@ namespace Firesky.UnderNetBrowser
                 UpdateInputOwnershipState();
                 // Keep suppression/hotbar-slot pinning active (covers unhooked paths like OnMove and alternate equip-slot changes). Throttled internally.
                 try { TryEnsureGameInputSuppressed(); } catch { }
+                try { TickReattachFocusRecovery(); } catch { }
                 HandleClipboardPaste();
                 HandleBrowserPointerInput();
                 HandleCompositionKeyboardInput();
@@ -596,9 +648,8 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                if (Time.realtimeSinceStartup - _lastRepairCheck >= 1.0f)
+                if (Time.realtimeSinceStartup >= _repairNextAllowedRealtime)
                 {
-                    _lastRepairCheck = Time.realtimeSinceStartup;
                     var diagGo = _videoDisplay != null ? (_videoDisplay.transform.parent?.gameObject ?? _videoDisplay.gameObject) : null;
                     if (diagGo != null) RepairS1APICanvasState(diagGo, "OnUpdate");
                 }
@@ -611,15 +662,17 @@ namespace Firesky.UnderNetBrowser
                 }
                 else if (_gpuCompositionCapture != null)
                 {
-                    // If user navigates (via in-page shortcut/link) to Discord Web and Discord is running, switch to window mirror.
+                    // If a mirror request URL appears in the browser, switch to window mirror (mirror-only, no web redirect).
                     try
                     {
                         var cur = _gpuCompositionCapture.CurrentUrl;
                         if (IsDiscordMirrorRequestUrl(cur) && Time.realtimeSinceStartup - _lastExternalMirrorAttemptTime > 1.5f)
                         {
-                            // Try mirror; if it fails, stay on web Discord (avoid tight retry loop by updating attempt time inside TryStart)
                             if (TryStartDiscordMirror(cur))
                                 return;
+                            // If mirror request can't be satisfied, navigate back to home (do not load Discord web).
+                            try { _gpuCompositionCapture.Navigate(GetResolvedHomeUrl()); } catch { }
+                            try { SetHint("Discord mirror unavailable (is Discord running?)."); } catch { }
                         }
                     }
                     catch { }
@@ -724,11 +777,23 @@ namespace Firesky.UnderNetBrowser
             var text = (input ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(text)) return "https://www.google.com";
 
+            // Internal command routes (handled by app, not navigated as web URLs)
+            if (text.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
+                return text;
+
             // Built-in routes
             if (text.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) || text.Equals("about:home", StringComparison.OrdinalIgnoreCase))
                 return "undernet:home";
             if (text.Equals("home:home", StringComparison.OrdinalIgnoreCase) || text.Equals("home:homepage", StringComparison.OrdinalIgnoreCase))
                 return "undernet:home";
+            if (text.Equals("undernet:games", StringComparison.OrdinalIgnoreCase) || text.Equals("home:games", StringComparison.OrdinalIgnoreCase))
+                return "undernet:games";
+            if (text.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase) || text.Equals("home:settings", StringComparison.OrdinalIgnoreCase))
+                return "undernet:settings";
+            if (text.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase) || text.Equals("home:notepad", StringComparison.OrdinalIgnoreCase))
+                return "undernet:notepad";
+            if (text.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase) || text.Equals("home:ai", StringComparison.OrdinalIgnoreCase))
+                return "undernet:ai";
 
             // App routes (simple local UI host): home:<id>, undernet:<id>, undernet:app/<id>
             if (TryParseLocalAppRoute(text, out var appId))
@@ -744,6 +809,14 @@ namespace Firesky.UnderNetBrowser
             var normalized = NormalizeUrl(input);
             if (normalized.Equals("undernet:home", StringComparison.OrdinalIgnoreCase))
                 return GetOrCreateHomepageUrl();
+            if (normalized.Equals("undernet:games", StringComparison.OrdinalIgnoreCase))
+                return GetOrCreateHomepagePageUrl("games.html");
+            if (normalized.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase))
+                return GetOrCreateHomepagePageUrl("settings.html");
+            if (normalized.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase))
+                return GetOrCreateHomepagePageUrl("notepad.html");
+            if (normalized.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase))
+                return "https://www.google.com/ai";
 
             // Local app UI routes -> file:///.../root/Apps/<id>/index.html
             if (TryParseLocalAppRoute(normalized, out var appId))
@@ -759,6 +832,7 @@ namespace Firesky.UnderNetBrowser
             // Migrate previous default to new built-in homepage experience
             if (normalized.Equals("https://www.youtube.com", StringComparison.OrdinalIgnoreCase) && string.Equals(UnderNetBrowserConfig.HomeUrl?.Value?.Trim(), "undernet:home", StringComparison.OrdinalIgnoreCase))
                 return GetOrCreateHomepageUrl();
+            // Normalize direct Google AI URLs to built-in AI route display context by allowing navigation but we keep URL as-is here? no, target stays google
             return normalized;
         }
 
@@ -845,8 +919,10 @@ namespace Firesky.UnderNetBrowser
                 if (candidate.IndexOf('/') >= 0 || candidate.IndexOf('\\') >= 0) return false;
 
                 if (!IsSafeAppId(candidate)) return false;
-                // Reserve homepage tokens
-                if (candidate.Equals("home", StringComparison.OrdinalIgnoreCase) || candidate.Equals("homepage", StringComparison.OrdinalIgnoreCase))
+                // Reserve homepage tokens / built-in routes
+                if (candidate.Equals("home", StringComparison.OrdinalIgnoreCase) || candidate.Equals("homepage", StringComparison.OrdinalIgnoreCase) ||
+                    candidate.Equals("games", StringComparison.OrdinalIgnoreCase) || candidate.Equals("settings", StringComparison.OrdinalIgnoreCase) ||
+                    candidate.Equals("notepad", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ai", StringComparison.OrdinalIgnoreCase))
                     return false;
 
                 appId = candidate.ToLowerInvariant();
@@ -925,6 +1001,31 @@ namespace Firesky.UnderNetBrowser
                     try { File.WriteAllText(homepagePath, BuildDefaultHomepageHtml()); } catch { }
                 }
 
+                // Ensure built-in homepage companion pages (games/settings). Create if missing; users can customize.
+                try
+                {
+                    var homeDir = GetHomepageDir();
+                    var gamesPath = Path.Combine(homeDir, "games.html");
+                    if (!File.Exists(gamesPath))
+                    {
+                        try { File.WriteAllText(gamesPath, BuildGamesPageHtml()); } catch { }
+                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage games page at root/Homepage/games.html.");
+                    }
+                    var settingsPath = Path.Combine(homeDir, "settings.html");
+                    if (!File.Exists(settingsPath))
+                    {
+                        try { File.WriteAllText(settingsPath, BuildSettingsPageHtml()); } catch { }
+                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage settings page at root/Homepage/settings.html.");
+                    }
+                    var notepadPath = Path.Combine(homeDir, "notepad.html");
+                    if (!File.Exists(notepadPath))
+                    {
+                        try { EnsureHomepageFileFromBundle(notepadPath, "notepad.html"); } catch { }
+                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created homepage notepad page at root/Homepage/notepad.html.");
+                    }
+                }
+                catch { }
+
                 // Ensure built-in example app exists (simple plug-and-play reference).
                 try
                 {
@@ -960,8 +1061,21 @@ namespace Firesky.UnderNetBrowser
 
                 if (!File.Exists(path))
                 {
-                    try { Directory.CreateDirectory(GetHomepageDir()); File.WriteAllText(path, BuildDefaultHomepageHtml()); } catch { }
+                    try { Directory.CreateDirectory(GetHomepageDir()); EnsureHomepageFileFromBundle(path, "index.html"); } catch { }
                 }
+
+                // Ensure companion pages exist when homepage is resolved/created.
+                try
+                {
+                    var homeDir = GetHomepageDir();
+                    var gamesPath = Path.Combine(homeDir, "games.html");
+                    if (!File.Exists(gamesPath)) { try { EnsureHomepageFileFromBundle(gamesPath, "games.html"); } catch { } }
+                    var settingsPath = Path.Combine(homeDir, "settings.html");
+                    if (!File.Exists(settingsPath)) { try { EnsureHomepageFileFromBundle(settingsPath, "settings.html"); } catch { } }
+                    var notepadPath = Path.Combine(homeDir, "notepad.html");
+                    if (!File.Exists(notepadPath)) { try { EnsureHomepageFileFromBundle(notepadPath, "notepad.html"); } catch { } }
+                }
+                catch { }
 
                 _cachedHomepageFileUrl = new Uri(path).AbsoluteUri;
                 return _cachedHomepageFileUrl;
@@ -970,6 +1084,34 @@ namespace Firesky.UnderNetBrowser
             {
                 UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage creation failed, falling back to Google: {ex.Message}");
                 return "https://www.google.com";
+            }
+        }
+
+        private string GetOrCreateHomepagePageUrl(string fileName)
+        {
+            try
+            {
+                EnsureWebAppsFoundation();
+                var homeDir = GetHomepageDir();
+                try { Directory.CreateDirectory(homeDir); } catch { }
+                var path = Path.Combine(homeDir, fileName);
+                if (!File.Exists(path))
+                {
+                    try { EnsureHomepageFileFromBundle(path, fileName); } catch { }
+                }
+                // Best-effort ensure common companions exist too
+                try
+                {
+                    var idx = GetHomepageFilePath();
+                    if (!File.Exists(idx)) { try { EnsureHomepageFileFromBundle(idx, "index.html"); } catch { } }
+                }
+                catch { }
+                return new Uri(path).AbsoluteUri;
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage page creation failed for '{fileName}': {ex.Message}");
+                return GetOrCreateHomepageUrl();
             }
         }
 
@@ -1079,135 +1221,92 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
-        private static string BuildDefaultHomepageHtml()
+        private static string? TryGetBundledHomepageSourcePath(string fileName)
         {
-            // Default UnderNet homepage (deployed to root/Homepage/index.html if missing). Users/mods can edit it.
-            return @"<!DOCTYPE html>
-<html lang=""en"">
-<head>
-<meta charset=""utf-8"" />
-<meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
-<title>UnderNet</title>
-<style>
-  :root{
-    --bg0:#040605; --bg1:#070b09; --bg2:#0a120e;
-    --panel:#0c1310; --edge:#1b2a22;
-    --text:#e9f7ee; --muted:#8ea89a; --muted2:#6f887c;
-    --accent:#7cff6b;
-  }
-  *{box-sizing:border-box} html,body{height:100%;margin:0}
-  body{
-    font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif; color:var(--text);
-    background:
-      radial-gradient(900px 420px at 15% -5%, rgba(53,217,123,.16), transparent 60%),
-      radial-gradient(700px 360px at 100% 0%, rgba(124,255,107,.10), transparent 55%),
-      linear-gradient(180deg, var(--bg0), var(--bg1) 35%, var(--bg2));
-  }
-  .wrap{height:100%;padding:26px 30px;display:flex;flex-direction:column;gap:18px}
-  .hero,.panel,.info{
-    border:1px solid var(--edge);border-radius:16px;
-    background:linear-gradient(180deg, rgba(14,22,18,.95), rgba(9,14,11,.96));
-    box-shadow:0 14px 34px rgba(0,0,0,.30), 0 0 0 1px rgba(124,255,107,.03) inset;
-  }
-  .hero{padding:18px 20px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-  .brand{display:flex;align-items:center;gap:14px}
-  .mark{width:52px;height:52px;border-radius:14px;background:radial-gradient(circle at 30% 28%, #d8ffbe 0%, var(--accent) 34%, #1b8f52 72%, #0f4a2f 100%);box-shadow:0 0 28px rgba(124,255,107,.20)}
-  h1{margin:0;font-size:34px;line-height:1;letter-spacing:2.4px;text-transform:uppercase}
-  h1 .u{color:var(--accent)}
-  .tag{margin:5px 0 0;color:var(--muted);font-size:12px;letter-spacing:1.1px;text-transform:uppercase}
-  .chips{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{padding:7px 11px;border-radius:999px;border:1px solid rgba(124,255,107,.22);background:rgba(124,255,107,.06);color:#dfffe3;font-size:11px;letter-spacing:.7px;text-transform:uppercase}
-  .chip.dim{border-color:rgba(255,255,255,.10);background:rgba(255,255,255,.03);color:#cfe0d6}
-  .content{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;min-height:0;flex:1}
-  .panel{padding:16px}
-  .section-title{display:flex;align-items:center;justify-content:space-between;margin:2px 4px 12px}
-  .section-title h2{margin:0;font-size:13px;letter-spacing:1.4px;text-transform:uppercase;color:#d7eadf}
-  .section-title span{font-size:11px;color:var(--muted2);letter-spacing:.6px;text-transform:uppercase}
-  .grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:12px}
-  .card{display:flex;align-items:center;gap:14px;text-decoration:none;color:var(--text);padding:14px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96))}
-  .card:hover{border-color:rgba(124,255,107,.42);box-shadow:0 0 0 1px rgba(124,255,107,.07) inset}
-  .icon{width:50px;height:50px;border-radius:12px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:20px}
-  .icon.yt{background:linear-gradient(180deg,#ff9696,#ff3b3b);color:#fff}
-  .icon.gg{background:linear-gradient(180deg,#ecff9a,#7cff6b);color:#0a1710}
-  .icon.app{background:linear-gradient(180deg,#b5f59a,#35d97b);color:#08110b}
-  .icon.dc{background:linear-gradient(180deg,#8ea1ff,#5865f2);color:#fff}
-  .meta .name{margin:0 0 3px;font-size:18px;font-weight:700}
-  .meta .desc{margin:0;font-size:12px;color:var(--muted);line-height:1.35}
-  .meta .url{margin:6px 0 0;font-size:11px;color:#7fa893}
-  .side{display:flex;flex-direction:column;gap:12px}
-  .info{padding:13px 14px;border-radius:12px}
-  .info h3{margin:0 0 6px;font-size:12px;letter-spacing:1.1px;text-transform:uppercase;color:#dcecdf}
-  .info p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.5}
-  code{color:#dfffe3}
-  .footer{display:flex;align-items:center;justify-content:space-between;color:#789083;font-size:11px;letter-spacing:.5px;padding:0 4px}
-  @media (max-width: 980px){.content{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
-  <div class=""wrap"">
-    <header class=""hero"">
-      <div class=""brand"">
-        <div class=""mark""></div>
-        <div class=""titlewrap"">
-          <h1><span class=""u"">Under</span>Net</h1>
-          <div class=""tag"">In-game browser + local app UI host</div>
-        </div>
-      </div>
-      <div class=""chips"">
-        <div class=""chip"">WebView2 Live</div>
-        <div class=""chip dim"">Local Apps Ready</div>
-      </div>
-    </header>
-
-    <main class=""content"">
-      <section class=""panel"">
-        <div class=""section-title"">
-          <h2>Quick Access</h2>
-          <span>Web & Apps</span>
-        </div>
-        <div class=""grid"">
-          <a class=""card"" href=""https://www.youtube.com"">
-            <div class=""icon yt"">▶</div>
-            <div class=""meta""><p class=""name"">YouTube</p><p class=""desc"">Videos, music, streams and live content.</p><p class=""url"">youtube.com</p></div>
-          </a>
-          <a class=""card"" href=""https://www.google.com"">
-            <div class=""icon gg"">G</div>
-            <div class=""meta""><p class=""name"">Google</p><p class=""desc"">Search the web from inside Schedule I.</p><p class=""url"">google.com</p></div>
-          </a>
-          <a class=""card"" href=""https://nfsu2.xyz/"">
-            <div class=""icon app"">N</div>
-            <div class=""meta""><p class=""name"">NFS Underground 2</p><p class=""desc"">Play Need for Speed: Underground 2 in-browser.</p><p class=""url"">nfsu2.xyz</p></div>
-          </a>
-          <a class=""card"" href=""https://discord.com/app"">
-            <div class=""icon dc"">D</div>
-            <div class=""meta""><p class=""name"">Discord</p><p class=""desc"">Mirror Discord if running, or open Discord Web.</p><p class=""url"">discord.com/app</p></div>
-          </a>
-          <a class=""card"" href=""home:example"">
-            <div class=""icon gg"">A</div>
-            <div class=""meta""><p class=""name"">Example App</p><p class=""desc"">Built-in sample local UI page (plug-and-play template).</p><p class=""url"">home:example</p></div>
-          </a>
-      </section>
-
-      <aside class=""side"">
-        <div class=""info"">
-          <h3>Local Apps (Simple)</h3>
-          <p>Drop a folder at <code>UserData/UnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code> and open it with <code>home:&lt;app-id&gt;</code>.</p>
-        </div>
-        <div class=""info"">
-          <h3>Homepage</h3>
-          <p>This page lives at <code>root/Homepage/index.html</code>. You can customize it freely.</p>
-        </div>
-      </aside>
-    </main>
-
-    <div class=""footer"">
-      <div>UNDERNET // LOCAL APP HOST</div>
-      <div>Schedule I TV Browser</div>
-    </div>
-  </div>
-</body>
-</html>";
+            try
+            {
+                if (string.IsNullOrWhiteSpace(fileName)) return null;
+                string? asmLoc = null;
+                try { asmLoc = typeof(UnderNetBrowserApp).Assembly.Location; } catch { asmLoc = null; }
+                var asmDir = string.IsNullOrWhiteSpace(asmLoc) ? null : Path.GetDirectoryName(asmLoc);
+                var candidates = new List<string>();
+                void Add(string? dir, params string[] parts)
+                {
+                    try
+                    {
+                        if (string.IsNullOrWhiteSpace(dir)) return;
+                        var p = dir;
+                        for (int i = 0; i < parts.Length; i++) p = Path.Combine(p, parts[i]);
+                        candidates.Add(p);
+                    }
+                    catch { }
+                }
+                Add(asmDir, "Homepage", fileName);
+                Add(asmDir, "UnderNetBrowser", "Homepage", fileName);
+                Add(asmDir, "FireskyUnderNetBrowser", "Homepage", fileName);
+                try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "UnderNetBrowser", "Homepage", fileName); } catch { }
+                try { Add(MelonLoader.Utils.MelonEnvironment.ModsDirectory, "FireskyUnderNetBrowser", "Homepage", fileName); } catch { }
+                try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "UnderNetBrowser", "Homepage", fileName); } catch { }
+                try { Add(MelonLoader.Utils.MelonEnvironment.GameRootDirectory, "Mods", "FireskyUnderNetBrowser", "Homepage", fileName); } catch { }
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    try { var c = candidates[i]; if (!string.IsNullOrWhiteSpace(c) && File.Exists(c)) return c; } catch { }
+                }
+            }
+            catch { }
+            return null;
         }
+
+        private static string ReadBundledHomepageHtmlOrFallback(string fileName, string fallbackHtml)
+        {
+            try
+            {
+                var src = TryGetBundledHomepageSourcePath(fileName);
+                if (!string.IsNullOrWhiteSpace(src) && File.Exists(src))
+                    return File.ReadAllText(src);
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Failed reading bundled homepage file '{fileName}': {ex.Message}"); } catch { }
+            }
+            return fallbackHtml ?? "";
+        }
+
+        private static void EnsureHomepageFileFromBundle(string targetPath, string fileName)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(targetPath) || File.Exists(targetPath)) return;
+                var dir = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+
+                var src = TryGetBundledHomepageSourcePath(fileName);
+                if (!string.IsNullOrWhiteSpace(src) && File.Exists(src))
+                {
+                    try { File.Copy(src, targetPath, false); return; } catch { }
+                    try { File.WriteAllText(targetPath, File.ReadAllText(src)); return; } catch { }
+                }
+
+                // Last-resort minimal fallback (source files should ship with mod).
+                string fallback = fileName.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>"
+                    : fileName.Equals("games.html", StringComparison.OrdinalIgnoreCase)
+                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                    : fileName.Equals("settings.html", StringComparison.OrdinalIgnoreCase)
+                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                    : fileName.Equals("notepad.html", StringComparison.OrdinalIgnoreCase)
+                    ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Notepad</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Notepad</h1><p>Notepad page source file missing. Reinstall mod files or restore <code>Homepage/notepad.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                    : "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Page</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet</h1><p>Page source file missing.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>";
+                try { File.WriteAllText(targetPath, fallback); } catch { }
+            }
+            catch { }
+        }
+
+        private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Home</title></head><body><h1>UnderNet Home</h1><p>Missing homepage source.</p></body></html>");
+
+        private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Games</title></head><body><h1>Games</h1><p>Missing games source.</p></body></html>");
+
+        private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>UnderNet Settings</title></head><body><h1>Settings</h1><p>Missing settings source.</p></body></html>");
 
         private static string BuildExampleAppHtml()
         {
@@ -1258,28 +1357,166 @@ namespace Firesky.UnderNetBrowser
 </html>";
         }
 
+        private static string UrlDecodeLoose(string? s)
+        {
+            try { return Uri.UnescapeDataString((s ?? string.Empty).Replace("+", "%20")); } catch { return s ?? string.Empty; }
+        }
+
+        private static Dictionary<string, string> ParseSimpleQuery(string? query)
+        {
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (string.IsNullOrEmpty(query)) return dict;
+                var q = query;
+                if (q.StartsWith("?")) q = q.Substring(1);
+                foreach (var part in q.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var kv = part.Split(new[] { '=' }, 2);
+                    var k = UrlDecodeLoose(kv.Length > 0 ? kv[0] : "");
+                    var v = UrlDecodeLoose(kv.Length > 1 ? kv[1] : "");
+                    if (!string.IsNullOrEmpty(k)) dict[k] = v;
+                }
+            }
+            catch { }
+            return dict;
+        }
+
+        private static bool TryApplyConfigCommand(string key, string value, out string message)
+        {
+            message = "Unknown setting.";
+            try
+            {
+                bool Save()
+                {
+                    try { MelonPreferences.Save(); } catch { try { MelonLoader.MelonPreferences.Save(); } catch { } }
+                    return true;
+                }
+                bool ParseBool(string v, out bool b)
+                {
+                    b = false;
+                    if (bool.TryParse(v, out b)) return true;
+                    if (v == "1" || v.Equals("on", StringComparison.OrdinalIgnoreCase) || v.Equals("yes", StringComparison.OrdinalIgnoreCase)) { b = true; return true; }
+                    if (v == "0" || v.Equals("off", StringComparison.OrdinalIgnoreCase) || v.Equals("no", StringComparison.OrdinalIgnoreCase)) { b = false; return true; }
+                    return false;
+                }
+                bool ParseFloat(string v, out float f) => float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f) || float.TryParse(v, out f);
+                bool ParseInt(string v, out int i) => int.TryParse(v, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out i) || int.TryParse(v, out i);
+
+                switch ((key ?? "").Trim())
+                {
+                    case "HomeUrl":
+                        if (UnderNetBrowserConfig.HomeUrl != null) { UnderNetBrowserConfig.HomeUrl.Value = string.IsNullOrWhiteSpace(value) ? "undernet:home" : value.Trim(); Save(); message = "Home URL updated."; return true; }
+                        break;
+                    case "KeyToggleCursor":
+                        if (UnderNetBrowserConfig.KeyToggleCursor != null) { UnderNetBrowserConfig.KeyToggleCursor.Value = string.IsNullOrWhiteSpace(value) ? "F3" : value.Trim(); Save(); message = "Cursor toggle key updated."; return true; }
+                        break;
+                    case "KeyReload":
+                        if (UnderNetBrowserConfig.KeyReload != null) { UnderNetBrowserConfig.KeyReload.Value = string.IsNullOrWhiteSpace(value) ? "F5" : value.Trim(); Save(); message = "Reload key updated."; return true; }
+                        break;
+                    case "KeyGameInputMode":
+                        if (UnderNetBrowserConfig.KeyGameInputMode != null) { UnderNetBrowserConfig.KeyGameInputMode.Value = string.IsNullOrWhiteSpace(value) ? "F6" : value.Trim(); Save(); message = "Game Input Mode key updated."; return true; }
+                        break;
+                    case "BasicAdBlockEnabled":
+                        if (UnderNetBrowserConfig.BasicAdBlockEnabled != null && ParseBool(value, out var b1)) { UnderNetBrowserConfig.BasicAdBlockEnabled.Value = b1; Save(); message = "Basic ad/tracker blocking updated."; return true; }
+                        break;
+                    case "AutoConsentEnabled":
+                        if (UnderNetBrowserConfig.AutoConsentEnabled != null && ParseBool(value, out var b2)) { UnderNetBrowserConfig.AutoConsentEnabled.Value = b2; Save(); message = "Auto-consent setting updated."; return true; }
+                        break;
+                    case "DistanceVolumeEnabled":
+                        if (UnderNetBrowserConfig.DistanceVolumeEnabled != null && ParseBool(value, out var b3)) { UnderNetBrowserConfig.DistanceVolumeEnabled.Value = b3; Save(); message = "Distance volume setting updated."; return true; }
+                        break;
+                    case "DebugLogging":
+                        if (UnderNetBrowserConfig.DebugLogging != null && ParseBool(value, out var b4)) { UnderNetBrowserConfig.DebugLogging.Value = b4; Save(); message = "Verbose debug logging updated."; return true; }
+                        break;
+                    case "ChromeHeightFraction":
+                        if (UnderNetBrowserConfig.ChromeHeightFraction != null && ParseFloat(value, out var f1)) { UnderNetBrowserConfig.ChromeHeightFraction.Value = f1; Save(); message = "Chrome height updated."; return true; }
+                        break;
+                    case "GpuCompositionRenderWidth":
+                        if (UnderNetBrowserConfig.GpuCompositionRenderWidth != null && ParseInt(value, out var i1)) { UnderNetBrowserConfig.GpuCompositionRenderWidth.Value = Math.Max(640, i1); Save(); message = "Render width updated (restart/reopen may be required)."; return true; }
+                        break;
+                    case "GpuCompositionRenderHeight":
+                        if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(value, out var i2)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Math.Max(360, i2); Save(); message = "Render height updated (restart/reopen may be required)."; return true; }
+                        break;
+                }
+            }
+            catch (Exception ex) { message = "Failed: " + ex.Message; return false; }
+            return false;
+        }
+
+        private bool TryHandleUnderNetCommandUrl(string? rawInput, bool navigateBackToSettings = true)
+        {
+            try
+            {
+                var raw = (rawInput ?? string.Empty).Trim();
+                if (raw.Length == 0) return false;
+                if (!raw.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase)) return false;
+                var rest = raw.Substring("undernet:cmd/".Length);
+                var qIdx = rest.IndexOf('?');
+                var action = (qIdx >= 0 ? rest.Substring(0, qIdx) : rest).Trim().Trim('/').ToLowerInvariant();
+                var query = qIdx >= 0 ? rest.Substring(qIdx) : "";
+                var args = ParseSimpleQuery(query);
+                string status = "err";
+                string msg = "Unsupported command.";
+                if (action == "set")
+                {
+                    var key = args.TryGetValue("key", out var k) ? k : (args.TryGetValue("name", out var n) ? n : "");
+                    var value = args.TryGetValue("value", out var v) ? v : "";
+                    var ok = TryApplyConfigCommand(key, value, out msg);
+                    status = ok ? "ok" : "err";
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Settings cmd set key='{key}' ok={ok} msg='{msg}'");
+                }
+                else if (action == "save")
+                {
+                    try { MelonPreferences.Save(); } catch { }
+                    status = "ok"; msg = "Preferences saved.";
+                }
+                else if (action == "load" || action == "refresh" || action == "getsettings")
+                {
+                    status = "ok"; msg = "Current settings loaded.";
+                }
+
+                if (navigateBackToSettings)
+                {
+                    var target = GetOrCreateHomepageUrl();
+                    try
+                    {
+                        var settingsPath = Path.Combine(GetHomepageDir(), "settings.html");
+                        if (File.Exists(settingsPath)) target = new Uri(settingsPath).AbsoluteUri;
+                    }
+                    catch { }
+                    try { target += (target.Contains("?") ? "&" : "?") + "cfg_status=" + Uri.EscapeDataString(status) + "&cfg_msg=" + Uri.EscapeDataString(msg ?? ""); } catch { }
+                    try { _gpuCompositionCapture?.Navigate(target); } catch { }
+                    try { if (_urlInput != null) { _urlInput.text = "undernet:settings"; if (_urlInput.textComponent != null) _urlInput.textComponent.text = "undernet:settings"; _urlInput.ForceLabelUpdate(); } } catch { }
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
         private void SetUrl(string? input)
         {
             var raw = (input ?? string.Empty).Trim();
+            if (TryHandleUnderNetCommandUrl(raw, navigateBackToSettings: true)) return;
+            if (raw.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase)) return;
             var normalizedRaw = NormalizeUrl(raw);
             var url = ResolveNavigationTarget(raw);
 
-            // External window mirror (Discord): if requested and Discord is running, mirror its window; else fall back to Discord Web.
+            // External window mirror (Discord): mirror-only (no web redirect/fallback).
             if (IsDiscordMirrorRequestUrl(raw) || IsDiscordMirrorRequestUrl(normalizedRaw) || IsDiscordMirrorRequestUrl(url))
             {
-                if (_urlInput != null) _urlInput.text = "https://discord.com/app";
-                if (TryStartDiscordMirror(url))
-                    return;
-                // Fallback to web Discord in browser
-                url = "https://discord.com/app";
-                try { SetUrlDisplayText(url); } catch { }
+                if (!TryStartDiscordMirror(url))
+                {
+                    SetHint("Discord mirror unavailable (is Discord running?).");
+                    try { SetUrlDisplayText("undernet:discord"); } catch { }
+                }
+                return;
             }
             else if (_externalMirrorMode)
             {
                 // Leaving mirror mode to browse normally
-                var ret = _externalMirrorReturnUrl;
                 StopExternalWindowMirror("navigate_away");
-                EnsureCompositionBrowserStarted();
+                EnsureCompositionBrowserStarted(url);
             }
 
             // Keep address bar friendly for home token
@@ -1296,7 +1533,7 @@ namespace Firesky.UnderNetBrowser
                 try { ReleaseAllGameKeys("navigate"); } catch { }
                 _gpuCompositionCapture.Navigate(url);
                 SetHint("");
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Navigate (composition): {url}");
+                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Navigate (composition): {TruncateUrlForLog(url)}");
             }
             else
             {
@@ -1307,16 +1544,32 @@ namespace Firesky.UnderNetBrowser
 
         private void HardResetCompositionNavigate(string targetUrl, string reason)
         {
+            if (_browserUiCriticalActionInProgress)
+            {
+                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Hard reset ignored ({reason}): another browser UI action is in progress."); } catch { }
+                return;
+            }
+            _browserUiCriticalActionInProgress = true;
             try
             {
                 var url = string.IsNullOrWhiteSpace(targetUrl) ? GetResolvedHomeUrl() : targetUrl;
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset navigate ({reason}): {url}");
+                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset navigate ({reason}): {TruncateUrlForLog(url)}");
 
-                // Best-effort cleanup of current page (may not run if renderer is hung), then fully recreate the composition browser/controller.
-                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio');for(var i=0;i<ms.length;i++){try{ms[i].pause();ms[i].muted=true;}catch(e){}}}catch(e){}})();"); } catch { }
-                try { _gpuCompositionCapture?.Navigate("about:blank"); } catch { }
-                try { _gpuCompositionCapture?.Dispose(); } catch { }
+                // Recovery path: avoid sending script/navigation commands into a potentially hung WebView before teardown,
+                // as they can block on native synchronization and freeze the game. Dispose performs native shutdown/cleanup.
+                try { SetHint("Restarting browser..."); } catch { }
+                try { _compositionWebFocused = false; _browserPointerDown = false; _browserPointerRightDown = false; } catch { }
+                try { ReleaseAllGameKeys("hard_reset:" + reason); } catch { }
+                try { UnderNetBrowserInputHooks.UpdateOwnership(IsOpen && !_detachedToGameplay, false, false, false); } catch { }
+
+                var oldCapture = _gpuCompositionCapture;
                 _gpuCompositionCapture = null;
+                _gpuCompositionMode = false;
+                try { oldCapture?.SendMouseUp(0, 0, false); } catch { }
+                try { oldCapture?.SendMouseUp(0, 0, true); } catch { }
+                try { oldCapture?.Dispose(); } catch (Exception ex) { try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset dispose failed: {ex.Message}"); } catch { } }
+
+                // Best-effort extra shutdown in case dispose could not complete native cleanup cleanly.
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
 
                 GetDesiredCompositionRenderSize(out int compW, out int compH);
@@ -1325,19 +1578,24 @@ namespace Firesky.UnderNetBrowser
                 try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
                 try { UnderNetBrowserDiagnostics.OnBrowserLoadingBegin(); UnderNetBrowserDiagnostics.OnWebViewInitStart(); } catch { }
 
-                _gpuCompositionCapture = new UnderNetBrowserCompositionCapture();
-                _gpuCompositionMode = true;
-                if (_gpuCompositionCapture.TryStart(url, compW, compH, compUserData))
+                var newCapture = new UnderNetBrowserCompositionCapture();
+                bool started = false;
+                try { started = newCapture.TryStart(url, compW, compH, compUserData); }
+                catch (Exception ex) { try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset TryStart exception: {ex.Message}"); } catch { } started = false; }
+
+                if (started)
                 {
+                    _gpuCompositionCapture = newCapture;
+                    _gpuCompositionMode = true;
                     try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { }
-                    SetHint("Reloading browser...");
+                    try { SetHint("Reloading browser..."); } catch { }
                     _compositionWebFocused = true;
                     try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
                 }
                 else
                 {
-                    SetHint("Composition browser restart failed. Check MelonLoader log / WebView2 runtime and native renderer.");
-                    try { _gpuCompositionCapture.Dispose(); } catch { }
+                    try { SetHint("Composition browser restart failed. Check MelonLoader log / WebView2 runtime and native renderer."); } catch { }
+                    try { newCapture.Dispose(); } catch { }
                     _gpuCompositionCapture = null;
                     _gpuCompositionMode = false;
                 }
@@ -1346,6 +1604,10 @@ namespace Firesky.UnderNetBrowser
             {
                 try { SetHint($"Browser reset failed: {ex.Message}"); } catch { }
                 try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] HardResetCompositionNavigate failed: {ex.Message}"); } catch { }
+            }
+            finally
+            {
+                _browserUiCriticalActionInProgress = false;
             }
         }
 
@@ -1363,23 +1625,40 @@ namespace Firesky.UnderNetBrowser
             }
             else
             {
-                // Ensure web focus for game controls; URL bar remains separate (and will exit mode if focused).
-                if (_urlInput != null && _urlInput.isFocused)
+                // Smooth enable: if URL bar is focused, move focus to web view automatically instead of requiring a manual click.
+                try
                 {
-                    _gameInputMode = false;
-                    ReleaseAllGameKeys("mode_blocked_url_focus:" + reason);
-                    SetHint("Game Input: click the web view first (URL bar is focused)");
-                    try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
-                    return;
+                    if (_urlInput != null && _urlInput.isFocused)
+                    {
+                        _gameInputPrevUrlFocused = true;
+                        try { _urlInput.DeactivateInputField(); } catch { }
+                    }
                 }
+                catch { }
+                try { if (UnityEngine.EventSystems.EventSystem.current != null) UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null); } catch { }
                 _compositionWebFocused = true;
-                try { if (_urlInput != null && _urlInput.isFocused) UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
                 try { _gpuCompositionCapture?.RequestFocus(); } catch { }
+                // Native click nudge at center (best-effort activation/focus for WebGPU/canvas pages; more "real" than JS-only events).
+                try
+                {
+                    if (_gpuCompositionCapture != null)
+                    {
+                        int cx = Math.Max(1, _gpuCompositionCapture.ViewWidth / 2);
+                        int cy = Math.Max(1, _gpuCompositionCapture.ViewHeight / 2);
+                        _gpuCompositionCapture.SendMouseMove(cx, cy, false, false);
+                        _gpuCompositionCapture.SendMouseDown(cx, cy, false);
+                        _gpuCompositionCapture.SendMouseUp(cx, cy, false);
+                    }
+                }
+                catch { }
                 // Best-effort: focus canvas/document for browser games when enabling game input (retry briefly for async pages).
-                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; function f(){try{var c=d.querySelector('canvas'); if(c){try{c.tabIndex=c.tabIndex||-1; if(c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus();}catch(_){} try{c.click&&c.click();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} try{d.body&&d.body.focus&&d.body.focus();}catch(_){}}catch(_){}} f(); setTimeout(f,50); setTimeout(f,200); setTimeout(f,600);}catch(_){}})();"); } catch { }
-                try { _lastGameModeFocusNudge = -999f; } catch { }
-                UpdateInputOwnershipState();
+                // Includes click nudge for canvas/WebGPU games that require user-activation-like focus behavior (best-effort).
+                try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; function pick(){try{var ae=d.activeElement; if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable)){try{ae.blur&&ae.blur();}catch(_){}}}catch(_){} var c=null; try{c=d.querySelector('canvas');}catch(_){} if(!c){try{c=d.querySelector('video, [tabindex], iframe, embed, object, body, html');}catch(_){}} return c;} function f(){try{try{window&&window.focus&&window.focus();}catch(_){} try{(d.body||d.documentElement)&&((d.body||d.documentElement).focus&&((d.body||d.documentElement).focus()));}catch(_){} var c=pick(); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus({preventScroll:true});}catch(_){try{c.focus&&c.focus();}catch(__){}} try{c.click&&c.click();}catch(_){} try{var r=c.getBoundingClientRect?c.getBoundingClientRect():null; var x=r?Math.floor(r.left+r.width/2):Math.floor((window.innerWidth||800)/2); var y=r?Math.floor(r.top+r.height/2):Math.floor((window.innerHeight||600)/2); var opts={bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:1}; c.dispatchEvent(new PointerEvent('pointerdown',opts)); c.dispatchEvent(new MouseEvent('mousedown',opts)); c.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0})); c.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0})); c.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0}));}catch(_){} }}catch(_){}} f(); setTimeout(f,50); setTimeout(f,150); setTimeout(f,350); setTimeout(f,700); setTimeout(f,1200);}catch(_){}})();"); } catch { }
+                try { _lastGameModeFocusNudge = Time.realtimeSinceStartup; } catch { }
+                try { UnderNetBrowserInputHooks.SetGameInputModeActive(_gameInputMode); } catch { }
+                try { UpdateInputOwnershipState(); } catch { }
             }
+            try { UnderNetBrowserInputHooks.SetGameInputModeActive(_gameInputMode); } catch { }
             try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(_gameInputMode); } catch { }
             try
             {
@@ -1730,6 +2009,17 @@ namespace Firesky.UnderNetBrowser
                     if (_gameInputMode) SetGameInputMode(false, "url_focused");
                 }
 
+                // Fallback zoom hotkeys for users without a working mouse wheel (e.g. remapped via AHK to keys).
+                // Do not intercept while typing in the URL bar or while Game Input Mode forwards keys to the page/game.
+                if (!urlFocused && !(_gameInputMode && webFocused))
+                {
+                    bool ctrlDown = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+                    if (ctrlDown)
+                    {
+                        if (TryHandleBrowserZoomHotkeys()) return;
+                    }
+                }
+
                 // Toggle handled in OnUpdate (F6). Keep deterministic ownership suppression while app is open.
                 bool numberKeyDown = false;
                 for (int i = 0; i < 9; i++)
@@ -1798,11 +2088,9 @@ namespace Firesky.UnderNetBrowser
                                 const uint wmKd = 0x0100, wmKu = 0x0101, wmCh = 0x0102;
                                 if (spaceDown)
                                 {
-                                    _gpuCompositionCapture.SendKey(wmKd, 0x20, 0);
-                                    _gpuCompositionCapture.SendKey(wmCh, ' ', 0);
-                                    _gpuCompositionCapture.SendKey(wmKu, 0x20, 0);
                                     try { SendSpacePlayPauseScriptFallback(); } catch { }
-                                    LogCompositionTypingDiag($"space(play/pause fallback) urlFocused={urlFocused} ptr={ptrOver}");
+                                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Space handled by smart script (stale-focus path) ptr={ptrOver}"); } catch { }
+                                    LogCompositionTypingDiag($"space(stale-focus smart script) urlFocused={urlFocused} ptr={ptrOver}");
                                 }
                                 if (arrowHeld || arrowDown)
                                 {
@@ -1831,6 +2119,7 @@ namespace Firesky.UnderNetBrowser
                         _gpuCompositionCapture.SendKey(WM_KEYDOWN, vk, 0);
                         _gpuCompositionCapture.SendKey(WM_CHAR, ch, 0);
                         _gpuCompositionCapture.SendKey(WM_KEYUP, vk, 0);
+                        MarkWebTextEntryActivity("numkey");
                         LogCompositionTypingDiag($"numkey='{ch}' urlFocused={urlFocused} webFocused={webFocused} ptr={ptrOver}");
                     }
                 }
@@ -1851,22 +2140,27 @@ namespace Firesky.UnderNetBrowser
                             // Flush pending printable text before control keys to preserve order.
                             if (textBatch != null && textBatch.Length > 0)
                             {
-                                try { _gpuCompositionCapture.SendText(textBatch.ToString()); } catch { }
+                                try { _gpuCompositionCapture.SendText(textBatch.ToString()); MarkWebTextEntryActivity("textBatch"); } catch { }
                                 textBatch.Clear();
                             }
-                            if (c == '\b') { _gpuCompositionCapture.SendKey(WM_KD, 0x08, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x08, 0); sentCtrl++; }
-                            else if (c == '\r' || c == '\n') { _gpuCompositionCapture.SendKey(WM_KD, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_CH, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x0D, 0); sentCtrl++; }
-                            else if (c == '\t') { _gpuCompositionCapture.SendKey(WM_KD, 0x09, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x09, 0); sentCtrl++; }
+                            if (c == '\b') { _gpuCompositionCapture.SendKey(WM_KD, 0x08, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x08, 0); sentCtrl++; MarkWebTextEntryActivity("backspace"); }
+                            else if (c == '\r' || c == '\n') { _gpuCompositionCapture.SendKey(WM_KD, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_CH, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x0D, 0); sentCtrl++; MarkWebTextEntryActivity("enter"); }
+                            else if (c == '\t') { _gpuCompositionCapture.SendKey(WM_KD, 0x09, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x09, 0); sentCtrl++; MarkWebTextEntryActivity("tab"); }
                             else if (c == 27) { _gpuCompositionCapture.SendKey(WM_KD, 0x1B, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x1B, 0); sentCtrl++; }
                             continue;
                         }
+                        // Space is handled by explicit KeyDown path + smart DOM script (typing vs media toggle).
+                        if (c == ' ')
+                        {
+                            continue;
+                        }
+
                         // Best-effort VK for WM_KEYDOWN/WM_KEYUP; actual character comes from WM_CHAR / script injection.
                         ulong vk = 0;
                         if (c >= 'a' && c <= 'z') vk = (ulong)(char.ToUpperInvariant(c));
                         else if (c >= 'A' && c <= 'Z') vk = (ulong)c;
                         else if (c >= '0' && c <= '9') vk = (ulong)c;
-                        else if (c == ' ') vk = 0x20;
-                        // digits handled above to mark number-key intent; still send as chars if they appear
+
                         _gpuCompositionCapture.SendKey(WM_KD, vk, 0);
                         _gpuCompositionCapture.SendKey(WM_CH, c, 0);
                         _gpuCompositionCapture.SendKey(WM_KU, vk, 0);
@@ -1876,7 +2170,7 @@ namespace Firesky.UnderNetBrowser
                     }
                     if (textBatch != null && textBatch.Length > 0)
                     {
-                        try { _gpuCompositionCapture.SendText(textBatch.ToString()); } catch { }
+                        try { _gpuCompositionCapture.SendText(textBatch.ToString()); MarkWebTextEntryActivity("textBatchFlush"); } catch { }
                     }
                     if (sentChars > 0 || sentCtrl > 0)
                         LogCompositionTypingDiag($"inputString len={s.Length} chars={sentChars} ctrl={sentCtrl} (textInject+keys) urlFocused={urlFocused} webFocused={webFocused} ptr={ptrOver}");
@@ -1907,6 +2201,7 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
                 {
+                    MarkWebTextEntryActivity("enterKey");
                     try { UnderNetBrowserInputHooks.SuppressEnterForGameBriefly(0.2f); } catch { }
                     SendVk(0x0D, true, '\r');
                     try
@@ -1962,11 +2257,14 @@ namespace Firesky.UnderNetBrowser
                     Input.GetKey(KeyCode.LeftArrow), Input.GetKey(KeyCode.RightArrow),
                     Input.GetKey(KeyCode.UpArrow), Input.GetKey(KeyCode.DownArrow),
                     sendVkTaps: true, sendScriptFallbacks: true);
-                if (Input.GetKeyDown(KeyCode.Delete)) SendVk(0x2E);
+                if (Input.GetKeyDown(KeyCode.Delete)) { SendVk(0x2E); MarkWebTextEntryActivity("deleteKey"); }
                 if (Input.GetKeyDown(KeyCode.Space))
                 {
-                    SendVk(0x20, true, ' ');
+                    // Let DOM-aware script handle space to avoid double actions:
+                    // - editable/search/text fields: insert a space
+                    // - otherwise: toggle media playback (video/YouTube)
                     try { SendSpacePlayPauseScriptFallback(); } catch { }
+                    try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Space handled by smart script"); } catch { }
                 }
                 if (sentVks > 0)
                     LogCompositionTypingDiag($"navKeys={sentVks} urlFocused={urlFocused} webFocused={webFocused} ptr={ptrOver} fs={_isPageFullscreen}");
@@ -1992,27 +2290,68 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+                private bool TryHandleBrowserZoomHotkeys()
+        {
+            try
+            {
+                if (!_gpuCompositionMode || _gpuCompositionCapture == null || !IsOpen) return false;
+
+                int dir = 0;
+                bool reset = false;
+                if (Input.GetKeyDown(KeyCode.Equals) || Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.Plus))
+                    dir = 1;
+                else if (Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus))
+                    dir = -1;
+                else if (Input.GetKeyDown(KeyCode.Alpha0) || Input.GetKeyDown(KeyCode.Keypad0))
+                    reset = true;
+
+                if (dir == 0 && !reset) return false;
+
+                double z = _gpuCompositionCapture.GetZoomFactor();
+                if (!(z > 0.0)) z = 1.0;
+                double nz = reset ? 1.0 : Mathf.Clamp((float)(z + (dir > 0 ? 0.10 : -0.10)), 0.25f, 5.0f);
+                _gpuCompositionCapture.SetZoomFactor(nz);
+                try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                try { TrySuppressHotbarScroll(); } catch { }
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+hotkey{(reset ? ", reset" : dir > 0 ? ", in" : ", out")}, requested)");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom hotkey failed (restart game after native update?): {ex.Message}"); } catch { }
+                return true; // consume key intent when ctrl+zoom combo was pressed
+            }
+        }
+
         private void SendSpacePlayPauseScriptFallback()
         {
             try
             {
                 if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
+                // Smart space handling (DOM-aware):
+                // - if focus is in editable/search/text field: insert a space
+                // - otherwise: toggle media playback (YouTube/player/video)
                 _gpuCompositionCapture.ExecuteScript(
-                    "(function(){try{var d=document; var ae=d.activeElement; var tag=ae&&ae.tagName?ae.tagName.toUpperCase():'';" +
-                    "var typing=(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'));" +
-                    "if(typing) return;" +
-                    "var vids=d.querySelectorAll('video'); var v=null;" +
-                    "for(var i=0;i<vids.length;i++){var vv=vids[i]; if(!vv) continue; if(vv.closest && vv.closest('ytd-player, .html5-video-player, video')){v=vv; break;} if(!v) v=vv;}" +
-                    "var k={key:' ',code:'Space',keyCode:32,which:32,bubbles:true,cancelable:true,composed:true};" +
-                    "try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
-                    "try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} " +
-                    "if(v){try{if(v.paused){var p=v.play(); if(p&&p.catch)p.catch(function(){});} else {v.pause();}}catch(_){}} " +
-                    "else {try{var btn=d.querySelector('.ytp-play-button, button[aria-label*=\"Play\"], button[aria-label*=\"Pause\"], button[title*=\"Play\"], button[title*=\"Pause\"]'); if(btn) btn.click();}catch(_){}}" +
+                    "(function(){try{var d=document;" +
+                    "function deepActive(root){var a=root&&root.activeElement; try{while(a&&a.shadowRoot&&a.shadowRoot.activeElement){a=a.shadowRoot.activeElement;}}catch(_){} return a||null;}" +
+                    "var ae=deepActive(d); if(!ae) ae=d.activeElement;" +
+                    "function isEditable(el){if(!el) return false; try{if(el.isContentEditable) return true;}catch(_){} var t=el.tagName?el.tagName.toUpperCase():''; if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT') return true; try{var ce=el.getAttribute&&el.getAttribute('contenteditable'); if(ce!==null && String(ce).toLowerCase()!=='false') return true;}catch(_){} try{var r=el.getAttribute&&el.getAttribute('role'); if(r&&/textbox|searchbox|combobox/i.test(r)) return true;}catch(_){} try{if(el.closest&&el.closest('[contenteditable]:not([contenteditable=\"false\"]),[role=\"textbox\"],[role=\"searchbox\"],[role=\"combobox\"]')) return true;}catch(_){} return false;}" +
+                    "var editEl=isEditable(ae)?ae:null; if(!editEl){try{var c=ae&&ae.closest?ae.closest('[contenteditable]:not([contenteditable=\"false\"]),[role=\"textbox\"],[role=\"searchbox\"],[role=\"combobox\"]'):null; if(c) editEl=c;}catch(_){} }" +
+                    "if(editEl){" +
+                    "  try{if(editEl.tagName){var t2=editEl.tagName.toUpperCase(); if(t2==='INPUT'||t2==='TEXTAREA'){var v=editEl.value||''; var s=(typeof editEl.selectionStart==='number')?editEl.selectionStart:v.length; var e=(typeof editEl.selectionEnd==='number')?editEl.selectionEnd:s; editEl.value=v.slice(0,s)+' '+v.slice(e); try{editEl.setSelectionRange(s+1,s+1);}catch(_){} try{editEl.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{editEl.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){} return;}}}catch(_){} " +
+                    "  try{var ok=false; try{ok=!!d.execCommand('insertText',false,' ');}catch(_){} if(!ok){try{var sel=window.getSelection&&window.getSelection(); if(sel&&sel.rangeCount){var r=sel.getRangeAt(0); r.deleteContents(); var n=d.createTextNode(' '); r.insertNode(n); r.setStartAfter(n); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); ok=true;}else if(editEl.isContentEditable){editEl.textContent=(editEl.textContent||'')+' '; ok=true;} }catch(_){} } try{editEl.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} }catch(_){} " +
+                    "  return;" +
+                    "}" +
+                    // Perform a single media toggle action to avoid double pause/unpause (e.g. player click + button click).
+                    "try{var ytBtn=d.querySelector('.ytp-play-button, button.ytp-play-button'); if(ytBtn){try{ytBtn.focus();}catch(_){} ytBtn.click(); return;}}catch(_){} " +
+                    "var v=null; try{v=d.querySelector('video.html5-main-video');}catch(_){} if(!v){try{var vids=d.querySelectorAll('video'); for(var i=0;i<vids.length;i++){var vv=vids[i]; if(!vv) continue; var r=vv.getBoundingClientRect?vv.getBoundingClientRect():null; if(r && r.width>20 && r.height>20){v=vv; break;} if(!v) v=vv;}}catch(_){}} " +
+                    "if(v){try{if(v.paused||v.ended){var pr=v.play(); if(pr&&pr.catch)pr.catch(function(){});} else {v.pause();}}catch(_){ } return;}" +
+                    "try{var btn2=d.querySelector('button[aria-label*=\"Play\" i], button[aria-label*=\"Pause\" i], button[title*=\"Play\" i], button[title*=\"Pause\" i]'); if(btn2){btn2.click(); return;}}catch(_){} " +
+                    "try{var p=d.querySelector('#movie_player,.html5-video-player'); if(p){try{p.focus();}catch(_){} try{p.click();}catch(_){} }}catch(_){}" +
                     "}catch(_){}})();");
             }
             catch { }
         }
-
         private void SendArrowMediaKeyFallback(string dir)
         {
             try
@@ -2020,10 +2359,12 @@ namespace Firesky.UnderNetBrowser
                 if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
                 string script = dir switch
                 {
-                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var v=d.querySelector('video'); var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
-                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var v=d.querySelector('video'); var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
-                    "up" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var v=d.querySelector('video'); var k={key:'ArrowUp',code:'ArrowUp',keyCode:38,which:38,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} if(v){try{v.volume=Math.min(1,Math.max(0,(v.volume||0)+0.05));}catch(_){}} }catch(_){}})();",
-                    "down" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var v=d.querySelector('video'); var k={key:'ArrowDown',code:'ArrowDown',keyCode:40,which:40,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} if(v){try{v.volume=Math.min(1,Math.max(0,(v.volume||0)-0.05));}catch(_){}} }catch(_){}})();",
+                    // Left/right: dispatch keys and keep direct seek fallback for reliable media control.
+                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
+                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
+                    // Up/down: dispatch keys for page/search suggestion/result navigation; avoid forcing volume changes that break UI navigation.
+                    "up" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowUp',code:'ArrowUp',keyCode:38,which:38,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
+                    "down" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowDown',code:'ArrowDown',keyCode:40,which:40,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     _ => ""
                 };
                 if (!string.IsNullOrEmpty(script)) _gpuCompositionCapture.ExecuteScript(script);
@@ -2125,16 +2466,54 @@ namespace Firesky.UnderNetBrowser
             return handled;
         }
 
-        private void UpdateInputOwnershipState()
+        private void MarkWebTextEntryActivity(string reason = "")
+        {
+            try
+            {
+                if (_urlInput != null && _urlInput.isFocused) return;
+                if (!_compositionWebFocused) return;
+                _lastWebTextEntryActivityRealtime = Time.realtimeSinceStartup;
+                try { UnderNetBrowserInputHooks.SetWebTextEntryActive(true); } catch { }
+                _ = reason;
+            }
+            catch { }
+        }
+
+        private void RefreshWebTextEntryState()
         {
             try
             {
                 bool urlFocused = _urlInput != null && _urlInput.isFocused;
+                bool webFocused = _compositionWebFocused && !urlFocused && !_detachedToGameplay && IsOpen;
+                bool active = webFocused && (Time.realtimeSinceStartup - _lastWebTextEntryActivityRealtime <= 2.5f);
+                try { UnderNetBrowserInputHooks.SetWebTextEntryActive(active); } catch { }
+            }
+            catch { }
+        }
+
+        private void UpdateInputOwnershipState()
+        {
+            try
+            {
+                // While detached to gameplay, the TV app/browser may remain "open" in background but must not suppress
+                // gameplay movement/hotbar selection. Detach/reattach flows manage explicit ownership transitions.
+                if (_detachedToGameplay)
+                {
+                    _lastWebTextEntryActivityRealtime = -999f;
+                    try { UnderNetBrowserInputHooks.SetGameInputModeActive(false); } catch { }
+                    UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false);
+                    try { UnderNetBrowserInputHooks.SetWebTextEntryActive(false); } catch { }
+                    return;
+                }
+
+                bool urlFocused = _urlInput != null && _urlInput.isFocused;
                 bool webFocused = _compositionWebFocused && !urlFocused;
                 bool pointerOver = IsPointerOverVideoDisplay(out _, out _);
+                try { UnderNetBrowserInputHooks.SetGameInputModeActive(_gameInputMode && webFocused); } catch { }
                 // Clicking browser/URL bar area should not cause hotbar switching per spec; focus ownership tracks url/web focus.
                 // Pointer alone is not treated as ownership unless focused, so clicking outside restores immediately on focus loss.
                 UnderNetBrowserInputHooks.UpdateOwnership(IsOpen, urlFocused, webFocused, pointerOver);
+                RefreshWebTextEntryState();
             }
             catch { }
         }
@@ -2211,6 +2590,28 @@ namespace Firesky.UnderNetBrowser
                     catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Web Ctrl+X failed: {ex.Message}"); }
                     return;
                 }
+                if (Input.GetKeyDown(KeyCode.Z))
+                {
+                    try
+                    {
+                        try { TryUndoRedoInWeb(false); } catch { }
+                        SendCtrlComboToWeb(0x5A); // 'Z'
+                        LogCompositionTypingDiag("Ctrl+Z forwarded to web");
+                    }
+                    catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Web Ctrl+Z failed: {ex.Message}"); }
+                    return;
+                }
+                if (Input.GetKeyDown(KeyCode.Y))
+                {
+                    try
+                    {
+                        try { TryUndoRedoInWeb(true); } catch { }
+                        SendCtrlComboToWeb(0x59); // 'Y'
+                        LogCompositionTypingDiag("Ctrl+Y forwarded to web");
+                    }
+                    catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Web Ctrl+Y failed: {ex.Message}"); }
+                    return;
+                }
                 if (Input.GetKeyDown(KeyCode.V))
                 {
                     try
@@ -2218,6 +2619,7 @@ namespace Firesky.UnderNetBrowser
                         // Best-effort: inject clipboard text into focused editable element in page.
                         // Use a single deterministic path to avoid duplicate pastes (script injection + browser Ctrl+V + native text injection).
                         bool injected = TryPasteClipboardTextIntoWeb();
+                        if (injected) MarkWebTextEntryActivity("pasteInjected");
                         LogCompositionTypingDiag($"Ctrl+V to web injected={injected}");
                     }
                     catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Web Ctrl+V failed: {ex.Message}"); }
@@ -2316,6 +2718,371 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+        private static float _nextHomepageGameTimeSyncRealtime = -999f;
+        private static string _lastHomepageGameTimePayload = string.Empty;
+
+        private static string EscapeJsSingleQuoted(string? s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", " ");
+        }
+
+        private static bool TryGetScheduleOneGameTime(out string timeText, out string dayText)
+        {
+            timeText = "--:--";
+            dayText = "Time unavailable";
+            try
+            {
+                Type? tmType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { tmType = asm.GetType("Il2CppScheduleOne.GameTime.TimeManager", false); } catch { tmType = null; }
+                    if (tmType != null) break;
+                }
+                if (tmType == null) return false;
+
+                object? tm = null;
+                try
+                {
+                    var instExistsProp = tmType.GetProperty("InstanceExists", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy);
+                    if (instExistsProp != null)
+                    {
+                        var existsObj = instExistsProp.GetValue(null);
+                        if (existsObj is bool b && !b) return false;
+                    }
+                }
+                catch { }
+                try
+                {
+                    var instProp = tmType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy);
+                    if (instProp != null) tm = instProp.GetValue(null);
+                }
+                catch { tm = null; }
+                if (tm == null) return false;
+
+                int currentTime = -1;
+                try
+                {
+                    var ctProp = tmType.GetProperty("CurrentTime", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (ctProp != null)
+                    {
+                        var v = ctProp.GetValue(tm);
+                        if (v != null) currentTime = Convert.ToInt32(v);
+                    }
+                }
+                catch { currentTime = -1; }
+
+                // Prefer game's formatted 12-hour time if available.
+                string? formatted = null;
+                try
+                {
+                    var m = tmType.GetMethod("Get12HourTime", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, new[] { typeof(float), typeof(bool) }, null);
+                    if (m != null && currentTime >= 0)
+                    {
+                        var o = m.Invoke(null, new object[] { (float)currentTime, true });
+                        if (o is string s && !string.IsNullOrWhiteSpace(s)) formatted = s.Trim();
+                    }
+                }
+                catch { formatted = null; }
+                if (string.IsNullOrWhiteSpace(formatted) && currentTime >= 0)
+                {
+                    int mins = ((currentTime % 1440) + 1440) % 1440;
+                    int h24 = mins / 60;
+                    int mm = mins % 60;
+                    int h12 = h24 % 12; if (h12 == 0) h12 = 12;
+                    formatted = $"{h12}:{mm:00} {(h24 >= 12 ? "PM" : "AM")}";
+                }
+                if (!string.IsNullOrWhiteSpace(formatted)) timeText = formatted;
+
+                string dayName = "";
+                try
+                {
+                    var dayProp = tmType.GetProperty("CurrentDay", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (dayProp != null)
+                    {
+                        var dv = dayProp.GetValue(tm);
+                        if (dv != null) dayName = dv.ToString() ?? "";
+                    }
+                }
+                catch { dayName = ""; }
+
+                int dayIndex = -1, elapsedDays = -1;
+                try { var p = tmType.GetProperty("DayIndex", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance); if (p != null) { var v = p.GetValue(tm); if (v != null) dayIndex = Convert.ToInt32(v); } } catch { }
+                try { var p = tmType.GetProperty("ElapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance); if (p != null) { var v = p.GetValue(tm); if (v != null) elapsedDays = Convert.ToInt32(v); } } catch { }
+
+                if (!string.IsNullOrWhiteSpace(dayName))
+                {
+                    dayText = dayName;
+                    int dayNum = elapsedDays >= 0 ? (elapsedDays + 1) : (dayIndex >= 0 ? (dayIndex + 1) : -1);
+                    if (dayNum > 0) dayText += $" · Day {dayNum}";
+                }
+                else if (elapsedDays >= 0 || dayIndex >= 0)
+                {
+                    int dayNum = elapsedDays >= 0 ? (elapsedDays + 1) : (dayIndex + 1);
+                    dayText = $"Day {dayNum}";
+                }
+
+                return !string.IsNullOrWhiteSpace(timeText) || !string.IsNullOrWhiteSpace(dayName);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string JsBool(bool v) => v ? "true" : "false";
+        private static string JsStr(string? v) => "'" + EscapeJsSingleQuoted(v ?? string.Empty) + "'";
+
+        private static float _nextAiPageCustomizationRealtime = -999f;
+        private static string _lastAiCustomizationUrl = string.Empty;
+        private static string? _cachedSteamPersonaName;
+
+        private static string GetLocalPlayerDisplayNameBestEffort()
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(_cachedSteamPersonaName)) return _cachedSteamPersonaName!;
+                string? name = null;
+                try
+                {
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        Type[] types;
+                        try { types = asm.GetTypes(); } catch { continue; }
+                        foreach (var t in types)
+                        {
+                            var tn = t?.FullName ?? t?.Name ?? "";
+                            // Common Steamworks.NET / Facepunch / Il2Cpp wrappers
+                            if (tn.EndsWith(".SteamFriends", StringComparison.Ordinal) || tn.EndsWith(".SteamUser", StringComparison.Ordinal) || tn == "SteamFriends" || tn == "SteamUser")
+                            {
+                                try
+                                {
+                                    foreach (var mn in new[] { "GetPersonaName", "GetFriendPersonaName", "get_Name" })
+                                    {
+                                        var m = t.GetMethod(mn, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance);
+                                        if (m == null || m.GetParameters().Length != 0) continue;
+                                        object? inst = null;
+                                        if (!m.IsStatic)
+                                        {
+                                            var p = t.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static) ?? t.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                                            if (p != null) try { inst = p.GetValue(null); } catch { inst = null; }
+                                            if (inst == null)
+                                            {
+                                                var f = t.GetField("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static) ?? t.GetField("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                                                if (f != null) try { inst = f.GetValue(null); } catch { inst = null; }
+                                            }
+                                            if (inst == null) continue;
+                                        }
+                                        var v = m.Invoke(inst, null);
+                                        var s = v as string;
+                                        if (!string.IsNullOrWhiteSpace(s)) { name = s.Trim(); break; }
+                                    }
+                                }
+                                catch { }
+                            }
+                            if (!string.IsNullOrWhiteSpace(name)) break;
+                        }
+                        if (!string.IsNullOrWhiteSpace(name)) break;
+                    }
+                }
+                catch { }
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    try { name = Environment.UserName; } catch { name = null; }
+                }
+                if (string.IsNullOrWhiteSpace(name)) name = "Player";
+                _cachedSteamPersonaName = name;
+                return name!;
+            }
+            catch { return "Player"; }
+        }
+
+        private void TryApplyAiPageCustomization(string? currentUrl)
+        {
+            try
+            {
+                if (!IsOpen || _detachedToGameplay || _externalMirrorMode || _gpuCompositionCapture == null) return;
+                var url = (currentUrl ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(url)) return;
+                bool isAi = false;
+                try
+                {
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    {
+                        var host = (uri.Host ?? "").ToLowerInvariant();
+                        var path = (uri.AbsolutePath ?? "").TrimEnd('/').ToLowerInvariant();
+                        var q = (uri.Query ?? "").ToLowerInvariant();
+                        isAi = host.EndsWith("google.com") && (path == "/ai" || path.StartsWith("/ai/") || q.Contains("udm=50"));
+                    }
+                }
+                catch { isAi = false; }
+                if (!isAi) { _lastAiCustomizationUrl = string.Empty; return; }
+
+                float now = Time.realtimeSinceStartup;
+                // Reapply periodically in case SPA rerenders; also reapply on URL changes.
+                if (!string.Equals(_lastAiCustomizationUrl, url, StringComparison.Ordinal)) _nextAiPageCustomizationRealtime = now;
+                if (now < _nextAiPageCustomizationRealtime) return;
+                _nextAiPageCustomizationRealtime = now + 1.25f;
+                _lastAiCustomizationUrl = url;
+
+                var playerName = GetLocalPlayerDisplayNameBestEffort();
+                var greeting = $"Hello {playerName}, how can I help?";
+                var script = @"
+(function(){
+  try{
+    var g=" + JsStr(greeting) + @";
+    if(!window.__undernetAiApplyCount) window.__undernetAiApplyCount=0;
+    window.__undernetAiApplyCount++;
+    var cssId='undernet-ai-style';
+    if(!document.getElementById(cssId)){
+      var st=document.createElement('style'); st.id=cssId; st.textContent=''
+        +'html,body{background:#07110d !important;color:#eefbf3 !important;}'
+        +'body,button,input,textarea,select{font-family:""Segoe UI Variable"",""Segoe UI"",Tahoma,Arial,sans-serif !important;}'
+        +'header,[role=""banner""],footer,[role=""contentinfo""],#gb,#searchform,form[role=""search""]{display:none !important;}'
+        +'a[href*=""tbm=""],a[href*=""/imghp""],a[href*=""/maps""],a[href*=""/shopping""],a[href*=""/news""],a[href*=""/videohp""]{display:none !important;}'
+        +'[aria-label*=""Google apps"" i],[aria-label*=""Sign in"" i],[aria-label*=""Account"" i],[aria-label*=""Try"" i]{display:none !important;}'
+        +'.undernet-ai-badge{position:fixed;top:10px;left:12px;z-index:2147483647;padding:8px 12px;border-radius:10px;background:rgba(12,20,17,.94);border:1px solid rgba(124,255,107,.28);color:#eaffea;font:600 13px/1.2 Segoe UI,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none}'
+        +'.undernet-ai-note{position:fixed;top:10px;left:132px;z-index:2147483647;padding:8px 10px;border-radius:10px;background:rgba(8,13,10,.82);border:1px solid rgba(255,255,255,.08);color:#9db6ab;font:500 12px/1.2 Segoe UI,sans-serif;pointer-events:none}';
+      (document.head||document.documentElement).appendChild(st);
+    }
+    if(!document.getElementById('undernet-ai-badge')){
+      var b=document.createElement('div'); b.id='undernet-ai-badge'; b.className='undernet-ai-badge'; b.textContent='UnderNet AI';
+      (document.body||document.documentElement).appendChild(b);
+    }
+    if(!document.getElementById('undernet-ai-note')){
+      var n=document.createElement('div'); n.id='undernet-ai-note'; n.className='undernet-ai-note'; n.textContent='Powered by Google AI';
+      (document.body||document.documentElement).appendChild(n);
+    }
+    // Personalize greeting-like text if visible
+    try{
+      var candidates = Array.from(document.querySelectorAll('h1,h2,h3,p,div,span'));
+      for(var i=0;i<candidates.length && i<1800;i++){
+        var el=candidates[i]; if(!el || !el.textContent) continue;
+        var t=(el.textContent||'').trim();
+        if(t.length<4 || t.length>140) continue;
+        if(/^(hi|hello|hey|good (morning|afternoon|evening)|what can i help|how can i help).*/i.test(t) && !/undernet/i.test(t)){
+          var cs=null; try{ cs=window.getComputedStyle(el);}catch(_){}
+          if(cs && (cs.display==='none' || cs.visibility==='hidden' || parseFloat(cs.opacity||'1')===0)) continue;
+          el.textContent = g;
+          break;
+        }
+      }
+    }catch(_){}
+    // Try setting composer placeholder hint if present
+    try{
+      var inputs = Array.from(document.querySelectorAll('textarea,[contenteditable=""true""],[role=""textbox""]'));
+      for(var j=0;j<inputs.length;j++){
+        var inp=inputs[j]; if(!inp) continue;
+        var ph = (inp.getAttribute && (inp.getAttribute('placeholder')||inp.getAttribute('aria-label')||'')) || '';
+        if(/ask|message|prompt|enter/i.test(ph) || inp.tagName==='TEXTAREA'){
+          try{ inp.setAttribute('data-undernet-ai','1'); }catch(_){}
+          break;
+        }
+      }
+    }catch(_){}
+    try{ if(document.title && !/UnderNet AI/i.test(document.title)) document.title='UnderNet AI'; }catch(_){}
+  }catch(e){}
+})();";
+                try { _gpuCompositionCapture.ExecuteScript(script); } catch { }
+            }
+            catch { }
+        }
+        private static float _nextSettingsPageSyncRealtime = -999f;
+        private static string _lastSettingsPagePayload = string.Empty;
+
+        private static string BuildCurrentSettingsJsObject()
+        {
+            try
+            {
+                string home = UnderNetBrowserConfig.HomeUrl?.Value ?? "undernet:home";
+                string kCursor = UnderNetBrowserConfig.KeyToggleCursor?.Value ?? "F3";
+                string kReload = UnderNetBrowserConfig.KeyReload?.Value ?? "F5";
+                string kGame = UnderNetBrowserConfig.KeyGameInputMode?.Value ?? "F6";
+                bool adblock = UnderNetBrowserConfig.BasicAdBlockEnabled?.Value ?? true;
+                bool consent = UnderNetBrowserConfig.AutoConsentEnabled?.Value ?? false;
+                bool distVol = UnderNetBrowserConfig.DistanceVolumeEnabled?.Value ?? true;
+                bool dbg = UnderNetBrowserConfig.DebugLogging?.Value ?? false;
+                float chrome = UnderNetBrowserConfig.ChromeHeightFraction?.Value ?? 0.085f;
+                int rw = UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920;
+                int rh = UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080;
+                return "{"
+                    + "HomeUrl:" + JsStr(home) + ","
+                    + "KeyToggleCursor:" + JsStr(kCursor) + ","
+                    + "KeyReload:" + JsStr(kReload) + ","
+                    + "KeyGameInputMode:" + JsStr(kGame) + ","
+                    + "BasicAdBlockEnabled:" + JsBool(adblock) + ","
+                    + "AutoConsentEnabled:" + JsBool(consent) + ","
+                    + "DistanceVolumeEnabled:" + JsBool(distVol) + ","
+                    + "DebugLogging:" + JsBool(dbg) + ","
+                    + "ChromeHeightFraction:" + chrome.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + "GpuCompositionRenderWidth:" + rw.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + "GpuCompositionRenderHeight:" + rh.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + "}";
+            }
+            catch { return "{}"; }
+        }
+
+        internal static void TryUpdateSettingsPageState(bool force = false)
+        {
+            try
+            {
+                var app = _activeInstance;
+                if (app == null || !app.IsOpen) return;
+                float now = Time.realtimeSinceStartup;
+                if (!force && now < _nextSettingsPageSyncRealtime) return;
+                _nextSettingsPageSyncRealtime = now + 1.0f;
+
+                if (app._gpuCompositionCapture == null) return;
+                var cur = "";
+                try { cur = app._gpuCompositionCapture.CurrentUrl ?? ""; } catch { cur = ""; }
+                if (string.IsNullOrWhiteSpace(cur)) return;
+                var curNorm = cur.Replace("\\", "/");
+                if (curNorm.IndexOf("/UnderNetBrowser/root/Homepage/settings.html", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    curNorm.IndexOf("/root/Homepage/settings.html", StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                var payload = BuildCurrentSettingsJsObject();
+                if (!force && string.Equals(payload, _lastSettingsPagePayload, StringComparison.Ordinal)) return;
+                _lastSettingsPagePayload = payload;
+                var script = "(function(){try{if(window.__underNetApplySettings)window.__underNetApplySettings(" + payload + ");}catch(e){}})();";
+                try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+            }
+            catch { }
+        }
+
+        internal static void TryUpdateHomepageGameTime()
+        {
+            try
+            {
+                var app = _activeInstance;
+                if (app == null || !app.IsOpen) return;
+                float now = Time.realtimeSinceStartup;
+                if (now < _nextHomepageGameTimeSyncRealtime) return;
+                _nextHomepageGameTimeSyncRealtime = now + 1.0f;
+
+                if (app._gpuCompositionCapture == null) return;
+                var cur = "";
+                try { cur = app._gpuCompositionCapture.CurrentUrl ?? ""; } catch { cur = ""; }
+                if (string.IsNullOrWhiteSpace(cur)) return;
+                var curNorm = cur.Replace("\\", "/");
+                if (curNorm.IndexOf("/UnderNetBrowser/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    curNorm.IndexOf("/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                if (!TryGetScheduleOneGameTime(out var timeText, out var dayText))
+                {
+                    timeText = "--:--";
+                    dayText = "Time unavailable";
+                }
+                var payload = timeText + "|" + dayText;
+                if (string.Equals(payload, _lastHomepageGameTimePayload, StringComparison.Ordinal)) return;
+                _lastHomepageGameTimePayload = payload;
+                var script = "(function(){try{if(window.__underNetSetGameTime)window.__underNetSetGameTime('" + EscapeJsSingleQuoted(timeText) + "','" + EscapeJsSingleQuoted(dayText) + "');}catch(e){}})();";
+                try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+            }
+            catch { }
+        }
+
         private static string EscapeJsString(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
@@ -2360,6 +3127,7 @@ namespace Firesky.UnderNetBrowser
                     "try{document.execCommand('insertText', false, t);}catch(_){}" +
                     "}catch(_){}})();";
                 _gpuCompositionCapture.ExecuteScript(script);
+                MarkWebTextEntryActivity("pasteScript");
                 return true;
             }
             catch { return false; }
@@ -2407,6 +3175,21 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+        private void TryUndoRedoInWeb(bool redo)
+        {
+            try
+            {
+                if (_gpuCompositionCapture == null) return;
+                string cmd = redo ? "redo" : "undo";
+                _gpuCompositionCapture.ExecuteScript(
+                    "(function(){try{var cmd='" + cmd + "';" +
+                    "try{if(document.queryCommandSupported&&document.queryCommandSupported(cmd)){document.execCommand(cmd); return;}}catch(_){}" +
+                    "try{document.execCommand(cmd);}catch(_){}" +
+                    "}catch(_){}})();");
+            }
+            catch { }
+        }
+
         private void HandleBrowserPointerInput()
         {
             if (_videoDisplay == null || !IsOpen || _gpuCompositionCapture == null)
@@ -2414,15 +3197,30 @@ namespace Firesky.UnderNetBrowser
                 _browserPointerDown = false;
                 _browserPointerRightDown = false;
                 if (_gameMouseCaptured) { try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { } _gameMouseCaptured = false; }
+                try { if (_browserHostCursorHidden) { _browserHostCursorHidden = false; Cursor.visible = true; Cursor.lockState = CursorLockMode.None; } } catch { }
                 return;
             }
+            // Brief carry-over suppression after reattach, but never block user recovery clicks while focus recovery is active.
+            // If the user clicks/taps during recovery, nudge focus and continue processing input.
             try
             {
-                if (Time.realtimeSinceStartup < _reattachInteractionSuppressUntilRealtime)
+                float nowRt = Time.realtimeSinceStartup;
+                bool inRecovery = nowRt < _reattachFocusRecoveryUntilRealtime;
+                bool inSuppress = nowRt < _reattachInteractionSuppressUntilRealtime;
+                if (inSuppress && !inRecovery)
                 {
                     _browserPointerDown = false;
                     _browserPointerRightDown = false;
                     return;
+                }
+                if (inRecovery)
+                {
+                    bool anyPointerIntent = false;
+                    try { anyPointerIntent = Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButton(0) || Input.GetMouseButton(1); } catch { }
+                    if (inSuppress || anyPointerIntent)
+                    {
+                        try { EnsureReattachFocus("pointer_recovery"); } catch { }
+                    }
                 }
             }
             catch { }
@@ -2447,14 +3245,37 @@ namespace Firesky.UnderNetBrowser
                 bool urlFocusedNowChk = _urlInput != null && _urlInput.isFocused;
                 bool gameModeActive = _gameInputMode && _compositionWebFocused && !urlFocusedNowChk;
 
-                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, Input.mousePosition, cam, out var local))
+                bool hasLocal = RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, Input.mousePosition, cam, out var local);
+                if (!hasLocal)
                 {
                     if (_gameMouseCaptured) { try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { } _gameMouseCaptured = false; }
+                    try { if (_browserHostCursorHidden) { _browserHostCursorHidden = false; Cursor.visible = true; Cursor.lockState = CursorLockMode.None; } } catch { }
+                    if (_browserPointerDown || _browserPointerRightDown)
+                    {
+                        int edgeX = Mathf.Clamp(_lastSentPointerX, 0, vw - 1);
+                        int edgeY = Mathf.Clamp(_lastSentPointerY, 0, vh - 1);
+                        if (mouseHeld || rHeld)
+                        {
+                            bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
+                            if (due)
+                            {
+                                _lastSentPointerX = edgeX; _lastSentPointerY = edgeY; _lastPointerMoveSendTime = Time.unscaledTime;
+                                try { _gpuCompositionCapture.SendMouseMove(edgeX, edgeY, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
+                            }
+                        }
+                        if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, false); } catch { } _browserPointerDown = false; }
+                        if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, true); } catch { } _browserPointerRightDown = false; }
+                        return;
+                    }
                     if (mouseDown)
                     {
-                        if (_compositionWebFocused) LogCompositionTypingDiag("webFocus cleared by click outside video rect");
+                        bool wasWebFocused = _compositionWebFocused;
                         _compositionWebFocused = false;
-                        UpdateInputOwnershipState();
+                        if (wasWebFocused)
+                        {
+                            LogCompositionTypingDiag("webFocus cleared by click outside browser viewport");
+                            UpdateInputOwnershipState();
+                        }
                         try
                         {
                             if (_urlInput != null && _urlInput.gameObject.activeInHierarchy && _urlInput.interactable)
@@ -2470,10 +3291,6 @@ namespace Firesky.UnderNetBrowser
                         }
                         catch { }
                     }
-                    if (_browserPointerDown && mouseUp) { _browserPointerDown = false; _gpuCompositionCapture.SendMouseUp(0, 0, false); }
-                    else if (!mouseHeld) _browserPointerDown = false;
-                    if (_browserPointerRightDown && rUp) { _browserPointerRightDown = false; _gpuCompositionCapture.SendMouseUp(0, 0, true); }
-                    else if (!rHeld) _browserPointerRightDown = false;
                     return;
                 }
                 var rect = rt.rect;
@@ -2491,19 +3308,67 @@ namespace Firesky.UnderNetBrowser
                     try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { }
                     _gameMouseCaptured = false;
                 }
+
+                // Cursor policy: keep host cursor visible for normal web browsing (WebView2 composition doesn't render OS cursor in texture).
+                // Hide host cursor only in Game Input Mode over web content, where the browser game/page typically provides its own cursor/capture UX.
+                try
+                {
+                    bool urlFocusedNow2 = _urlInput != null && _urlInput.isFocused;
+                    bool hideHostCursor = inside && IsOpen && !_detachedToGameplay && !urlFocusedNow2 && _gameInputMode && _compositionWebFocused;
+                    if (hideHostCursor != _browserHostCursorHidden)
+                    {
+                        _browserHostCursorHidden = hideHostCursor;
+                        Cursor.visible = !hideHostCursor;
+                        Cursor.lockState = CursorLockMode.None;
+                    }
+                    else if (hideHostCursor)
+                    {
+                        if (Cursor.visible) Cursor.visible = false;
+                        if (Cursor.lockState != CursorLockMode.None) Cursor.lockState = CursorLockMode.None;
+                    }
+                    else
+                    {
+                        // Ensure visible when not intentionally hidden (avoid getting stuck hidden).
+                        if (!Cursor.visible && !_gameMouseCaptured) Cursor.visible = true;
+                        if (Cursor.lockState != CursorLockMode.None && !_gameMouseCaptured) Cursor.lockState = CursorLockMode.None;
+                    }
+                }
+                catch { }
                 if (!inside)
                 {
-                    // Click outside web content (e.g. chrome/address bar): allow UI interaction and stop routing keyboard to web.
-                    if (mouseDown)
+                    if (mouseDown && !(_browserPointerDown || _browserPointerRightDown))
                     {
-                        if (_compositionWebFocused) LogCompositionTypingDiag("webFocus cleared by click outside web content (chrome/address bar area)");
+                        bool wasWebFocused = _compositionWebFocused;
                         _compositionWebFocused = false;
-                        UpdateInputOwnershipState();
+                        if (wasWebFocused)
+                        {
+                            LogCompositionTypingDiag("webFocus cleared by click outside browser content area");
+                            UpdateInputOwnershipState();
+                        }
                     }
-                    if (_browserPointerDown && mouseUp) { _browserPointerDown = false; _gpuCompositionCapture.SendMouseUp(px, py, false); }
-                    else if (!mouseHeld) _browserPointerDown = false;
-                    if (_browserPointerRightDown && rUp) { _browserPointerRightDown = false; _gpuCompositionCapture.SendMouseUp(px, py, true); }
-                    else if (!rHeld) _browserPointerRightDown = false;
+
+                    if (_browserPointerDown || _browserPointerRightDown)
+                    {
+                        bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
+                        if (due)
+                        {
+                            _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
+                            try { _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
+                        }
+                        if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, false); } catch { } _browserPointerDown = false; }
+                        if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, true); } catch { } _browserPointerRightDown = false; }
+                        return;
+                    }
+
+                    try
+                    {
+                        var scrollOutside = Input.mouseScrollDelta.y;
+                        bool ctrlOutside = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+                        if (ctrlOutside && Mathf.Abs(scrollOutside) > 0.001f)
+                            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Ctrl+wheel ignored: pointer outside browser content (nx={nx:0.###} ny={ny:0.###})");
+                    }
+                    catch { }
+
                     return;
                 }
 
@@ -2517,21 +3382,25 @@ namespace Firesky.UnderNetBrowser
                     _browserPointerDown = true;
                     bool wasWebFocused = _compositionWebFocused;
                     _compositionWebFocused = true;
-                    try { if (_urlInput != null && _urlInput.isFocused) UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                    try
+                    {
+                        if (_urlInput != null && _urlInput.isFocused)
+                        {
+                            try { _urlInput.DeactivateInputField(); } catch { }
+                            try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                        }
+                    }
+                    catch { }
                     UpdateInputOwnershipState();
                     LogCompositionTypingDiag($"webClick inside px={px} py={py} wasWebFocused={wasWebFocused} urlFocused={(_urlInput != null && _urlInput.isFocused)}");
-                    // Avoid forcing host/controller focus on every click: repeated MoveFocus/SetFocus can dismiss web popups/menus.
-                    // Request focus only when transitioning into web focus.
-                    if (!wasWebFocused)
-                    {
-                        try { _gpuCompositionCapture.RequestFocus(); } catch { }
-                    }
-                    // In game mode, help focus the actual game canvas/element so keyboard events reach it (once on focus transition).
-                    if (_gameInputMode && !wasWebFocused)
+                    // Request native web focus on click when transitioning, and also periodically if focus may be stale.
+                    try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                    // In game mode, help focus the actual game canvas/element so keyboard events reach it.
+                    if (_gameInputMode)
                     {
                         try
                         {
-                            _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} }catch(_){}})();");
+                            _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} try{d.body&&d.body.focus&&d.body.focus();}catch(_){} }catch(_){}})();");
                         }
                         catch { }
                     }
@@ -2543,7 +3412,15 @@ namespace Firesky.UnderNetBrowser
                     _browserPointerRightDown = true;
                     bool wasWebFocused = _compositionWebFocused;
                     _compositionWebFocused = true;
-                    try { if (_urlInput != null && _urlInput.isFocused) UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                    try
+                    {
+                        if (_urlInput != null && _urlInput.isFocused)
+                        {
+                            try { _urlInput.DeactivateInputField(); } catch { }
+                            try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                        }
+                    }
+                    catch { }
                     UpdateInputOwnershipState();
                     if (!wasWebFocused) { try { _gpuCompositionCapture.RequestFocus(); } catch { } }
                     _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, false);
@@ -2562,35 +3439,51 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                if (mouseUp)
+                // Always release tracked button state when Unity reports mouse-up (or button no longer held) to avoid stuck web drags/selections.
+                if (_browserPointerDown && (mouseUp || !mouseHeld))
                 {
-                    if (_browserPointerDown) _gpuCompositionCapture.SendMouseUp(px, py, false);
+                    try { _gpuCompositionCapture.SendMouseUp(px, py, false); } catch { }
                     _browserPointerDown = false;
                 }
-                else if (!mouseHeld && _browserPointerDown)
+                if (_browserPointerRightDown && (rUp || !rHeld))
                 {
-                    _browserPointerDown = false;
-                }
-                if (rUp)
-                {
-                    if (_browserPointerRightDown) _gpuCompositionCapture.SendMouseUp(px, py, true);
-                    _browserPointerRightDown = false;
-                }
-                else if (!rHeld && _browserPointerRightDown)
-                {
+                    try { _gpuCompositionCapture.SendMouseUp(px, py, true); } catch { }
                     _browserPointerRightDown = false;
                 }
 
                 var scroll = Input.mouseScrollDelta.y;
                 if (Mathf.Abs(scroll) > 0.001f)
                 {
-                    int delta = Mathf.RoundToInt(scroll * 120f);
-                    try { _gpuCompositionCapture.RequestFocus(); } catch { }
-                    _gpuCompositionCapture.SendMouseWheel(px, py, delta);
-                    // Wheel is forwarded to webpage; hotbar switching is blocked by InputHooks when ownership active.
-                    if (!UnderNetBrowserInputHooks.Installed)
+                    bool ctrlDown = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+                    if (ctrlDown)
                     {
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Ctrl+wheel detected over browser (scroll={scroll:0.###}, inside=True, webFocused={_compositionWebFocused}, urlFocused={_urlInput != null && _urlInput.isFocused})"); } catch { }
+                        try
+                        {
+                            double z = _gpuCompositionCapture.GetZoomFactor();
+                            if (!(z > 0.0)) z = 1.0;
+                            double step = scroll > 0 ? 0.10 : -0.10;
+                            // Slightly larger step for fast wheel gestures.
+                            if (Mathf.Abs(scroll) >= 2f) step *= 1.5;
+                            double nz = Mathf.Clamp((float)(z + step), 0.25f, 5.0f);
+                            _gpuCompositionCapture.SetZoomFactor(nz);
+                            try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, requested)");
+                        }
+                        catch (Exception ex) { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom failed (restart game after native update?): {ex.Message}"); }
+                        // Ctrl+wheel is consumed for zoom; suppress hotbar/game wheel side effects.
                         try { TrySuppressHotbarScroll(); } catch { }
+                    }
+                    else
+                    {
+                        int delta = Mathf.RoundToInt(scroll * 120f);
+                        try { _gpuCompositionCapture.RequestFocus(); } catch { }
+                        _gpuCompositionCapture.SendMouseWheel(px, py, delta);
+                        // Wheel is forwarded to webpage; hotbar switching is blocked by InputHooks when ownership active.
+                        if (!UnderNetBrowserInputHooks.Installed)
+                        {
+                            try { TrySuppressHotbarScroll(); } catch { }
+                        }
                     }
                 }
             }
@@ -2639,8 +3532,7 @@ namespace Firesky.UnderNetBrowser
             _chromeRoot = new GameObject("UnderNetBrowser_Chrome");
             _chromeRoot.transform.SetParent(container.transform, false);
             _chromeRT = _chromeRoot.AddComponent<RectTransform>();
-            _chromeRT.anchorMin = new Vector2(0f, 0.915f);
-            _chromeRT.anchorMax = new Vector2(1f, 1f);
+            ApplyChromeLayout();
             _chromeRT.offsetMin = Vector2.zero; _chromeRT.offsetMax = Vector2.zero;
             var chromeBg = _chromeRoot.AddComponent<Image>();
             chromeBg.color = new Color(0.11f, 0.12f, 0.15f, 0.98f);
@@ -2656,16 +3548,41 @@ namespace Firesky.UnderNetBrowser
             chromeLayout.padding = new RectOffset(6, 6, 4, 4);
 
             _backButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_BackBtn", "<", new Vector2(30, 26), new Color(0.22f, 0.24f, 0.28f, 1f), () => {
+                if (_externalMirrorMode)
+                {
+                    var ret = _externalMirrorReturnUrl;
+                    try { StopExternalWindowMirror("back_button"); } catch { }
+                    try { EnsureCompositionBrowserStarted(string.IsNullOrWhiteSpace(ret) ? GetResolvedHomeUrl() : ret); } catch { }
+                    return;
+                }
                 _gpuCompositionCapture?.GoBack();
             }, 15);
             _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", ">", new Vector2(30, 26), new Color(0.22f, 0.24f, 0.28f, 1f), () => {
+                if (_externalMirrorMode) { SetHint("Discord mirror active: Back/Home to return."); return; }
                 _gpuCompositionCapture?.GoForward();
             }, 15);
             _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "R", new Vector2(30, 26), new Color(0.22f, 0.28f, 0.34f, 1f), () => {
+                if (_externalMirrorMode)
+                {
+                    try { StopExternalWindowMirror("reload_button"); } catch { }
+                    if (!TryStartDiscordMirror("undernet:discord"))
+                    {
+                        SetHint("Discord mirror unavailable (is Discord running?). Back/Home to return.");
+                        try { EnsureCompositionBrowserStarted(string.IsNullOrWhiteSpace(_externalMirrorReturnUrl) ? GetResolvedHomeUrl() : _externalMirrorReturnUrl); } catch { }
+                    }
+                    return;
+                }
                 _gpuCompositionCapture?.Reload();
             }, 14);
             _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "H", new Vector2(30, 26), new Color(0.18f, 0.30f, 0.22f, 1f), () => {
                 try { ReleaseAllGameKeys("home_button"); } catch { }
+                if (_externalMirrorMode)
+                {
+                    try { StopExternalWindowMirror("home_button"); } catch { }
+                    try { EnsureCompositionBrowserStarted(GetResolvedHomeUrl()); } catch { }
+                    try { _compositionWebFocused = true; UpdateInputOwnershipState(); } catch { }
+                    return;
+                }
                 var raw = "undernet:home";
                 var home = GetResolvedHomeUrl();
                 if (_urlInput != null)
@@ -2819,13 +3736,98 @@ namespace Firesky.UnderNetBrowser
             {
                 bool showChrome = !_isPageFullscreen;
                 if (_chromeRoot != null && _chromeRoot.activeSelf != showChrome) _chromeRoot.SetActive(showChrome);
+                ApplyChromeLayout();
+            }
+            catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] UpdateChromeVisibility failed: {ex.Message}"); }
+        }
+
+        private void ApplyChromeLayout()
+        {
+            try
+            {
+                float chromeHFrac = UnderNetBrowserConfig.GetChromeHeightFraction();
+                float topYMin = Mathf.Clamp01(1f - chromeHFrac);
+                bool showChrome = !_isPageFullscreen;
+
+                if (_chromeRT != null)
+                {
+                    _chromeRT.anchorMin = new Vector2(0f, topYMin);
+                    _chromeRT.anchorMax = new Vector2(1f, 1f);
+                    _chromeRT.offsetMin = Vector2.zero;
+                    _chromeRT.offsetMax = Vector2.zero;
+
+                    // Scale chrome controls/padding to better match configured height.
+                    try
+                    {
+                        float containerH = 1080f;
+                        try
+                        {
+                            var rootRt = _chromeRT.root as RectTransform;
+                            if (rootRt != null && rootRt.rect.height > 10f) containerH = rootRt.rect.height;
+                            else if (_videoRT != null && _videoRT.parent is RectTransform prt && prt.rect.height > 10f) containerH = prt.rect.height;
+                        }
+                        catch { }
+                        float chromePx = Mathf.Clamp(containerH * chromeHFrac, 24f, 180f);
+                        float controlH = Mathf.Clamp(chromePx - 10f, 20f, 64f);
+                        float btnW = Mathf.Clamp(controlH * 1.15f, 24f, 72f);
+                        int font = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.52f), 10, 28);
+                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.50f), 10, 26);
+                        int padV = Mathf.Clamp(Mathf.RoundToInt(Mathf.Max(2f, (chromePx - controlH) * 0.5f)), 2, 16);
+                        int padH = Mathf.Clamp(Mathf.RoundToInt(6f + (controlH - 26f) * 0.15f), 4, 18);
+
+                        var hlg = _chromeRoot != null ? _chromeRoot.GetComponent<HorizontalLayoutGroup>() : null;
+                        if (hlg != null)
+                        {
+                            hlg.padding = new RectOffset(padH, padH, padV, padV);
+                            hlg.spacing = Mathf.Clamp(4f + (controlH - 26f) * 0.08f, 3f, 12f);
+                        }
+
+                        void ApplyButtonSizing(Button? b)
+                        {
+                            if (b == null) return;
+                            try
+                            {
+                                var le = b.GetComponent<LayoutElement>() ?? b.gameObject.AddComponent<LayoutElement>();
+                                le.preferredWidth = btnW; le.minWidth = Mathf.Max(20f, btnW * 0.85f);
+                                le.preferredHeight = controlH; le.minHeight = controlH;
+                                var t = b.GetComponentInChildren<Text>(true);
+                                if (t != null) t.fontSize = font;
+                            }
+                            catch { }
+                        }
+
+                        ApplyButtonSizing(_backButton);
+                        ApplyButtonSizing(_forwardButton);
+                        ApplyButtonSizing(_reloadButton);
+                        ApplyButtonSizing(_homeButton);
+                        ApplyButtonSizing(_closeButton);
+
+                        if (_urlInput != null)
+                        {
+                            try
+                            {
+                                var le = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
+                                le.preferredHeight = controlH; le.minHeight = controlH;
+                                le.minWidth = Mathf.Max(120f, chromePx * 4f);
+                                if (_urlInput.textComponent != null) _urlInput.textComponent.fontSize = urlFont;
+                                if (_urlInput.placeholder is Text ph) ph.fontSize = urlFont;
+                                if (_urlDisplayText != null) _urlDisplayText.fontSize = urlFont;
+                                if (_gameModeIndicatorText != null) _gameModeIndicatorText.fontSize = Mathf.Max(9, font - 2);
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+
                 if (_videoRT != null)
                 {
-                    // Minimal edge gaps to better fit TV screen; chrome occupies top strip when visible.
                     if (showChrome)
                     {
+                        // Keep minimal edge gaps and leave room for chrome strip.
+                        float maxY = Mathf.Clamp(topYMin - 0.002f, 0.05f, 0.998f);
                         _videoRT.anchorMin = new Vector2(0.002f, 0.002f);
-                        _videoRT.anchorMax = new Vector2(0.998f, 0.913f);
+                        _videoRT.anchorMax = new Vector2(0.998f, maxY);
                     }
                     else
                     {
@@ -2836,14 +3838,20 @@ namespace Firesky.UnderNetBrowser
                     _videoRT.offsetMax = Vector2.zero;
                 }
             }
-            catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] UpdateChromeVisibility failed: {ex.Message}"); }
+            catch { }
         }
 
         // Composition mode polls page fullscreen state during OnUpdate to hide/show chrome.
 
         private void CloseAppToTvHome()
         {
+            if (_browserUiCriticalActionInProgress)
+            {
+                try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Close requested (X) ignored: browser UI action in progress."); } catch { }
+                return;
+            }
             bool invokedFrameworkClose = false;
+            _browserUiCriticalActionInProgress = true;
             try
             {
                 MelonLogger.Msg("[Firesky UnderNet Browser] [UnderNetBrowser] Close requested (X).");
@@ -2879,12 +3887,19 @@ namespace Firesky.UnderNetBrowser
                 // It will clear the flag; clear here only for immediate/fallback paths.
                 if (!invokedFrameworkClose) _explicitCloseRequested = false;
                 _warmCloseRequested = false;
+                _browserUiCriticalActionInProgress = false;
             }
         }
 
         private void RequestWarmClose(string reason)
         {
+            if (_browserUiCriticalActionInProgress)
+            {
+                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Warm close requested ({reason}) ignored: browser UI action in progress."); } catch { }
+                return;
+            }
             bool invokedFrameworkClose = false;
+            _browserUiCriticalActionInProgress = true;
             try
             {
                 UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Warm close requested ({reason}).");
@@ -2893,6 +3908,7 @@ namespace Firesky.UnderNetBrowser
                 _detachRequested = false;
                 _detachedToGameplay = false;
                 AnyDetachActive = false;
+                try { ClearReattachFocusRecoveryState(); } catch { }
                 try { RestoreDetachedHomeScreenObjects(restoreHiddenObjects: false); } catch { }
                 try { SetAppInteractionEnabled(true); } catch { }
 
@@ -2920,6 +3936,7 @@ namespace Firesky.UnderNetBrowser
             finally
             {
                 if (!invokedFrameworkClose) _warmCloseRequested = false;
+                _browserUiCriticalActionInProgress = false;
             }
         }
 
@@ -2933,6 +3950,15 @@ namespace Firesky.UnderNetBrowser
         private float _lastDetachedVisualMaintainRealtime;
         private float _lastDetachedExitEnsureRealtime;
         private float _lastTvScreenMirrorAttemptRealtime;
+        // Rapid detach/reattach safeguards + focus recovery
+        private float _lastDetachRequestRealtime = -999f;
+        private float _lastDetachExitInvokeRealtime = -999f;
+        private float _reattachBlockedUntilRealtime = -999f;
+        private float _lastReattachRealtime = -999f;
+        private float _reattachFocusRecoveryUntilRealtime = -999f;
+        private float _nextReattachFocusRetryRealtime = -999f;
+        private int _reattachFocusRetryCount;
+        private int _lastLoggedReattachBlockBucket = int.MinValue;
         private readonly List<(GameObject go, bool wasActive)> _detachedHiddenHomeScreenObjects = new List<(GameObject, bool)>();
         private readonly List<(Renderer renderer, bool wasEnabled)> _detachedHiddenClockRenderers = new List<(Renderer, bool)>();
         private readonly List<(Renderer renderer, Material? materialInstance, Texture? originalMainTexture, string? originalShaderName)> _tvScreenMirrorStates = new List<(Renderer, Material?, Texture?, string?)>();
@@ -3115,10 +4141,34 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (!IsOpen) return;
+                float nowRt = Time.realtimeSinceStartup;
+
+                // Debounce rapid detach requests to avoid TV/S1API/WebView focus races when user toggles quickly.
+                if (_detachedToGameplay && (nowRt - _lastDetachRequestRealtime) < 0.5f)
+                {
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                        UnderNetBrowserConfig.Log("[UnderNetBrowser] Detach ignored: already detached (cooldown)");
+                    return;
+                }
+                if ((nowRt - _lastDetachRequestRealtime) < 0.25f && (_detachRequested || AnyDetachActive))
+                {
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                        UnderNetBrowserConfig.Log("[UnderNetBrowser] Detach ignored: rapid duplicate request");
+                    return;
+                }
+
+                _lastDetachRequestRealtime = nowRt;
                 _detachRequested = true;
-                _detachRequestedTime = Time.realtimeSinceStartup;
+                _detachRequestedTime = nowRt;
                 AnyDetachActive = true;
                 _detachedToGameplay = true;
+                // Block immediate false-positive reattach while TV/game state settles after detach.
+                _reattachBlockedUntilRealtime = Mathf.Max(_reattachBlockedUntilRealtime, nowRt + 0.45f);
+                _lastLoggedReattachBlockBucket = int.MinValue;
+                _reattachFocusRecoveryUntilRealtime = -999f;
+                _nextReattachFocusRetryRealtime = -999f;
+                _reattachFocusRetryCount = 0;
+
                 // Keep rendering active while detached so video playback remains visible on TV (audio already continues).
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
                 _compositionWebFocused = false;
@@ -3126,6 +4176,7 @@ namespace Firesky.UnderNetBrowser
                 _browserPointerRightDown = false;
                 try { ReleaseAllGameKeys("detach_to_gameplay"); } catch { }
                 try { UnderNetBrowserDiagnostics.OnDetachRequested(); } catch { }
+                try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(true); } catch { }
                 UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Right-click detach: keeping app open and attempting to exit TV mode (gameplay restore).");
 
                 // Release gameplay/UI ownership immediately (similar to paused state) without pausing app rendering.
@@ -3136,7 +4187,12 @@ namespace Firesky.UnderNetBrowser
                 try { Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false; } catch { }
 
                 // Best-effort: exit TV interaction/interface so player returns to gameplay/camera/controls.
-                TryExitTvInterfaceBestEffort();
+                // Throttled to avoid hammering game APIs during rapid input/toggle sequences.
+                if (nowRt - _lastDetachExitInvokeRealtime >= 0.5f)
+                {
+                    _lastDetachExitInvokeRealtime = nowRt;
+                    TryExitTvInterfaceBestEffort();
+                }
 
                 // Keep gameplay released after detach even if S1API/game still considers app open.
                 try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
@@ -3277,7 +4333,7 @@ namespace Firesky.UnderNetBrowser
                     return false;
                 }
 
-                // Prefer instance's actual type for invocation to avoid IL2CPP proxy type mismatches.
+                // Prefer instance's actual runtime type and only invoke methods compatible with the target object to avoid IL2CPP proxy mismatches.
                 Type actualType = ifaceObj.GetType();
                 var candidateTypes = new List<Type>();
                 if (actualType != null) candidateTypes.Add(actualType);
@@ -3287,12 +4343,17 @@ namespace Firesky.UnderNetBrowser
                 {
                     try
                     {
+                        if (t == null) continue;
                         var isOpenProp = t.GetProperty("IsOpen", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (isOpenProp != null)
+                        if (isOpenProp != null && (isOpenProp.DeclaringType == null || isOpenProp.DeclaringType.IsInstanceOfType(ifaceObj)))
                         {
-                            var v = isOpenProp.GetValue(ifaceObj);
-                            if (v is bool b && !b)
-                                UnderNetBrowserConfig.Log("[UnderNetBrowser] Detach: TVInterface.IsOpen is false (continuing best-effort RemovePlayer).");
+                            try
+                            {
+                                var v = isOpenProp.GetValue(ifaceObj);
+                                if (v is bool b && !b && UnderNetBrowserConfig.DebugLogging?.Value == true)
+                                    UnderNetBrowserConfig.Log("[UnderNetBrowser] Detach: TVInterface.IsOpen is false (continuing best-effort RemovePlayer).");
+                            }
+                            catch { }
                         }
                     }
                     catch { }
@@ -3302,11 +4363,19 @@ namespace Firesky.UnderNetBrowser
                         var methods = t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                         foreach (var mi in methods)
                         {
-                            if (mi.Name != "RemovePlayer") continue;
+                            if (mi == null || mi.Name != "RemovePlayer") continue;
                             var ps = mi.GetParameters();
                             if (ps.Length != 1) continue;
+                            if (mi.DeclaringType != null && !mi.DeclaringType.IsInstanceOfType(ifaceObj)) continue;
+
                             bool argOk = false;
-                            try { argOk = ps[0].ParameterType.IsInstanceOfType(localPlayer); } catch { argOk = false; }
+                            try
+                            {
+                                var pType = ps[0].ParameterType;
+                                argOk = pType.IsInstanceOfType(localPlayer) || pType.IsAssignableFrom(localPlayer.GetType());
+                            }
+                            catch { argOk = false; }
+
                             try
                             {
                                 mi.Invoke(ifaceObj, new[] { localPlayer });
@@ -3315,7 +4384,8 @@ namespace Firesky.UnderNetBrowser
                             }
                             catch (Exception ex)
                             {
-                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] {t.FullName ?? t.Name}.RemovePlayer invoke failed (argMatch={argOk}): {ex.Message}");
+                                if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Detach: {t.FullName ?? t.Name}.RemovePlayer invoke attempt failed (argMatch={argOk}): {ex.GetType().Name}: {ex.Message}");
                             }
                         }
                     }
@@ -3342,15 +4412,18 @@ namespace Firesky.UnderNetBrowser
                 {
                     try
                     {
+                        if (t == null) continue;
                         var mi = t.GetMethod("Close", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, Type.EmptyTypes, null);
                         if (mi == null) continue;
+                        if (mi.DeclaringType != null && !mi.DeclaringType.IsInstanceOfType(ifaceObj)) continue;
                         mi.Invoke(ifaceObj, null);
                         UnderNetBrowserConfig.Log($"[UnderNetBrowser] Invoked {t.FullName ?? t.Name}.Close() for detach (game interaction exit).");
                         return true;
                     }
                     catch (Exception ex)
                     {
-                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] {t.FullName ?? t.Name}.Close() invoke failed: {ex.Message}");
+                        if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                            UnderNetBrowserConfig.Log($"[UnderNetBrowser] Detach: {t.FullName ?? t.Name}.Close() invoke attempt failed: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
             }
@@ -3504,7 +4577,6 @@ namespace Firesky.UnderNetBrowser
                 {
                     if (c == null) continue;
 
-                    // Try on actual component instance and also any IL2CPP-cast interface/interactable view.
                     var candidates = new List<UnityEngine.Object> { c };
                     try
                     {
@@ -3529,11 +4601,17 @@ namespace Firesky.UnderNetBrowser
                                 var methods = t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                                 foreach (var mi in methods)
                                 {
-                                    if (mi.Name != "RemovePlayer") continue;
+                                    if (mi == null || mi.Name != "RemovePlayer") continue;
                                     var ps = mi.GetParameters();
                                     if (ps.Length != 1) continue;
+                                    if (mi.DeclaringType != null && !mi.DeclaringType.IsInstanceOfType(obj)) continue;
                                     bool argOk = false;
-                                    try { argOk = ps[0].ParameterType.IsInstanceOfType(localPlayer); } catch { argOk = false; }
+                                    try
+                                    {
+                                        var pType = ps[0].ParameterType;
+                                        argOk = pType.IsInstanceOfType(localPlayer) || pType.IsAssignableFrom(localPlayer.GetType());
+                                    }
+                                    catch { argOk = false; }
                                     try
                                     {
                                         mi.Invoke(obj, new[] { localPlayer });
@@ -3546,11 +4624,10 @@ namespace Firesky.UnderNetBrowser
                             catch { }
                         }
 
-                        // Also attempt Close() to reliably restore gameplay/camera/controls (may return TV to home/lock screen visually).
                         try
                         {
                             var miClose = t.GetMethod("Close", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, Type.EmptyTypes, null);
-                            if (miClose != null)
+                            if (miClose != null && (miClose.DeclaringType == null || miClose.DeclaringType.IsInstanceOfType(obj)))
                             {
                                 miClose.Invoke(obj, null);
                                 UnderNetBrowserConfig.Log($"[UnderNetBrowser] Detach: invoked {t.FullName ?? t.Name}.Close() (behavior scan).");
@@ -3569,16 +4646,183 @@ namespace Firesky.UnderNetBrowser
             return invoked;
         }
 
+        private void EnsureReattachFocus(string reason)
+        {
+            try
+            {
+                if (_detachedToGameplay || !IsOpen) return;
+
+                bool verbose = UnderNetBrowserConfig.DebugLogging?.Value == true;
+                if (verbose)
+                {
+                    try
+                    {
+                        bool over = false; int px = -1, py = -1;
+                        try { over = IsPointerOverVideoDisplay(out px, out py); } catch { }
+                        bool compTexReady = false;
+                        try { compTexReady = _gpuCompositionCapture?.Texture != null; } catch { compTexReady = false; }
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] ReattachFocus: reason={reason} webFocused={_compositionWebFocused} urlFocused={(_urlInput != null && _urlInput.isFocused)} ptrOver={over} ptrPx={px} ptrPy={py} comp={(_gpuCompositionCapture != null)} compTex={compTexReady} suspended={(_gpuCompositionCapture?.RenderingSuspended ?? false)}");
+                    }
+                    catch { }
+                }
+
+                // On reattach the browser must always be the interaction target.
+                try
+                {
+                    if (_urlInput != null && _urlInput.isFocused)
+                    {
+                        try { _urlInput.DeactivateInputField(); } catch { }
+                    }
+                }
+                catch { }
+                try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+
+                _compositionWebFocused = true;
+                try { UpdateInputOwnershipState(); } catch { }
+                try { SetAppInteractionEnabled(true); } catch { }
+                try { EnsureGraphicRaycastersEnabledForApp(reason); } catch { }
+                try
+                {
+                    // Best-effort focus restoration; if composition texture is not ready yet, keep retry window active.
+                    if (_gpuCompositionCapture != null)
+                    {
+                        _gpuCompositionCapture.RequestFocus();
+                        if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                        {
+                            bool compTexReady = false;
+                            try { compTexReady = _gpuCompositionCapture.Texture != null; } catch { compTexReady = false; }
+                            if (!compTexReady && reason != null && (reason.StartsWith("reattach", StringComparison.OrdinalIgnoreCase) || reason.StartsWith("retry#", StringComparison.OrdinalIgnoreCase) || reason.IndexOf("pointer_recovery", StringComparison.OrdinalIgnoreCase) >= 0))
+                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] ReattachFocus: composition texture not ready yet ({reason}); continuing recovery.");
+                        }
+                    }
+                }
+                catch { }
+                try
+                {
+                    _gpuCompositionCapture?.ExecuteScript(
+                        "(function(){try{" +
+                        "try{window.focus&&window.focus();}catch(_){}" +
+                        "try{document.body&&document.body.focus&&document.body.focus();}catch(_){}" +
+                        "try{var ae=document.activeElement;" +
+                        "if(!ae||ae===document.body||ae===document.documentElement){" +
+                        "  var c=document.querySelector('video,canvas,button,[role=\"button\"],a,input,textarea,select,[tabindex]');" +
+                        "  if(c&&c.focus){try{c.focus({preventScroll:true});}catch(_){try{c.focus();}catch(__){}}}" +
+                        "}}catch(_){}" +
+                        "try{var evs=['pointerdown','mousedown','mouseup','click'];" +
+                        "for(var i=0;i<evs.length;i++){try{document.dispatchEvent(new Event(evs[i],{bubbles:true}));}catch(_){}}}catch(_){}" +
+                        "try{var v=document.querySelector('video'); if(v){try{v.setAttribute('tabindex', v.getAttribute('tabindex')||'-1');}catch(_){} try{v.focus&&v.focus();}catch(_){}}" +
+                        "catch(_){}" +
+                        "}catch(_){}})();");
+                }
+                catch { }
+
+                // Keep short retry window alive while user is interacting after reattach.
+                float nowRt = Time.realtimeSinceStartup;
+                if (_reattachFocusRecoveryUntilRealtime > nowRt)
+                    _nextReattachFocusRetryRealtime = Mathf.Min(_nextReattachFocusRetryRealtime <= 0f ? (nowRt + 0.12f) : _nextReattachFocusRetryRealtime, nowRt + 0.12f);
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] EnsureReattachFocus failed ({reason}, non-fatal): {ex.Message}"); } catch { }
+            }
+        }
+
+        private void ClearReattachFocusRecoveryState()
+        {
+            if (UnderNetBrowserConfig.DebugLogging?.Value == true && _reattachFocusRecoveryUntilRealtime > Time.realtimeSinceStartup)
+                UnderNetBrowserConfig.Log("[UnderNetBrowser] ReattachFocus: recovery cleared");
+            _reattachInteractionSuppressUntilRealtime = -999f;
+            _reattachFocusRecoveryUntilRealtime = -999f;
+            _nextReattachFocusRetryRealtime = -999f;
+            _reattachFocusRetryCount = 0;
+        }
+
+        private void BeginReattachFocusRecovery(string reason)
+        {
+            try
+            {
+                // Reattach/open/resume recovery means gameplay/browser interaction is transitioning back to active TV context.
+                try
+                {
+                    if (reason != null && (reason.IndexOf("detach", StringComparison.OrdinalIgnoreCase) >= 0 || reason.IndexOf("reattach", StringComparison.OrdinalIgnoreCase) >= 0))
+                        UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(false);
+                }
+                catch { }
+                float nowRt = Time.realtimeSinceStartup;
+                _lastReattachRealtime = nowRt;
+                _reattachInteractionSuppressUntilRealtime = nowRt + 0.12f; // short carry-over guard only; clicks during recovery are handled
+                _reattachFocusRecoveryUntilRealtime = nowRt + 1.75f;
+                _nextReattachFocusRetryRealtime = nowRt;
+                _reattachFocusRetryCount = 0;
+                if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] ReattachFocus: begin reason={reason} window=1.75s");
+                EnsureReattachFocus(reason + ":begin");
+            }
+            catch { }
+        }
+
+        private void TickReattachFocusRecovery()
+        {
+            try
+            {
+                if (_detachedToGameplay || !IsOpen) return;
+                float nowRt = Time.realtimeSinceStartup;
+                if (nowRt >= _reattachFocusRecoveryUntilRealtime)
+                {
+                    // One-time debug marker when window expires (gated).
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true && _reattachFocusRetryCount > 0 && _nextReattachFocusRetryRealtime > -900f)
+                    {
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] ReattachFocus: window elapsed after {_reattachFocusRetryCount} retry(ies)");
+                        _nextReattachFocusRetryRealtime = -999f; // prevent repeated "elapsed" logs
+                    }
+                    return;
+                }
+                if (nowRt < _nextReattachFocusRetryRealtime) return;
+
+                _reattachFocusRetryCount++;
+                EnsureReattachFocus($"retry#{_reattachFocusRetryCount}");
+
+                // Retry aggressively at first, then back off slightly.
+                float interval = _reattachFocusRetryCount <= 6 ? 0.10f : 0.20f;
+                _nextReattachFocusRetryRealtime = nowRt + interval;
+
+                // Keep raycasters/canvas state healthy during recovery in case S1API/TV UI settles late.
+                if ((_reattachFocusRetryCount % 3) == 0)
+                {
+                    try { SetAppInteractionEnabled(true); } catch { }
+                    try { EnsureGraphicRaycastersEnabledForApp($"retry#{_reattachFocusRetryCount}"); } catch { }
+                }
+            }
+            catch { }
+        }
+
         private bool TryReattachToTvIfResumedWhileDetached()
         {
             try
             {
                 if (!_detachedToGameplay || !IsOpen) return false;
-                if (Time.realtimeSinceStartup - _lastDetachedReattachCheckRealtime < 0.25f) return false;
-                _lastDetachedReattachCheckRealtime = Time.realtimeSinceStartup;
+                float nowRt = Time.realtimeSinceStartup;
+                if (nowRt < _reattachBlockedUntilRealtime)
+                {
+                    // State-aware debug signal: throttled so debug runs remain useful without flooding during settle windows.
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    {
+                        float remain = _reattachBlockedUntilRealtime - nowRt;
+                        int bucket = Mathf.Clamp((int)Mathf.Ceil(remain * 2f), 0, 20); // ~0.5s buckets
+                        if (bucket != _lastLoggedReattachBlockBucket)
+                        {
+                            _lastLoggedReattachBlockBucket = bucket;
+                            UnderNetBrowserConfig.Log($"[UnderNetBrowser] Reattach probe blocked (settle): {remain:0.00}s");
+                        }
+                    }
+                    return false;
+                }
+                if (nowRt - _lastDetachedReattachCheckRealtime < 0.20f) return false;
+                _lastDetachedReattachCheckRealtime = nowRt;
 
                 // Detect game TV interaction resumed.
                 // After RemovePlayer-only detach the interface may remain open/visible; prefer player-presence over IsOpen alone.
+                try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(false); } catch { }
                 bool shouldReattach = false;
                 try
                 {
@@ -3641,13 +4885,19 @@ namespace Firesky.UnderNetBrowser
                 AnyDetachActive = false;
                 _compositionFocusPrimed = false;
                 _compositionWebFocused = true; // default back to web interaction after reattach
+                if (_gameInputMode && UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    UnderNetBrowserConfig.Log("[UnderNetBrowser] Reattach: resetting GameInputMode to OFF for deterministic focus/ownership.");
+                _gameInputMode = false;
+                try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
                 _nextMediaArrowRepeatLeft = _nextMediaArrowRepeatRight = _nextMediaArrowRepeatUp = _nextMediaArrowRepeatDown = -1f;
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
                 UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Re-attaching to TV interaction after detached gameplay resume (restoring input ownership).");
+
                 // Do not reactivate hidden TV home/clock objects on reattach; app remains active and restoring them can surface vanilla lock/home UI.
                 try { RestoreDetachedHomeScreenObjects(restoreHiddenObjects: false); } catch { }
                 try { TryForegroundS1AppForReattach(); } catch { }
                 try { SetAppInteractionEnabled(true); } catch { }
+                try { EnsureGraphicRaycastersEnabledForApp("reattach_detected_pre"); } catch { }
                 try { UnderNetBrowserInputHooks.EnsureInstalled(); } catch { }
                 try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { }
                 try { TryHideGameHud(); } catch { }
@@ -3661,8 +4911,26 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { }
                 try { UpdateInputOwnershipState(); } catch { }
-                try { _gpuCompositionCapture?.RequestFocus(); } catch { }
-                try { _reattachInteractionSuppressUntilRealtime = Time.realtimeSinceStartup + 0.35f; } catch { _reattachInteractionSuppressUntilRealtime = 0f; }
+
+                // Strong focus recovery: reattach must always focus web interaction, even with quick detach/reattach or late UI settle.
+                try
+                {
+                    if (_urlInput != null && _urlInput.isFocused)
+                    {
+                        try { _urlInput.DeactivateInputField(); } catch { }
+                    }
+                }
+                catch { }
+                try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null); } catch { }
+                BeginReattachFocusRecovery("reattach_detected");
+
+                try
+                {
+                    bool over = false; int px = -1, py = -1;
+                    try { over = IsPointerOverVideoDisplay(out px, out py); } catch { }
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach state: webFocused={_compositionWebFocused} gameInput={_gameInputMode} urlFocused={(_urlInput != null && _urlInput.isFocused)} ptrOver={over} ptrPx={px} ptrPy={py} compTex={(_gpuCompositionCapture?.Texture != null)} suspended={(_gpuCompositionCapture?.RenderingSuspended ?? false)}");
+                }
+                catch { }
                 return true;
             }
             catch (Exception ex)
@@ -3913,6 +5181,8 @@ namespace Firesky.UnderNetBrowser
         }
 
         private bool _tvScreenMirrorNoCandidateLogged;
+        private float _tvScreenMirrorNoCandidateLogRealtime;
+        private float _lastHotbarScanSkipLogRealtime;
         private bool _detachedVisualTargetsScanned;
         private void TryApplyDetachedTvScreenMirror(bool force = false)
         {
@@ -4031,7 +5301,8 @@ namespace Firesky.UnderNetBrowser
 
                 if (rendererList.Count == 0)
                 {
-                    UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no Renderer components found under TV hierarchy.");
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                        UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no Renderer components found under TV hierarchy.");
                     return;
                 }
                 var renderers = rendererList.ToArray();
@@ -4131,12 +5402,22 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 if (applied.Count > 0)
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] TV screen mirror (detached): applied composition texture to {applied.Count} renderer(s): {string.Join(", ", applied)}");
-                else if (!_tvScreenMirrorNoCandidateLogged)
                 {
-                    _tvScreenMirrorNoCandidateLogged = true;
-                    // Keep a single short debug note; avoid large per-detach renderer dumps.
-                    UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no suitable screen renderer candidates found.");
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] TV screen mirror (detached): applied composition texture to {applied.Count} renderer(s): {string.Join(", ", applied)}");
+                }
+                else
+                {
+                    // Benign/frequent no-op on some setups; trace only when debug logging is enabled.
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    {
+                        float nowRt = Time.realtimeSinceStartup;
+                        if (!_tvScreenMirrorNoCandidateLogged || (nowRt - _tvScreenMirrorNoCandidateLogRealtime) >= 10f)
+                        {
+                            _tvScreenMirrorNoCandidateLogged = true;
+                            _tvScreenMirrorNoCandidateLogRealtime = nowRt;
+                            UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no suitable screen renderer candidates found.");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -4166,6 +5447,7 @@ namespace Firesky.UnderNetBrowser
             catch { }
             finally { _tvScreenMirrorStates.Clear(); }
             _tvScreenMirrorNoCandidateLogged = false;
+            _tvScreenMirrorNoCandidateLogRealtime = 0f;
             _detachedVisualTargetsScanned = false;
         }
 
@@ -4335,6 +5617,23 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (appGo == null) return;
 
+                if (enabled)
+                {
+                    try
+                    {
+                        // Reactivate app and ancestors in case TV/app state left them inactive on some clients.
+                        var cur = appGo.transform;
+                        int depth = 0;
+                        while (cur != null && depth++ < 8)
+                        {
+                            try { if (!cur.gameObject.activeSelf) cur.gameObject.SetActive(true); } catch { }
+                            if (cur.name == "TVInterface") break;
+                            cur = cur.parent;
+                        }
+                    }
+                    catch { }
+                }
+
                 try
                 {
                     var cg = appGo.GetComponent<CanvasGroup>() ?? appGo.GetComponentInParent<CanvasGroup>();
@@ -4364,6 +5663,56 @@ namespace Firesky.UnderNetBrowser
                 catch { }
             }
             catch { }
+        }
+
+        private int _lastLoggedRaycasterCount = -1;
+        private int _lastLoggedRaycasterEnabled = -1;
+        private float _lastLoggedRaycasterTime = -999f;
+
+        private void EnsureGraphicRaycastersEnabledForApp(string reason = "")
+        {
+            try
+            {
+                GameObject? appGo = null;
+                if (_videoDisplay != null)
+                {
+                    var t = _videoDisplay.transform;
+                    for (int i = 0; i < 10 && t != null; i++)
+                    {
+                        if (t.name == "UnderNetBrowser_TVApp") { appGo = t.gameObject; break; }
+                        t = t.parent;
+                    }
+                    if (appGo == null) appGo = _videoDisplay.gameObject;
+                }
+                if (appGo == null) return;
+
+                var raycasters = appGo.GetComponentsInChildren<UnityEngine.UI.GraphicRaycaster>(true);
+                if (raycasters == null) return;
+                int enabledCount = 0;
+                for (int i = 0; i < raycasters.Length; i++)
+                {
+                    var gr = raycasters[i];
+                    if (gr == null) continue;
+                    try { if (!gr.enabled) gr.enabled = true; } catch { }
+                    try { if (gr.enabled) enabledCount++; } catch { }
+                }
+
+                bool verbose = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
+                bool changed = raycasters.Length != _lastLoggedRaycasterCount || enabledCount != _lastLoggedRaycasterEnabled;
+                bool periodic = (Time.realtimeSinceStartup - _lastLoggedRaycasterTime) >= 5f;
+                if (verbose || changed || periodic)
+                {
+                    _lastLoggedRaycasterCount = raycasters.Length;
+                    _lastLoggedRaycasterEnabled = enabledCount;
+                    _lastLoggedRaycasterTime = Time.realtimeSinceStartup;
+                    string suffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" reason={reason}";
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach raycasters: count={raycasters.Length} enabled={enabledCount}{suffix}");
+                }
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] EnsureGraphicRaycastersEnabledForApp failed: {ex.Message}"); } catch { }
+            }
         }
 
         private void LogTvDetachDiscovery()
@@ -5061,8 +6410,36 @@ namespace Firesky.UnderNetBrowser
                     return homeDisplay;
                 }
 
+                if (_externalMirrorMode)
+                {
+                    try { SetUrlDisplayText("undernet:discord"); } catch { }
+                    _lastSyncedUrl = "undernet:discord";
+                    return;
+                }
+
                 string? url = null;
                 try { url = _gpuCompositionCapture?.CurrentUrl; } catch { url = null; }
+                if (!string.IsNullOrWhiteSpace(url) && url.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { TryHandleUnderNetCommandUrl(url, navigateBackToSettings: true); } catch { }
+                    return;
+                }
+
+                // Intercept in-page navigations to built-in undernet routes (e.g. href="undernet:ai", "undernet:discord")
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    var u = url.Trim();
+                    if (u.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) ||
+                        u.Equals("undernet:games", StringComparison.OrdinalIgnoreCase) ||
+                        u.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase) ||
+                        u.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase) ||
+                        u.Equals("undernet:ai", StringComparison.OrdinalIgnoreCase) ||
+                        u.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { SetUrl(u); } catch { }
+                        return;
+                    }
+                }
 
                 // Startup/early init or unavailable URL: keep bar populated and usable.
                 if (string.IsNullOrWhiteSpace(url))
@@ -5102,7 +6479,34 @@ namespace Firesky.UnderNetBrowser
                             catch { }
                         }
 
+                        // Built-in homepage companion pages
                         if (!string.Equals(display, "undernet:home", StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                var homeDir = Path.GetFullPath(GetHomepageDir());
+                                string MapHomePage(string file, string token)
+                                {
+                                    try { if (string.Equals(local, Path.GetFullPath(Path.Combine(homeDir, file)), StringComparison.OrdinalIgnoreCase)) return token; } catch { }
+                                    return "";
+                                }
+                                var g = MapHomePage("games.html", "undernet:games"); if (!string.IsNullOrEmpty(g)) display = g;
+                                if (string.IsNullOrEmpty(g))
+                                {
+                                    var s = MapHomePage("settings.html", "undernet:settings"); if (!string.IsNullOrEmpty(s)) display = s;
+                                    if (string.IsNullOrEmpty(s))
+                                    {
+                                        var n = MapHomePage("notepad.html", "undernet:notepad"); if (!string.IsNullOrEmpty(n)) display = n;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if (!string.Equals(display, "undernet:home", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(display, "undernet:games", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(display, "undernet:settings", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(display, "undernet:notepad", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
@@ -5122,12 +6526,26 @@ namespace Firesky.UnderNetBrowser
                 catch { }
 
                 display = CleanDisplayUrl(display);
+                // Special display for AI page (Google AI wrapped as built-in app)
+                try
+                {
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var curUri))
+                    {
+                        var host = (curUri.Host ?? "").ToLowerInvariant();
+                        var path = (curUri.AbsolutePath ?? "").TrimEnd('/').ToLowerInvariant();
+                        var q = (curUri.Query ?? "").ToLowerInvariant();
+                        if (host.EndsWith("google.com") && (path == "/ai" || path.StartsWith("/ai/") || q.Contains("udm=50")))
+                            display = "undernet:ai";
+                    }
+                }
+                catch { }
                 if (string.IsNullOrWhiteSpace(display)) display = GetHomeDisplay();
                 if (string.Equals(_lastSyncedUrl, display, StringComparison.Ordinal) && !string.IsNullOrEmpty(_urlInput.text))
                 {
                     SetUrlDisplayText(display);
                     return;
                 }
+                bool urlChanged = !string.Equals(_lastSyncedUrl, display, StringComparison.Ordinal);
                 _lastSyncedUrl = display;
                 if (!string.Equals(_urlInput.text, display, StringComparison.Ordinal))
                 {
@@ -5136,6 +6554,15 @@ namespace Firesky.UnderNetBrowser
                     try { _urlInput.ForceLabelUpdate(); } catch { }
                 }
                 SetUrlDisplayText(display);
+                try { TryApplyAiPageCustomization(url); } catch { }
+
+                // After navigation/URL change, keep web content focused for immediate interaction (unless URL bar is focused).
+                if (urlChanged && IsOpen && !_detachedToGameplay && (_urlInput == null || !_urlInput.isFocused))
+                {
+                    try { _compositionWebFocused = true; } catch { }
+                    try { UpdateInputOwnershipState(); } catch { }
+                    try { _gpuCompositionCapture?.RequestFocus(); } catch { }
+                }
             }
             catch { }
         }
@@ -5392,7 +6819,19 @@ namespace Firesky.UnderNetBrowser
             // This broad GetTypes() scan is expensive; if a prior full scan found no actionable targets on this runtime, skip repeats.
             if (_hotbarLikeScanCompletedNoTargets)
             {
-                try { UnderNetBrowserConfig.Log($"[HotbarScan] skipped: prior scan found no actionable targets (capture={captureState})"); } catch { }
+                try
+                {
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                    {
+                        float nowRt = Time.realtimeSinceStartup;
+                        if (nowRt - _lastHotbarScanSkipLogRealtime >= 10f)
+                        {
+                            _lastHotbarScanSkipLogRealtime = nowRt;
+                            UnderNetBrowserConfig.Log($"[HotbarScan] skipped: prior scan found no actionable targets (capture={captureState})");
+                        }
+                    }
+                }
+                catch { }
                 return;
             }
 
@@ -6238,6 +7677,27 @@ namespace Firesky.UnderNetBrowser
             catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label} failed: {ex.Message}"); }
         }
 
+        private static string TruncateForLog(string? value, int maxLen = 240)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            if (maxLen < 16) maxLen = 16;
+            if (value.Length <= maxLen) return value;
+            return value.Substring(0, maxLen - 3) + "...";
+        }
+
+        private static string TruncateUrlForLog(string? url, int maxLen = 240)
+        {
+            if (string.IsNullOrEmpty(url)) return string.Empty;
+            try
+            {
+                int frag = url.IndexOf('#');
+                if (frag >= 0 && frag < url.Length - 1)
+                    url = url.Substring(0, frag) + "#…";
+            }
+            catch { }
+            return TruncateForLog(url, maxLen);
+        }
+
         private string GetTransformPath(Transform t)
         {
             try
@@ -6256,6 +7716,10 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
+                float nowRt = Time.realtimeSinceStartup;
+                // Healthy-state fast path: throttle checks to reduce per-update overhead.
+                _repairNextAllowedRealtime = nowRt + (_repairBackoffActive ? 5f : 1f);
+
                 if (from == null) return;
                 var go = from;
                 var appRoot = go.transform.parent != null ? go.transform.parent.gameObject : go;
@@ -6271,43 +7735,139 @@ namespace Firesky.UnderNetBrowser
                 // Only fix critical cases (missing world camera, or truly degenerate scale/size).
                 if (badCam && canvas != null && Camera.main != null)
                 {
-                    canvas.worldCamera = Camera.main;
-                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: set worldCamera=Camera.main");
+                    try { canvas.worldCamera = Camera.main; } catch { }
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: set worldCamera=Camera.main");
                 }
 
                 if (!badScale && !badSize)
                 {
+                    if (_repairStateLoggedBad || _repairBackoffActive)
+                    {
+                        if (UnderNetBrowserConfig.DebugLogging?.Value == true)
+                            UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: state recovered.");
+                    }
                     _repairStateLoggedBad = false;
+                    _repairBackoffActive = false;
+                    _lastRepairStateSignature = string.Empty;
+                    _repairNextAllowedRealtime = nowRt + 1f;
                     return;
                 }
 
-                // Keep repair behavior, but avoid spamming logs when the same bad state persists.
-                if (!_repairStateLoggedBad || (Time.realtimeSinceStartup - _lastRepairDonorSearch >= 60f))
+                // Bad state: apply conservative repairs, then back off if upstream/parent transform remains irrecoverably degenerate.
+                bool verbose = UnderNetBrowserConfig.DebugLogging?.Value == true;
+                string path = "";
+                Vector3 pLossy = Vector3.one;
+                try { path = GetTransformPath(appRoot.transform); } catch { path = appRoot.name; }
+                try { var p = appRoot.transform.parent; pLossy = p != null ? p.lossyScale : Vector3.one; } catch { }
+
+                bool parentZeroish = Math.Abs(pLossy.x) < 0.0001f || Math.Abs(pLossy.y) < 0.0001f || Math.Abs(pLossy.z) < 0.0001f;
+                string sig = $"{(badScale ? 1 : 0)}:{(badSize ? 1 : 0)}:{path}:{(int)(pLossy.x * 1000f)},{(int)(pLossy.y * 1000f)},{(int)(pLossy.z * 1000f)}";
+                bool sigChanged = !string.Equals(sig, _lastRepairStateSignature, StringComparison.Ordinal);
+                _lastRepairStateSignature = sig;
+
+                // Throttle repetitive debug logging for persistent known-degenerate states (especially when upstream parent scale is zero),
+                // while still surfacing state transitions and periodic status.
+                float logMinInterval = 30f;
+                if (verbose && !(badScale && parentZeroish && _repairBackoffActive && !sigChanged)) logMinInterval = 5f;
+                if (!_repairStateLoggedBad || sigChanged || (nowRt - _lastRepairStateLogRealtime >= logMinInterval))
                 {
-                    _lastRepairDonorSearch = Time.realtimeSinceStartup;
+                    _lastRepairStateLogRealtime = nowRt;
                     _repairStateLoggedBad = true;
-                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: detected badScale={badScale}(mag={scaleMag:F6}) badSize={badSize} rootRT={(rootRt != null ? rootRt.rect.size.ToString() : "null")} - applying conservative fallback only (no donor size/scale copy).");
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: badScale={badScale}(mag={scaleMag:F6}) badSize={badSize} rootRT={(rootRt != null ? rootRt.rect.size.ToString() : "null")} rootLocal={appRoot.transform.localScale} rootLossy={appRoot.transform.lossyScale} parentLossy={pLossy} path='{path}'");
                 }
 
                 if (badSize && rootRt != null)
                 {
-                    // Keep existing anchors/pivot if sane; only ensure non-zero size.
-                    if (rootRt.rect.width < 1f || rootRt.rect.height < 1f)
-                        rootRt.sizeDelta = new Vector2(685f, 400f);
+                    try
+                    {
+                        if (rootRt.rect.width < 1f || rootRt.rect.height < 1f)
+                            rootRt.sizeDelta = new Vector2(685f, 400f);
+                    }
+                    catch { }
                 }
+
+                int fixedAncestors = 0;
+                bool stillDegenerate = false;
+
                 if (badScale)
                 {
-                    // Avoid forcing arbitrary world scale; prefer minimal local correction if parent not degenerate.
-                    var p = appRoot.transform.parent;
-                    var pLossy = p != null ? p.lossyScale : Vector3.one;
-                    bool parentZeroish = Math.Abs(pLossy.x) < 0.0001f || Math.Abs(pLossy.y) < 0.0001f;
-                    if (!parentZeroish)
-                        appRoot.transform.localScale = Vector3.one;
+                    try { appRoot.transform.localScale = Vector3.one; } catch { }
+                    try
+                    {
+                        var p = appRoot.transform.parent;
+                        int depth = 0;
+                        while (p != null && depth++ < 4 && fixedAncestors < 2)
+                        {
+                            Vector3 pLossyNow = Vector3.one;
+                            try { pLossyNow = p.lossyScale; } catch { pLossyNow = Vector3.one; }
+                            bool nodeZeroish = Math.Abs(pLossyNow.x) < 0.0001f || Math.Abs(pLossyNow.y) < 0.0001f || Math.Abs(pLossyNow.z) < 0.0001f;
+                            if (!nodeZeroish) break;
+
+                            string pn = p.name ?? "";
+                            bool allowAncestorFix = pn.IndexOf("UnderNetBrowser", StringComparison.OrdinalIgnoreCase) >= 0
+                                || string.Equals(pn, "Container", StringComparison.OrdinalIgnoreCase)
+                                || fixedAncestors == 0;
+
+                            if (!allowAncestorFix) break;
+                            try
+                            {
+                                var ls = p.localScale;
+                                bool localZeroish = Math.Abs(ls.x) < 0.0001f || Math.Abs(ls.y) < 0.0001f || Math.Abs(ls.z) < 0.0001f;
+                                if (localZeroish || nodeZeroish)
+                                {
+                                    p.localScale = Vector3.one;
+                                    fixedAncestors++;
+                                }
+                            }
+                            catch { break; }
+                            p = p.parent;
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        var lossy = appRoot.transform.lossyScale;
+                        var parentNow = appRoot.transform.parent;
+                        var pLossyNow = parentNow != null ? parentNow.lossyScale : Vector3.one;
+                        bool rootZeroish = Math.Abs(lossy.x) < 0.0001f || Math.Abs(lossy.y) < 0.0001f || Math.Abs(lossy.z) < 0.0001f;
+                        bool parentStillZeroish = Math.Abs(pLossyNow.x) < 0.0001f || Math.Abs(pLossyNow.y) < 0.0001f || Math.Abs(pLossyNow.z) < 0.0001f;
+                        stillDegenerate = rootZeroish;
+                        // If upstream parent remains degenerate, local fixes cannot restore a valid lossy scale; back off aggressively.
+                        if (stillDegenerate && (parentStillZeroish || parentZeroish))
+                        {
+                            _repairBackoffActive = true;
+                            _repairNextAllowedRealtime = nowRt + 5f;
+                            if (sigChanged || (nowRt - _lastRepairStateLogRealtime >= 30f))
+                            {
+                                _lastRepairStateLogRealtime = nowRt;
+                                _repairStateLoggedBad = true;
+                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: badScale persists (rootLossy={lossy} parentLossy={pLossyNow} fixedAncestors={fixedAncestors}); upstream transform remains degenerate, backing off checks.");
+                            }
+                            return;
+                        }
+                    }
+                    catch { stillDegenerate = badScale; }
+
+                    if (stillDegenerate)
+                    {
+                        _repairBackoffActive = true;
+                        _repairNextAllowedRealtime = nowRt + 5f;
+                    }
                     else
-                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: parent lossy scale near-zero; cannot safely correct lossy scale here.");
+                    {
+                        _repairBackoffActive = false;
+                        _repairNextAllowedRealtime = nowRt + 1f;
+                    }
+                }
+                else
+                {
+                    _repairBackoffActive = false;
+                    _repairNextAllowedRealtime = nowRt + 1f;
                 }
             }
-            catch (Exception ex) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label} failed: {ex.Message}"); }
+            catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label} failed: {ex.Message}"); } catch { } }
         }
 
         private static Font GetUIFont()
@@ -6721,6 +8281,33 @@ namespace Firesky.UnderNetBrowser
                 else if (!tvVisible && desired == AdaptiveVisualTier.Reduced)
                 {
                     reason = _adaptiveCurrentTier == desired ? "not-visible-steady" : "not-visible";
+                }
+
+                // Alt-tab / unfocused game window: only consider when not actively in TV/browser session.
+                // Avoid freezing the in-game TV due to unreliable focus reporting while the app is open/interactive.
+                bool appFocused = true;
+                try { appFocused = Application.isFocused; } catch { appFocused = true; }
+                bool allowUnfocusedStandby = !IsOpen || _detachedToGameplay;
+                if (!appFocused && allowUnfocusedStandby)
+                {
+                    if (_adaptiveUnfocusedSinceRealtime < 0f) _adaptiveUnfocusedSinceRealtime = now;
+                    if (now - _adaptiveUnfocusedSinceRealtime >= 1.5f)
+                    {
+                        var unfocusedTarget = standbyEnabled ? AdaptiveVisualTier.VisualStandby : AdaptiveVisualTier.Low;
+                        if (desired < unfocusedTarget)
+                        {
+                            desired = unfocusedTarget;
+                            reason = "app-unfocused";
+                        }
+                        else if (desired == unfocusedTarget && _adaptiveCurrentTier == desired)
+                        {
+                            reason = "app-unfocused-steady";
+                        }
+                    }
+                }
+                else
+                {
+                    _adaptiveUnfocusedSinceRealtime = -1f;
                 }
 
                 if (desired == AdaptiveVisualTier.VisualStandby && !standbyEnabled)
@@ -7417,8 +9004,8 @@ namespace Firesky.UnderNetBrowser
                     try { _externalWindowCapture.Dispose(); } catch { }
                     _externalWindowCapture = null;
                     SetHint("Discord found, but window capture failed.");
-                    // Try to restore browser home
-                    try { EnsureCompositionBrowserStarted(); } catch { }
+                    // Try to restore browser to previous page
+                    try { EnsureCompositionBrowserStarted(string.IsNullOrWhiteSpace(_externalMirrorReturnUrl) ? GetResolvedHomeUrl() : _externalMirrorReturnUrl); } catch { }
                     return false;
                 }
 
@@ -7426,7 +9013,7 @@ namespace Firesky.UnderNetBrowser
                 _externalMirrorMode = true;
                 _externalMirrorLabel = string.IsNullOrWhiteSpace(target.Title) ? "Discord" : target.Title;
                 try { if (_videoDisplay != null && _externalWindowCapture.Texture != null) _videoDisplay.texture = _externalWindowCapture.Texture; } catch { }
-                try { SetUrlDisplayText($"discord:mirror ({_externalMirrorLabel})"); } catch { }
+                try { SetUrlDisplayText("undernet:discord"); } catch { }
                 try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; } } catch { }
                 UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror started: hwnd=0x{target.Hwnd.ToInt64():X} title='{_externalMirrorLabel}' pid={target.ProcessId}");
                 return true;
@@ -7455,14 +9042,14 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
-        private void EnsureCompositionBrowserStarted()
+        private void EnsureCompositionBrowserStarted(string? targetUrl = null)
         {
             try
             {
                 if (_gpuCompositionCapture != null) return;
                 _gpuCompositionMode = false;
                 // Reuse same composition profile/path as normal startup to avoid creating a duplicate WebView2 user data folder.
-                var home = GetResolvedHomeUrl();
+                var home = string.IsNullOrWhiteSpace(targetUrl) ? GetResolvedHomeUrl() : ResolveNavigationTarget(targetUrl);
                 string compUserData = "";
                 try { compUserData = Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
                 try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
@@ -7474,6 +9061,7 @@ namespace Firesky.UnderNetBrowser
                 {
                     _gpuCompositionMode = true;
                     try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
+                    try { SetHint(""); } catch { }
                 }
                 else
                 {
@@ -7508,8 +9096,7 @@ namespace Firesky.UnderNetBrowser
                     {
                         var ret = _externalMirrorReturnUrl;
                         StopExternalWindowMirror("target_window_closed");
-                        EnsureCompositionBrowserStarted();
-                        try { SetUrl(string.IsNullOrWhiteSpace(ret) ? "undernet:home" : ret); } catch { }
+                        EnsureCompositionBrowserStarted(string.IsNullOrWhiteSpace(ret) ? GetResolvedHomeUrl() : ret);
                     }
                 }
             }

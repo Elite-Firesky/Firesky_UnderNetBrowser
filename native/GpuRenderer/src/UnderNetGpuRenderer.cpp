@@ -708,6 +708,16 @@ UN_EXPORT void __stdcall UnGpu_CompRequestFocus() {
     g_comp.RequestFocus();
 }
 
+UN_EXPORT void __stdcall UnGpu_CompSetZoomFactor(double zoomFactor) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_comp.SetZoomFactor(zoomFactor);
+}
+
+UN_EXPORT double __stdcall UnGpu_CompGetZoomFactor() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_comp.GetZoomFactor();
+}
+
 UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float volume01) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_comp.SetDistanceAudioVolume(enabled != 0, volume01);

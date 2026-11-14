@@ -215,6 +215,12 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompRequestFocus")]
         public static extern void CompRequestFocus();
 
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetZoomFactor")]
+        public static extern void CompSetZoomFactor(double zoomFactor);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompGetZoomFactor")]
+        public static extern double CompGetZoomFactor();
+
         // Best-effort process-level audio attenuation for WebView2 browser process tree (distance-based volume testing).
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetDistanceAudioVolume")]
         public static extern void CompSetDistanceAudioVolume(int enabled, float volume01);

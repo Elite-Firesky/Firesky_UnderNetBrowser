@@ -56,6 +56,8 @@ public:
     // Queues JavaScript for execution in the page (fallback for key/action delivery issues in composition hosting).
     void ExecuteScript(const std::wstring& script);
     void RequestFocus();
+    void SetZoomFactor(double zoomFactor);
+    double GetZoomFactor() const;
 
     // Stage 3 Gate A PoC (dev-only, experimental): WASAPI process-loopback capture diagnostics/control.
     // No effect on rendering/input/lifecycle behavior when disabled.

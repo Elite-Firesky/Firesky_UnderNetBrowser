@@ -84,6 +84,8 @@ UN_EXPORT void __stdcall UnGpu_CompSendKey(uint32_t msg, uint64_t wParam, uint64
 UN_EXPORT void __stdcall UnGpu_CompSendText(const wchar_t* text);
 UN_EXPORT void __stdcall UnGpu_CompExecuteScript(const wchar_t* script);
 UN_EXPORT void __stdcall UnGpu_CompRequestFocus();
+UN_EXPORT void __stdcall UnGpu_CompSetZoomFactor(double zoomFactor);
+UN_EXPORT double __stdcall UnGpu_CompGetZoomFactor();
 
 // Stage 3 Gate A PoC (dev-only): configure experimental WASAPI process-loopback capture diagnostics.
 // targetPid: WebView2 process PID to target (e.g. audio.mojom.AudioService). 0 disables target selection.

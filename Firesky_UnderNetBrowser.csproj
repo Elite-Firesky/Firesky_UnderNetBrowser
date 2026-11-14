@@ -106,6 +106,11 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <TargetPath>WebView2Loader.dll</TargetPath>
     </Content>
+    <Content Include="Homepage\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>Homepage\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
     <EmbeddedResource Include="UnderNetIcon.png" />
   </ItemGroup>
 </Project>

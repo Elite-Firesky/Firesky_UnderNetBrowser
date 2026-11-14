@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UnderNet Home</title>
+<style>
+  :root{
+    --bg0:#050806;--bg1:#08110d;--bg2:#0b1712;
+    --panel:#0c1411;--panel2:#101a16;--edge:#1b2b23;--edge2:#2f4a3b;
+    --text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;
+    --accent:#7cff6b;--accent2:#35d97b;--cyan:#66d9ff;--warn:#ffd66b;--danger:#ff7b7b;
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{
+    font-family:'Segoe UI Variable','Segoe UI',Tahoma,Arial,sans-serif;color:var(--text);font-size:15px;
+    background:
+      radial-gradient(1200px 520px at 8% -10%, rgba(53,217,123,.18), transparent 60%),
+      radial-gradient(900px 460px at 100% 0%, rgba(102,217,255,.10), transparent 55%),
+      linear-gradient(180deg,var(--bg0),var(--bg1) 40%,var(--bg2));
+    overflow:hidden;
+  }
+  body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.08;background-image:linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px);background-size:42px 42px}
+  .desktop{position:relative;height:100%;padding:16px 16px 56px;display:flex;flex-direction:column;gap:12px}
+  .glass{border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg, rgba(14,22,18,.95), rgba(8,13,10,.97));box-shadow:0 16px 36px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)}
+  .topbar{padding:12px 14px;display:grid;grid-template-columns:1.15fr 1fr auto;gap:12px;align-items:center}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .mark{width:44px;height:44px;border-radius:12px;flex:0 0 auto;background:radial-gradient(circle at 30% 28%, #d8ffbe 0%, var(--accent) 34%, #1b8f52 72%, #0f4a2f 100%);box-shadow:0 0 24px rgba(124,255,107,.22)}
+  h1{margin:0;font-size:30px;line-height:1;letter-spacing:2px;text-transform:uppercase}
+  h1 .u{color:var(--accent)}
+  .tag{margin:4px 0 0;color:var(--muted);font-size:12px;letter-spacing:1px;text-transform:uppercase}
+  .clocks{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .clock{padding:9px 11px;border-radius:12px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)}
+  .clock .label{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted2);margin-bottom:3px}
+  .clock .time{font-size:24px;font-weight:700;line-height:1.05;color:#f2fff7}
+  .clock .sub{margin-top:3px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+  .btn,.chip-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(124,255,107,.25);background:rgba(124,255,107,.08);color:#eaffea;text-decoration:none;font-size:13px;font-weight:600;cursor:pointer}
+  .btn:hover,.chip-btn:hover{background:rgba(124,255,107,.14);border-color:rgba(124,255,107,.42)}
+  .btn.secondary,.chip-btn.secondary{border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf}
+  .workspace{flex:1;min-height:0;display:grid;grid-template-columns:1.55fr .9fr;gap:12px}
+  .panel{padding:14px;min-height:0;display:flex;flex-direction:column}
+  .section-title{display:flex;align-items:center;justify-content:space-between;margin:2px 4px 12px;position:relative;z-index:2}
+  .section-title h2{margin:0;font-size:14px;letter-spacing:1.4px;text-transform:uppercase;color:#d9ecdf}
+  .section-title span{font-size:12px;color:var(--muted2);letter-spacing:.6px;text-transform:uppercase}
+  .toolbar{display:flex;gap:8px;align-items:center;margin:0 2px 10px}
+  .search{flex:1;display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03)}
+  .search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:inherit;font-size:14px}
+  .search input::placeholder{color:#7f968b}
+  .desktop-icons{flex:1;min-height:0;overflow:auto;padding:10px 6px 6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;align-content:start}
+  .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:14px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
+  .app:hover{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
+  .app.hidden{display:none}
+  .icon{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:24px;box-shadow:0 10px 20px rgba(0,0,0,.24)}
+  .icon.yt{background:linear-gradient(180deg,#ff9a9a,#ff3b3b);color:#fff}
+  .icon.gg{background:linear-gradient(180deg,#ecff9a,#7cff6b);color:#0a1710}
+  .icon.folder{background:linear-gradient(180deg,#ffe08a,#ffb347);color:#241607}
+  .icon.dc{background:linear-gradient(180deg,#9db0ff,#5865f2);color:#fff}
+  .icon.appi{background:linear-gradient(180deg,#9ef3c8,#35d97b);color:#08110b}
+  .icon.note{background:linear-gradient(180deg,#fff3a6,#ffd66b);color:#2a2108}
+  .icon.set{background:linear-gradient(180deg,#d7dee2,#90a4ae);color:#10181c}
+  .name{font-size:15px;font-weight:700;line-height:1.2}
+  .desc{font-size:12px;color:var(--muted);line-height:1.35}
+  .badge{position:absolute;top:8px;right:8px;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#dfffe3;background:rgba(124,255,107,.10);border:1px solid rgba(124,255,107,.22);padding:3px 6px;border-radius:999px}
+  .side{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto;padding-right:2px}
+  .widget{padding:13px 14px;border-radius:14px}
+  .widget h3{margin:0 0 8px;font-size:13px;letter-spacing:1.1px;text-transform:uppercase;color:#dcecdf}
+  .widget p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}
+  .rows{display:grid;gap:8px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)}
+  .row .k{color:var(--muted2);font-size:12px;letter-spacing:.4px;text-transform:uppercase}
+  .row .v{color:#eaf8f0;font-size:13px;font-weight:600;text-align:right}
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warn);box-shadow:0 0 10px rgba(255,214,107,.35);margin-right:6px;vertical-align:middle}
+  .status-dot.ok{background:var(--accent);box-shadow:0 0 10px rgba(124,255,107,.35)}
+  .status-dot.off{background:#7f8f88;box-shadow:none}
+  .launcher-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .tile{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:10px;border-radius:12px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.9), rgba(11,17,14,.95));color:var(--text);text-decoration:none;cursor:pointer;text-align:left}
+  .tile:hover{border-color:rgba(124,255,107,.4);background:linear-gradient(180deg, rgba(22,35,28,.95), rgba(12,18,15,.98))}
+  .tile .t{font-size:13px;font-weight:700}
+  .tile .s{font-size:12px;color:var(--muted)}
+  .note-area{width:100%;min-height:96px;resize:vertical;background:rgba(255,255,255,.02);color:var(--text);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px;font:inherit;font-size:13px;line-height:1.45}
+  .note-area::placeholder{color:#7f968b}
+  .note-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;color:var(--muted2);font-size:12px}
+  .mini-btn{padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;cursor:pointer;font:inherit;font-size:12px;font-weight:600}
+  .mini-btn:hover{border-color:rgba(124,255,107,.35);color:#eaffea}
+  .taskbar{position:fixed;left:14px;right:14px;bottom:10px;height:36px;padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(8,12,10,.82);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:space-between;gap:10px;color:#9fb7ac;font-size:12px;letter-spacing:.4px}
+  .task-left,.task-right{display:flex;align-items:center;gap:10px;min-width:0}
+  .start{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:8px;border:1px solid rgba(124,255,107,.25);background:rgba(124,255,107,.08);color:#eaffea;font-weight:700;text-decoration:none}
+  .pill{padding:3px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03);white-space:nowrap}
+  @media (max-width:1100px){.topbar{grid-template-columns:1fr}.actions{justify-content:flex-start}}
+  @media (max-width:980px){body{overflow:auto}.workspace{grid-template-columns:1fr}.desktop-icons{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}.side{overflow:visible}}
+</style>
+</head>
+<body>
+  <div class="desktop">
+    <header class="topbar glass">
+      <div class="brand">
+        <div class="mark"></div>
+        <div>
+          <h1><span class="u">Under</span>Net</h1>
+          <div class="tag">Hyland OS // Browser Desktop</div>
+        </div>
+      </div>
+      <div class="clocks">
+        <div class="clock">
+          <div class="label">System Time</div>
+          <div class="time" id="sysTime">--:--</div>
+          <div class="sub" id="sysDate">Loading…</div>
+        </div>
+        <div class="clock">
+          <div class="label">In-Game Time</div>
+          <div class="time" id="igTime">--:--</div>
+          <div class="sub" id="igDay"><span class="status-dot" id="igDot"></span><span id="igDayText">Waiting for game sync…</span></div>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="btn" href="settings.html">⚙ Settings</a>
+        <a class="btn secondary" href="games.html">🎮 Games</a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel glass">
+        <div class="section-title"><h2>Desktop</h2><span id="appCount">Apps & shortcuts</span></div>
+        <div class="toolbar">
+          <div class="search">🔎 <input id="appFilter" type="text" placeholder="Filter apps and shortcuts…" autocomplete="off" spellcheck="false" /></div>
+          <button class="chip-btn secondary" id="clearFilter" type="button">Clear</button>
+        </div>
+        <div class="desktop-icons" id="appGrid">
+          <a class="app" data-name="youtube videos music streams" href="https://www.youtube.com"><div class="icon yt">▶</div><div class="name">YouTube</div><div class="desc">Videos, music & streams</div></a>
+          <a class="app" data-name="google search web" href="https://www.google.com"><div class="icon gg">G</div><div class="name">Google</div><div class="desc">Search the web</div></a>
+          <a class="app" data-name="ai assistant chat undernet built-in google ai" href="undernet:ai"><span class="badge">AI</span><div class="icon appi">AI</div><div class="name">AI</div><div class="desc">UnderNet AI assistant</div></a>
+          <a class="app" data-name="games folder library browser" href="games.html"><span class="badge">Folder</span><div class="icon folder">🗂</div><div class="name">Games</div><div class="desc">Categorized browser library</div></a>
+          <a class="app" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon set">S1</div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools & utilities</div></a>
+          <a class="app" data-name="notepad notes write save local" href="notepad.html"><span class="badge">App</span><div class="icon note">📝</div><div class="name">Notepad</div><div class="desc">Write and save local notes</div></a>
+          <a class="app" data-name="discord chat mirror app window" href="undernet:discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window (no web redirect)</div></a>
+          <a class="app" data-name="settings shortcuts controls config" href="settings.html"><div class="icon set">⚙</div><div class="name">Settings</div><div class="desc">Shortcuts & browser settings</div></a>
+        </div>
+      </section>
+
+      <aside class="side">
+        <div class="widget glass">
+          <h3>System Status</h3>
+          <div class="rows">
+            <div class="row"><span class="k">Home Route</span><span class="v">undernet:home</span></div>
+            <div class="row"><span class="k">System</span><span class="v" id="sessionSys">--:--:--</span></div>
+            <div class="row"><span class="k">In-Game</span><span class="v" id="sessionIg">Waiting for sync…</span></div>
+            <div class="row"><span class="k">Sync</span><span class="v"><span class="status-dot off" id="syncDot"></span><span id="syncLabel">No data</span></span></div>
+          </div>
+        </div>
+
+        <div class="widget glass">
+          <h3>Quick Actions</h3>
+          <div class="launcher-grid">
+            <a class="tile" href="games.html"><span class="t">Open Games</span><span class="s">Browse the library folder</span></a>
+            <a class="tile" href="notepad.html"><span class="t">Open Notepad</span><span class="s">Create and save notes</span></a>
+            <a class="tile" href="settings.html"><span class="t">Settings</span><span class="s">Shortcuts & preferences</span></a>
+            <a class="tile" href="https://www.google.com"><span class="t">New Search</span><span class="s">Jump to Google</span></a>
+          </div>
+        </div>
+
+        <div class="widget glass">
+          <h3>Scratchpad</h3>
+          <p style="margin-bottom:8px">Quick local notes saved in this browser profile.</p>
+          <textarea id="notes" class="note-area" placeholder="Drop a quick note, link idea, or reminder…"></textarea>
+          <div class="note-foot">
+            <span id="notesStatus">Not saved yet</span>
+            <div style="display:flex;gap:6px">
+              <button class="mini-btn" id="saveNotes" type="button">Save</button>
+              <button class="mini-btn" id="clearNotes" type="button">Clear</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="taskbar">
+    <div class="task-left"><a class="start" href="index.html">◉ UnderNet</a><span class="pill">Desktop</span><span class="pill" id="taskbarApps">7 apps</span></div>
+    <div class="task-right"><span id="taskbarDate">--</span><span id="footerClock">--:--:--</span></div>
+  </div>
+
+<script>
+(function(){
+  var notesKey = 'undernet_home_scratchpad_v1';
+  function pad(n){return (n<10?'0':'')+n}
+  function tick(){
+    var d=new Date();
+    var h=pad(d.getHours()), m=pad(d.getMinutes()), s=pad(d.getSeconds());
+    var days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var t=h+':'+m, ts=t+':'+s;
+    var dateStr=days[d.getDay()]+', '+months[d.getMonth()]+' '+d.getDate();
+    var st=document.getElementById('sysTime'); if(st) st.textContent=t;
+    var sd=document.getElementById('sysDate'); if(sd) sd.textContent=dateStr;
+    var fc=document.getElementById('footerClock'); if(fc) fc.textContent=ts;
+    var tb=document.getElementById('taskbarDate'); if(tb) tb.textContent=dateStr;
+    var ss=document.getElementById('sessionSys'); if(ss) ss.textContent=ts;
+  }
+  function applyFilter(){
+    var q=(document.getElementById('appFilter').value||'').toLowerCase().trim();
+    var cards=document.querySelectorAll('#appGrid .app');
+    var visible=0;
+    for(var i=0;i<cards.length;i++){
+      var text=((cards[i].getAttribute('data-name')||'')+' '+cards[i].textContent).toLowerCase();
+      var show=!q || text.indexOf(q)!==-1;
+      cards[i].classList.toggle('hidden', !show);
+      if(show) visible++;
+    }
+    var count=document.getElementById('appCount'); if(count) count.textContent=visible+' visible';
+    var tb=document.getElementById('taskbarApps'); if(tb) tb.textContent=visible+' / '+cards.length+' apps';
+  }
+  function setNotesStatus(msg){ var el=document.getElementById('notesStatus'); if(el) el.textContent=msg; }
+  function loadNotes(){
+    try{
+      var v=localStorage.getItem(notesKey)||'';
+      var ta=document.getElementById('notes'); if(ta) ta.value=v;
+      setNotesStatus(v ? 'Loaded from local storage' : 'Empty');
+    }catch(_){ setNotesStatus('Local storage unavailable'); }
+  }
+  function saveNotes(){
+    try{
+      var ta=document.getElementById('notes');
+      localStorage.setItem(notesKey, ta ? ta.value : '');
+      var d=new Date(); setNotesStatus('Saved ' + pad(d.getHours()) + ':' + pad(d.getMinutes()));
+    }catch(_){ setNotesStatus('Save failed'); }
+  }
+  function clearNotes(){
+    try{
+      var ta=document.getElementById('notes'); if(ta) ta.value='';
+      localStorage.removeItem(notesKey);
+      setNotesStatus('Cleared');
+    }catch(_){ setNotesStatus('Clear failed'); }
+  }
+  window.__underNetSetGameTime=function(timeText,dayText){
+    try{
+      var hasTime = !!(timeText && timeText.indexOf('--')===-1);
+      var igTime=document.getElementById('igTime'); if(igTime) igTime.textContent=timeText||'--:--';
+      var day=(dayText||'Time unavailable');
+      var igDayText=document.getElementById('igDayText'); if(igDayText) igDayText.textContent=day;
+      var dot=document.getElementById('igDot'); if(dot){ dot.classList.toggle('ok', hasTime); dot.classList.toggle('off', !hasTime); }
+      var sig=document.getElementById('sessionIg'); if(sig) sig.textContent=hasTime ? (timeText+' · '+day) : 'Waiting for sync…';
+      var syncDot=document.getElementById('syncDot'); if(syncDot){ syncDot.classList.toggle('ok', hasTime); syncDot.classList.toggle('off', !hasTime); }
+      var syncLabel=document.getElementById('syncLabel'); if(syncLabel) syncLabel.textContent=hasTime ? 'Live' : 'No data';
+    }catch(_){ }
+  };
+  var input=document.getElementById('appFilter'); if(input){ input.addEventListener('input', applyFilter); }
+  var clear=document.getElementById('clearFilter'); if(clear){ clear.addEventListener('click', function(){ if(input) input.value=''; applyFilter(); if(input) input.focus(); }); }
+  var saveBtn=document.getElementById('saveNotes'); if(saveBtn){ saveBtn.addEventListener('click', saveNotes); }
+  var clrBtn=document.getElementById('clearNotes'); if(clrBtn){ clrBtn.addEventListener('click', clearNotes); }
+  var ta=document.getElementById('notes'); if(ta){ ta.addEventListener('keydown', function(e){ if((e.ctrlKey||e.metaKey) && (e.key==='s' || e.key==='S')){ e.preventDefault(); saveNotes(); } }); }
+  tick(); setInterval(tick,1000); loadNotes(); applyFilter();
+})();
+</script>
+</body>
+</html>

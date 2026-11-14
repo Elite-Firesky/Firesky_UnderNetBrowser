@@ -58,10 +58,14 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<int>? AdaptiveReducedCaptureFps { get; private set; }
         public static MelonPreferences_Entry<int>? AdaptiveLowCaptureFps { get; private set; }
 
+        // --- UI ---
+        public static MelonPreferences_Entry<float>? ChromeHeightFraction { get; private set; }
+
         public static void Initialize()
         {
-            // Category identifier aligned with renamed UserData/preferences namespace.
-            _category = MelonPreferences.CreateCategory("UnderNetBrowser", "Firesky UnderNet Browser");
+            // Keep stable identifier for Mod Manager & Phone App settings discovery/compatibility.
+            // (UserData/runtime paths use UnderNetBrowser; prefs category ID remains FireskyUnderNetBrowser.)
+            _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser", "Firesky UnderNet Browser");
 
             // --- Basic ---
             Enabled = _category.CreateEntry(
@@ -239,6 +243,12 @@ namespace Firesky.UnderNetBrowser
                 "Adaptive Rendering: Low Tier Capture FPS",
                 "Target capture/update rate for the Low tier (1-60). Lower values save more CPU/GPU/capture work.");
 
+            // --- UI ---
+            ChromeHeightFraction = _category.CreateEntry(
+                "ChromeHeightFraction", 0.085f,
+                "UI: Chrome Height",
+                "Height of the top browser chrome/address bar area as a fraction of the TV screen height (0.04-0.20). Default 0.085.");
+
             SpatialAudioPocEnabled = _category.CreateEntry(
                 "SpatialAudioPocEnabled", false,
                 "Developer: Spatial Audio PoC",
@@ -264,20 +274,29 @@ namespace Firesky.UnderNetBrowser
             try { MelonPreferences.Save(); } catch { try { _category?.SaveToFile(false); } catch { } }
         }
 
+        private static string NormalizeLogMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message ?? string.Empty;
+            // Avoid duplicate prefixes when callers/log sinks already include module/mod tags.
+            if (message.StartsWith("[Firesky UnderNet Browser]", StringComparison.Ordinal)) return message;
+            if (message.StartsWith("[UnderNetBrowser]", StringComparison.Ordinal)) return message;
+            return $"[UnderNetBrowser] {message}";
+        }
+
         public static void LogAlways(string message)
         {
-            MelonLogger.Msg($"[Firesky UnderNet Browser] {message}");
+            MelonLogger.Msg(NormalizeLogMessage(message));
         }
 
         public static void Log(string message)
         {
             if (DebugLogging?.Value == true)
-                MelonLogger.Msg($"[Firesky UnderNet Browser] {message}");
+                MelonLogger.Msg(NormalizeLogMessage(message));
         }
 
         public static void LogError(string message)
         {
-            MelonLogger.Error($"[Firesky UnderNet Browser] {message}");
+            MelonLogger.Error(NormalizeLogMessage(message));
         }
 
         public static UnityEngine.KeyCode GetKey(UnityEngine.KeyCode fallback, MelonPreferences_Entry<string>? entry)
@@ -290,6 +309,17 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             return fallback;
+        }
+
+        public static float GetChromeHeightFraction()
+        {
+            try
+            {
+                float v = ChromeHeightFraction?.Value ?? 0.085f;
+                if (float.IsNaN(v) || float.IsInfinity(v)) v = 0.085f;
+                return UnityEngine.Mathf.Clamp(v, 0.04f, 0.20f);
+            }
+            catch { return 0.085f; }
         }
 
         /// <summary>

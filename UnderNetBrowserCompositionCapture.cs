@@ -152,6 +152,17 @@ namespace Firesky.UnderNetBrowser
             try { if (!string.IsNullOrEmpty(script)) UnderNetBrowserGpuNative.CompExecuteScript(script); } catch { }
         }
         public void RequestFocus() { try { UnderNetBrowserGpuNative.CompRequestFocus(); } catch { } }
+
+        public void SetZoomFactor(double zoomFactor)
+        {
+            try { UnderNetBrowserGpuNative.CompSetZoomFactor(zoomFactor); }
+            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) MelonLogger.Warning($"[UnderNetBrowser] CompSetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); }
+        }
+        public double GetZoomFactor()
+        {
+            try { return UnderNetBrowserGpuNative.CompGetZoomFactor(); }
+            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) MelonLogger.Warning($"[UnderNetBrowser] CompGetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); return 1.0; }
+        }
         public string CurrentUrl { get { try { return UnderNetBrowserGpuNative.GetCompCurrentUrlString(); } catch { return ""; } } }
         public bool IsFullscreen { get { try { return _createIssued && UnderNetBrowserGpuNative.CompIsFullscreen() == 1; } catch { return false; } } }
         public int ViewWidth => _width;

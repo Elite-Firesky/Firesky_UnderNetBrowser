@@ -248,6 +248,10 @@ namespace Firesky.UnderNetBrowser
             // Stage 4 diagnostics: lightweight periodic sampling + frame-time accumulation (no-op when disabled).
             try { UnderNetBrowserDiagnostics.OnFrame(); } catch { }
 
+            // Push Schedule I in-game time/day and settings state to built-in homepage pages (best-effort, throttled internally).
+            try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
+            try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
+
             // Global cursor toggle (works outside TV/app as well).
             try
             {
@@ -444,8 +448,8 @@ namespace Firesky.UnderNetBrowser
                 var type = __instance.GetType();
 
                 // Menu config UI and phone app UI use different content roots.
-                TryReorderModManagerCategoryEntries(__instance, type, "_menuConfigContent", "UnderNetBrowser");
-                TryReorderModManagerCategoryEntries(__instance, type, "rightPanelContent", "UnderNetBrowser");
+                TryReorderModManagerCategoryEntries(__instance, type, "_menuConfigContent", "FireskyUnderNetBrowser");
+                TryReorderModManagerCategoryEntries(__instance, type, "rightPanelContent", "FireskyUnderNetBrowser");
             }
             catch (Exception ex)
             {
