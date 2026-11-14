@@ -300,7 +300,7 @@ namespace Firesky.UnderNetBrowser
                 if (float.IsNaN(v) || float.IsInfinity(v)) v = 0.08f;
                 return UnityEngine.Mathf.Clamp(v, 0.04f, 0.20f);
             }
-            catch { return 0.08f; }
+            catch { return 0.06f; }
         }
 
         /// <summary>
