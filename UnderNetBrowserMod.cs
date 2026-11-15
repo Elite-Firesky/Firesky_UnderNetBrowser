@@ -206,6 +206,7 @@ namespace Firesky.UnderNetBrowser
         }
 
         private bool _graphicsApiLogged;
+        private static float _nextHomepageSyncCallDiagRealtime = -999f;
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
@@ -245,6 +246,17 @@ namespace Firesky.UnderNetBrowser
             try { UnderNetBrowserDiagnostics.OnFrame(); } catch { }
 
             // Push Schedule I in-game time/day and settings state to built-in homepage pages (best-effort, throttled internally).
+            try
+            {
+                float now = 0f;
+                try { now = UnityEngine.Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now >= _nextHomepageSyncCallDiagRealtime)
+                {
+                    _nextHomepageSyncCallDiagRealtime = now + 10f;
+                    try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Mod.OnUpdate: calling TryUpdateHomepageGameTime"); } catch { }
+                }
+            }
+            catch { }
             try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
             try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
 

@@ -248,6 +248,7 @@ namespace Firesky.UnderNetBrowser
 
         protected override void OnOpened()
         {
+            try { _activeInstance = this; } catch { }
             try { UnderNetBrowserDiagnostics.OnTvInteractionBegin(); } catch { }
             base.OnOpened();
             _browserPointerDown = false;
@@ -783,6 +784,11 @@ namespace Firesky.UnderNetBrowser
             // Internal command routes (handled by app, not navigated as web URLs)
             if (text.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
                 return text;
+            // Intercept-friendly command route URL (WebView2 custom-scheme navigations may not always surface as CurrentUrl)
+            if (text.StartsWith("https://undernet.route/cmd/", StringComparison.OrdinalIgnoreCase))
+                return "undernet:cmd/" + text.Substring("https://undernet.route/cmd/".Length);
+            if (text.StartsWith("http://undernet.route/cmd/", StringComparison.OrdinalIgnoreCase))
+                return "undernet:cmd/" + text.Substring("http://undernet.route/cmd/".Length);
 
             // Built-in routes
             if (text.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) || text.Equals("about:home", StringComparison.OrdinalIgnoreCase))
@@ -866,7 +872,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 1;
+        private const int ManagedHomepageVersion = 5;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1025,6 +1031,7 @@ namespace Firesky.UnderNetBrowser
                     EnsureHomepageFileFromBundle(Path.Combine(homeDir, "games.html"), "games.html");
                     EnsureHomepageFileFromBundle(Path.Combine(homeDir, "settings.html"), "settings.html");
                     EnsureHomepageFileFromBundle(Path.Combine(homeDir, "notepad.html"), "notepad.html");
+                    EnsureHomepageBinaryAssetFromBundle(Path.Combine(homeDir, "UnderNetIcon.png"), "UnderNetIcon.png");
                 }
                 catch { }
 
@@ -1066,7 +1073,7 @@ namespace Firesky.UnderNetBrowser
                     try { Directory.CreateDirectory(GetHomepageDir()); EnsureHomepageFileFromBundle(path, "index.html"); } catch { }
                 }
 
-                // Ensure companion pages exist when homepage is resolved/created.
+                // Ensure companion pages/assets exist when homepage is resolved/created.
                 try
                 {
                     var homeDir = GetHomepageDir();
@@ -1076,6 +1083,7 @@ namespace Firesky.UnderNetBrowser
                     if (!File.Exists(settingsPath)) { try { EnsureHomepageFileFromBundle(settingsPath, "settings.html"); } catch { } }
                     var notepadPath = Path.Combine(homeDir, "notepad.html");
                     if (!File.Exists(notepadPath)) { try { EnsureHomepageFileFromBundle(notepadPath, "notepad.html"); } catch { } }
+                    try { EnsureHomepageBinaryAssetFromBundle(Path.Combine(homeDir, "UnderNetIcon.png"), "UnderNetIcon.png"); } catch { }
                 }
                 catch { }
 
@@ -1372,6 +1380,61 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+        private static void EnsureHomepageBinaryAssetFromBundle(string targetPath, string fileName)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(targetPath) || string.IsNullOrWhiteSpace(fileName)) return;
+                var dir = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                string? resName = null;
+                try
+                {
+                    var names = asm.GetManifestResourceNames();
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        var n = names[i];
+                        if (string.IsNullOrEmpty(n)) continue;
+                        if (n.EndsWith(".Homepage." + fileName, StringComparison.OrdinalIgnoreCase) || n.EndsWith("." + fileName, StringComparison.OrdinalIgnoreCase))
+                        { resName = n; break; }
+                    }
+                }
+                catch { resName = null; }
+
+                if (string.IsNullOrWhiteSpace(resName)) return;
+                using (var s = asm.GetManifestResourceStream(resName))
+                {
+                    if (s == null) return;
+                    using (var ms = new System.IO.MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        var bytes = ms.ToArray();
+                        bool shouldWrite = !File.Exists(targetPath);
+                        if (!shouldWrite)
+                        {
+                            try
+                            {
+                                var fi = new FileInfo(targetPath);
+                                if (!fi.Exists || fi.Length != bytes.LongLength) shouldWrite = true;
+                            }
+                            catch { shouldWrite = true; }
+                        }
+                        if (shouldWrite)
+                        {
+                            File.WriteAllBytes(targetPath, bytes);
+                            try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Deployed homepage asset '{fileName}' to UserData root/Homepage."); } catch { }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Failed deploying homepage asset '{fileName}': {ex.Message}"); } catch { }
+            }
+        }
+
         private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>");
 
         private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
@@ -1473,42 +1536,117 @@ namespace Firesky.UnderNetBrowser
                 bool ParseFloat(string v, out float f) => float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f) || float.TryParse(v, out f);
                 bool ParseInt(string v, out int i) => int.TryParse(v, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out i) || int.TryParse(v, out i);
 
+                string raw = value ?? string.Empty;
+                string trimmed = raw.Trim();
                 switch ((key ?? "").Trim())
                 {
+                    case "Enabled":
+                        if (UnderNetBrowserConfig.Enabled != null && ParseBool(raw, out var bEnabled)) { UnderNetBrowserConfig.Enabled.Value = bEnabled; Save(); message = "Enable App updated."; return true; }
+                        break;
                     case "HomeUrl":
-                        if (UnderNetBrowserConfig.HomeUrl != null) { UnderNetBrowserConfig.HomeUrl.Value = string.IsNullOrWhiteSpace(value) ? "undernet:home" : value.Trim(); Save(); message = "Home URL updated."; return true; }
-                        break;
-                    case "KeyToggleCursor":
-                        if (UnderNetBrowserConfig.KeyToggleCursor != null) { UnderNetBrowserConfig.KeyToggleCursor.Value = string.IsNullOrWhiteSpace(value) ? "F3" : value.Trim(); Save(); message = "Cursor toggle key updated."; return true; }
-                        break;
-                    case "KeyReload":
-                        if (UnderNetBrowserConfig.KeyReload != null) { UnderNetBrowserConfig.KeyReload.Value = string.IsNullOrWhiteSpace(value) ? "F5" : value.Trim(); Save(); message = "Reload key updated."; return true; }
-                        break;
-                    case "KeyGameInputMode":
-                        if (UnderNetBrowserConfig.KeyGameInputMode != null) { UnderNetBrowserConfig.KeyGameInputMode.Value = string.IsNullOrWhiteSpace(value) ? "F6" : value.Trim(); Save(); message = "Game Input Mode key updated."; return true; }
+                        if (UnderNetBrowserConfig.HomeUrl != null) { UnderNetBrowserConfig.HomeUrl.Value = string.IsNullOrWhiteSpace(trimmed) ? "undernet:home" : trimmed; Save(); message = "Home URL updated."; return true; }
                         break;
                     case "BasicAdBlockEnabled":
-                        if (UnderNetBrowserConfig.BasicAdBlockEnabled != null && ParseBool(value, out var b1)) { UnderNetBrowserConfig.BasicAdBlockEnabled.Value = b1; Save(); message = "Basic ad/tracker blocking updated."; return true; }
+                        if (UnderNetBrowserConfig.BasicAdBlockEnabled != null && ParseBool(raw, out var bAd)) { UnderNetBrowserConfig.BasicAdBlockEnabled.Value = bAd; Save(); message = "Basic ad/tracker blocking updated."; return true; }
                         break;
                     case "AutoConsentEnabled":
-                        if (UnderNetBrowserConfig.AutoConsentEnabled != null && ParseBool(value, out var b2)) { UnderNetBrowserConfig.AutoConsentEnabled.Value = b2; Save(); message = "Auto-consent setting updated."; return true; }
+                        if (UnderNetBrowserConfig.AutoConsentEnabled != null && ParseBool(raw, out var bConsent)) { UnderNetBrowserConfig.AutoConsentEnabled.Value = bConsent; Save(); message = "Auto-consent setting updated."; return true; }
                         break;
                     case "DistanceVolumeEnabled":
-                        if (UnderNetBrowserConfig.DistanceVolumeEnabled != null && ParseBool(value, out var b3)) { UnderNetBrowserConfig.DistanceVolumeEnabled.Value = b3; Save(); message = "Distance volume setting updated."; return true; }
+                        if (UnderNetBrowserConfig.DistanceVolumeEnabled != null && ParseBool(raw, out var bDist)) { UnderNetBrowserConfig.DistanceVolumeEnabled.Value = bDist; Save(); message = "Distance volume setting updated."; return true; }
                         break;
-                    case "DebugLogging":
-                        if (UnderNetBrowserConfig.DebugLogging != null && ParseBool(value, out var b4)) { UnderNetBrowserConfig.DebugLogging.Value = b4; Save(); message = "Verbose debug logging updated."; return true; }
+                    case "DistanceVolumeFullDistance":
+                        if (UnderNetBrowserConfig.DistanceVolumeFullDistance != null && ParseFloat(trimmed, out var fDvFull)) { UnderNetBrowserConfig.DistanceVolumeFullDistance.Value = fDvFull; Save(); message = "Distance Volume: Full Distance updated."; return true; }
                         break;
-                    case "ChromeHeightFraction":
-                        if (UnderNetBrowserConfig.ChromeHeightFraction != null && ParseFloat(value, out var f1)) { UnderNetBrowserConfig.ChromeHeightFraction.Value = f1; Save(); message = "Chrome height updated."; return true; }
+                    case "DistanceVolumeSilentDistance":
+                        if (UnderNetBrowserConfig.DistanceVolumeSilentDistance != null && ParseFloat(trimmed, out var fDvSilent)) { UnderNetBrowserConfig.DistanceVolumeSilentDistance.Value = fDvSilent; Save(); message = "Distance Volume: Silent Distance updated."; return true; }
+                        break;
+                    case "KeyToggleCursor":
+                        if (UnderNetBrowserConfig.KeyToggleCursor != null) { UnderNetBrowserConfig.KeyToggleCursor.Value = string.IsNullOrWhiteSpace(trimmed) ? "F3" : trimmed; Save(); message = "Cursor toggle key updated."; return true; }
+                        break;
+                    case "KeyReload":
+                        if (UnderNetBrowserConfig.KeyReload != null) { UnderNetBrowserConfig.KeyReload.Value = string.IsNullOrWhiteSpace(trimmed) ? "F5" : trimmed; Save(); message = "Reload key updated."; return true; }
+                        break;
+                    case "KeyGameInputMode":
+                        if (UnderNetBrowserConfig.KeyGameInputMode != null) { UnderNetBrowserConfig.KeyGameInputMode.Value = string.IsNullOrWhiteSpace(trimmed) ? "F6" : trimmed; Save(); message = "Game Input Mode key updated."; return true; }
                         break;
                     case "GpuCompositionRenderWidth":
-                        if (UnderNetBrowserConfig.GpuCompositionRenderWidth != null && ParseInt(value, out var i1)) { UnderNetBrowserConfig.GpuCompositionRenderWidth.Value = Math.Max(640, i1); Save(); message = "Render width updated (restart/reopen may be required)."; return true; }
+                        if (UnderNetBrowserConfig.GpuCompositionRenderWidth != null && ParseInt(trimmed, out var iRw)) { UnderNetBrowserConfig.GpuCompositionRenderWidth.Value = Math.Max(640, iRw); Save(); message = "Render width updated (restart/reopen may be required)."; return true; }
                         break;
                     case "GpuCompositionRenderHeight":
-                        if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(value, out var i2)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Math.Max(360, i2); Save(); message = "Render height updated (restart/reopen may be required)."; return true; }
+                        if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(trimmed, out var iRh)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Math.Max(360, iRh); Save(); message = "Render height updated (restart/reopen may be required)."; return true; }
+                        break;
+                    case "DebugLogging":
+                        if (UnderNetBrowserConfig.DebugLogging != null && ParseBool(raw, out var bDbg)) { UnderNetBrowserConfig.DebugLogging.Value = bDbg; Save(); message = "Verbose debug logging updated."; return true; }
+                        break;
+                    case "AlwaysLogDiagnostics":
+                        if (UnderNetBrowserConfig.AlwaysLogDiagnostics != null && ParseBool(raw, out var bKeyDiag)) { UnderNetBrowserConfig.AlwaysLogDiagnostics.Value = bKeyDiag; Save(); message = "Key diagnostics logging updated."; return true; }
+                        break;
+                    case "PerformanceDiagnosticsEnabled":
+                        if (UnderNetBrowserConfig.PerformanceDiagnosticsEnabled != null && ParseBool(raw, out var bPerf)) { UnderNetBrowserConfig.PerformanceDiagnosticsEnabled.Value = bPerf; Save(); message = "Performance diagnostics updated."; return true; }
+                        break;
+                    case "DiagnosticsSampleIntervalSeconds":
+                        if (UnderNetBrowserConfig.DiagnosticsSampleIntervalSeconds != null && ParseFloat(trimmed, out var fDiagInt)) { UnderNetBrowserConfig.DiagnosticsSampleIntervalSeconds.Value = fDiagInt; Save(); message = "Diagnostics sample interval updated."; return true; }
+                        break;
+                    case "DiagnosticsOutputDirectory":
+                        if (UnderNetBrowserConfig.DiagnosticsOutputDirectory != null) { UnderNetBrowserConfig.DiagnosticsOutputDirectory.Value = raw ?? string.Empty; Save(); message = "Diagnostics output folder updated."; return true; }
+                        break;
+                    case "WebView2ArgDisableBackgroundTimerThrottling":
+                        if (UnderNetBrowserConfig.WebView2ArgDisableBackgroundTimerThrottling != null && ParseBool(raw, out var bWv1)) { UnderNetBrowserConfig.WebView2ArgDisableBackgroundTimerThrottling.Value = bWv1; Save(); message = "WebView2 arg (disable background timer throttling) updated."; return true; }
+                        break;
+                    case "WebView2ArgDisableRendererBackgrounding":
+                        if (UnderNetBrowserConfig.WebView2ArgDisableRendererBackgrounding != null && ParseBool(raw, out var bWv2)) { UnderNetBrowserConfig.WebView2ArgDisableRendererBackgrounding.Value = bWv2; Save(); message = "WebView2 arg (disable renderer backgrounding) updated."; return true; }
+                        break;
+                    case "WebView2ArgAutoplayNoUserGesture":
+                        if (UnderNetBrowserConfig.WebView2ArgAutoplayNoUserGesture != null && ParseBool(raw, out var bWv3)) { UnderNetBrowserConfig.WebView2ArgAutoplayNoUserGesture.Value = bWv3; Save(); message = "WebView2 arg (autoplay no user gesture) updated."; return true; }
+                        break;
+                    case "WebView2ArgDisableFrameRateLimit":
+                        if (UnderNetBrowserConfig.WebView2ArgDisableFrameRateLimit != null && ParseBool(raw, out var bWv4)) { UnderNetBrowserConfig.WebView2ArgDisableFrameRateLimit.Value = bWv4; Save(); message = "WebView2 arg (disable frame rate limit) updated."; return true; }
+                        break;
+                    case "WebView2CustomBrowserArguments":
+                        if (UnderNetBrowserConfig.WebView2CustomBrowserArguments != null) { UnderNetBrowserConfig.WebView2CustomBrowserArguments.Value = raw ?? string.Empty; Save(); message = "Custom WebView2 browser arguments updated."; return true; }
+                        break;
+                    case "AdaptiveRenderingEnabled":
+                        if (UnderNetBrowserConfig.AdaptiveRenderingEnabled != null && ParseBool(raw, out var bAr)) { UnderNetBrowserConfig.AdaptiveRenderingEnabled.Value = bAr; Save(); message = "Adaptive rendering updated."; return true; }
+                        break;
+                    case "AdaptiveDistanceQualityScaling":
+                        if (UnderNetBrowserConfig.AdaptiveDistanceQualityScaling != null && ParseBool(raw, out var bArD)) { UnderNetBrowserConfig.AdaptiveDistanceQualityScaling.Value = bArD; Save(); message = "Adaptive distance quality scaling updated."; return true; }
+                        break;
+                    case "AdaptiveVisualStandbyEnabled":
+                        if (UnderNetBrowserConfig.AdaptiveVisualStandbyEnabled != null && ParseBool(raw, out var bArVs)) { UnderNetBrowserConfig.AdaptiveVisualStandbyEnabled.Value = bArVs; Save(); message = "Adaptive visual standby updated."; return true; }
+                        break;
+                    case "AdaptiveResolutionScalingEnabled":
+                        if (UnderNetBrowserConfig.AdaptiveResolutionScalingEnabled != null && ParseBool(raw, out var bArRs)) { UnderNetBrowserConfig.AdaptiveResolutionScalingEnabled.Value = bArRs; Save(); message = "Adaptive resolution scaling updated."; return true; }
+                        break;
+                    case "AdaptiveFullDistance":
+                        if (UnderNetBrowserConfig.AdaptiveFullDistance != null && ParseFloat(trimmed, out var fArFull)) { UnderNetBrowserConfig.AdaptiveFullDistance.Value = fArFull; Save(); message = "Adaptive full distance updated."; return true; }
+                        break;
+                    case "AdaptiveReducedDistance":
+                        if (UnderNetBrowserConfig.AdaptiveReducedDistance != null && ParseFloat(trimmed, out var fArRed)) { UnderNetBrowserConfig.AdaptiveReducedDistance.Value = fArRed; Save(); message = "Adaptive reduced distance updated."; return true; }
+                        break;
+                    case "AdaptiveLowDistance":
+                        if (UnderNetBrowserConfig.AdaptiveLowDistance != null && ParseFloat(trimmed, out var fArLow)) { UnderNetBrowserConfig.AdaptiveLowDistance.Value = fArLow; Save(); message = "Adaptive low distance updated."; return true; }
+                        break;
+                    case "AdaptiveStandbyDistance":
+                        if (UnderNetBrowserConfig.AdaptiveStandbyDistance != null && ParseFloat(trimmed, out var fArSt)) { UnderNetBrowserConfig.AdaptiveStandbyDistance.Value = fArSt; Save(); message = "Adaptive standby distance updated."; return true; }
+                        break;
+                    case "AdaptiveHysteresisDistance":
+                        if (UnderNetBrowserConfig.AdaptiveHysteresisDistance != null && ParseFloat(trimmed, out var fArHy)) { UnderNetBrowserConfig.AdaptiveHysteresisDistance.Value = fArHy; Save(); message = "Adaptive hysteresis distance updated."; return true; }
+                        break;
+                    case "AdaptiveTransitionDelaySeconds":
+                        if (UnderNetBrowserConfig.AdaptiveTransitionDelaySeconds != null && ParseFloat(trimmed, out var fArTd)) { UnderNetBrowserConfig.AdaptiveTransitionDelaySeconds.Value = fArTd; Save(); message = "Adaptive transition delay updated."; return true; }
+                        break;
+                    case "AdaptiveReducedCaptureFps":
+                        if (UnderNetBrowserConfig.AdaptiveReducedCaptureFps != null && ParseInt(trimmed, out var iArRf)) { UnderNetBrowserConfig.AdaptiveReducedCaptureFps.Value = iArRf; Save(); message = "Adaptive reduced capture FPS updated."; return true; }
+                        break;
+                    case "AdaptiveLowCaptureFps":
+                        if (UnderNetBrowserConfig.AdaptiveLowCaptureFps != null && ParseInt(trimmed, out var iArLf)) { UnderNetBrowserConfig.AdaptiveLowCaptureFps.Value = iArLf; Save(); message = "Adaptive low capture FPS updated."; return true; }
+                        break;
+                    case "ChromeHeightFraction":
+                        if (UnderNetBrowserConfig.ChromeHeightFraction != null && ParseFloat(trimmed, out var fChrome)) { UnderNetBrowserConfig.ChromeHeightFraction.Value = fChrome; Save(); message = "Chrome height updated."; return true; }
                         break;
                 }
+                message = "Unsupported setting or invalid value.";
             }
             catch (Exception ex) { message = "Failed: " + ex.Message; return false; }
             return false;
@@ -1541,6 +1679,25 @@ namespace Firesky.UnderNetBrowser
                     try { MelonPreferences.Save(); } catch { }
                     status = "ok"; msg = "Preferences saved.";
                 }
+                else if (action == "saveform" || action == "applyall")
+                {
+                    // payload is a URL-encoded query string of key=value pairs (same format ParseSimpleQuery accepts)
+                    var payload = args.TryGetValue("payload", out var p) ? (p ?? "") : "";
+                    var form = ParseSimpleQuery(payload);
+                    int applied = 0, failed = 0;
+                    string? lastErr = null;
+                    foreach (var kv in form)
+                    {
+                        if (TryApplyConfigCommand(kv.Key, kv.Value, out var m)) applied++;
+                        else { failed++; lastErr = m; }
+                    }
+                    try { MelonPreferences.Save(); } catch { }
+                    status = failed == 0 ? "ok" : "err";
+                    msg = failed == 0
+                        ? $"Applied {applied} setting(s) and saved preferences."
+                        : $"Applied {applied}, failed {failed}" + (string.IsNullOrWhiteSpace(lastErr) ? "." : (": " + lastErr));
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Settings cmd saveform applied={applied} failed={failed}");
+                }
                 else if (action == "load" || action == "refresh" || action == "getsettings")
                 {
                     status = "ok"; msg = "Current settings loaded.";
@@ -1548,6 +1705,7 @@ namespace Firesky.UnderNetBrowser
 
                 if (navigateBackToSettings)
                 {
+                    try { _lastSettingsPagePayload = string.Empty; _lastSettingsPageUrl = string.Empty; _nextSettingsPageSyncRealtime = 0f; } catch { }
                     var target = GetOrCreateHomepageUrl();
                     try
                     {
@@ -1556,7 +1714,8 @@ namespace Firesky.UnderNetBrowser
                     }
                     catch { }
                     try { target += (target.Contains("?") ? "&" : "?") + "cfg_status=" + Uri.EscapeDataString(status) + "&cfg_msg=" + Uri.EscapeDataString(msg ?? ""); } catch { }
-                    try { _gpuCompositionCapture?.Navigate(target); } catch { }
+                    // Use location.replace to avoid polluting history (Back should leave settings, not cycle through config actions)
+                    try { _gpuCompositionCapture?.ExecuteScript("try{location.replace('" + EscapeJsSingleQuoted(target) + "');}catch(e){location.href='" + EscapeJsSingleQuoted(target) + "';}"); } catch { try { _gpuCompositionCapture?.Navigate(target); } catch { } }
                     try { if (_urlInput != null) { _urlInput.text = "undernet:settings"; if (_urlInput.textComponent != null) _urlInput.textComponent.text = "undernet:settings"; _urlInput.ForceLabelUpdate(); } } catch { }
                 }
                 return true;
@@ -1578,6 +1737,13 @@ namespace Firesky.UnderNetBrowser
                 if (!TryStartDiscordMirror(url))
                 {
                     SetHint("Discord mirror unavailable (is Discord running?).");
+                    try { SetUrlDisplayText("undernet:discord"); } catch { }
+                }
+                else
+                {
+                    // Keep address bar stable while mirror is active (avoid flashes from prior/home URL state)
+                    try { _lastSyncedUrl = "undernet:discord"; } catch { }
+                    try { if (_urlInput != null) { _urlInput.text = "undernet:discord"; if (_urlInput.textComponent != null) _urlInput.textComponent.text = "undernet:discord"; try { _urlInput.ForceLabelUpdate(); } catch { } } } catch { }
                     try { SetUrlDisplayText("undernet:discord"); } catch { }
                 }
                 return;
@@ -2799,11 +2965,29 @@ namespace Firesky.UnderNetBrowser
 
         private static float _nextHomepageGameTimeSyncRealtime = -999f;
         private static string _lastHomepageGameTimePayload = string.Empty;
+        private static string _lastHomepageGameTimeUrl = string.Empty;
+        private static float _nextHomepageGameTimeDiagRealtime = -999f;
+        private static float _nextHomepageGameTimeTickDiagRealtime = -999f;
+        private static float _nextHomepageGameTimeReadDiagRealtime = -999f;
+        private static bool _homepageGameTimeSyncLoggedSuccess;
 
         private static string EscapeJsSingleQuoted(string? s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
             return s.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", " ");
+        }
+
+        private static void LogHomepageGameTimeReadDiag(string message)
+        {
+            try
+            {
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now < _nextHomepageGameTimeReadDiagRealtime) return;
+                _nextHomepageGameTimeReadDiagRealtime = now + 10f;
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time read: {message}");
+            }
+            catch { }
         }
 
         private static bool TryGetScheduleOneGameTime(out string timeText, out string dayText)
@@ -2818,7 +3002,11 @@ namespace Firesky.UnderNetBrowser
                     try { tmType = asm.GetType("Il2CppScheduleOne.GameTime.TimeManager", false); } catch { tmType = null; }
                     if (tmType != null) break;
                 }
-                if (tmType == null) return false;
+                if (tmType == null)
+                {
+                    LogHomepageGameTimeReadDiag("Il2CppScheduleOne.GameTime.TimeManager type not found in loaded assemblies.");
+                    return false;
+                }
 
                 object? tm = null;
                 try
@@ -2827,7 +3015,11 @@ namespace Firesky.UnderNetBrowser
                     if (instExistsProp != null)
                     {
                         var existsObj = instExistsProp.GetValue(null);
-                        if (existsObj is bool b && !b) return false;
+                        if (existsObj is bool b && !b)
+                        {
+                            LogHomepageGameTimeReadDiag("TimeManager.InstanceExists is false.");
+                            return false;
+                        }
                     }
                 }
                 catch { }
@@ -2837,19 +3029,54 @@ namespace Firesky.UnderNetBrowser
                     if (instProp != null) tm = instProp.GetValue(null);
                 }
                 catch { tm = null; }
-                if (tm == null) return false;
+                if (tm == null)
+                {
+                    LogHomepageGameTimeReadDiag("TimeManager.Instance is null/unavailable.");
+                    return false;
+                }
 
                 int currentTime = -1;
+                int elapsedDays = -1;
+                int dayIndex = -1;
+                string dayName = "";
+
+                // Prefer GetDateTime() when available (provides elapsedDays + time in one call).
                 try
                 {
-                    var ctProp = tmType.GetProperty("CurrentTime", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    if (ctProp != null)
+                    var getDateTime = tmType.GetMethod("GetDateTime", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, null, Type.EmptyTypes, null);
+                    if (getDateTime != null)
                     {
-                        var v = ctProp.GetValue(tm);
-                        if (v != null) currentTime = Convert.ToInt32(v);
+                        var dt = getDateTime.Invoke(tm, null);
+                        if (dt != null)
+                        {
+                            var dtType = dt.GetType();
+                            var fElapsed = dtType.GetField("elapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                            var fTime = dtType.GetField("time", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                            var pElapsed = dtType.GetProperty("ElapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase) ?? dtType.GetProperty("elapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                            var pTime = dtType.GetProperty("Time", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase) ?? dtType.GetProperty("time", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+
+                            object? edVal = fElapsed != null ? fElapsed.GetValue(dt) : (pElapsed != null ? pElapsed.GetValue(dt) : null);
+                            object? tVal = fTime != null ? fTime.GetValue(dt) : (pTime != null ? pTime.GetValue(dt) : null);
+                            if (edVal != null) elapsedDays = Convert.ToInt32(edVal);
+                            if (tVal != null) currentTime = Convert.ToInt32(tVal);
+                        }
                     }
                 }
-                catch { currentTime = -1; }
+                catch { }
+
+                try
+                {
+                    if (currentTime < 0)
+                    {
+                        var ctProp = tmType.GetProperty("CurrentTime", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (ctProp != null)
+                        {
+                            var v = ctProp.GetValue(tm);
+                            if (v != null) currentTime = Convert.ToInt32(v);
+                        }
+                    }
+                }
+                catch { currentTime = currentTime < 0 ? -1 : currentTime; }
 
                 // Prefer game's formatted 12-hour time if available.
                 string? formatted = null;
@@ -2873,7 +3100,6 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (!string.IsNullOrWhiteSpace(formatted)) timeText = formatted;
 
-                string dayName = "";
                 try
                 {
                     var dayProp = tmType.GetProperty("CurrentDay", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
@@ -2885,26 +3111,30 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { dayName = ""; }
 
-                int dayIndex = -1, elapsedDays = -1;
                 try { var p = tmType.GetProperty("DayIndex", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance); if (p != null) { var v = p.GetValue(tm); if (v != null) dayIndex = Convert.ToInt32(v); } } catch { }
-                try { var p = tmType.GetProperty("ElapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance); if (p != null) { var v = p.GetValue(tm); if (v != null) elapsedDays = Convert.ToInt32(v); } } catch { }
+                try { if (elapsedDays < 0) { var p = tmType.GetProperty("ElapsedDays", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance); if (p != null) { var v = p.GetValue(tm); if (v != null) elapsedDays = Convert.ToInt32(v); } } } catch { }
 
+                int dayNum = elapsedDays >= 0 ? (elapsedDays + 1) : (dayIndex >= 0 ? (dayIndex + 1) : -1);
                 if (!string.IsNullOrWhiteSpace(dayName))
                 {
                     dayText = dayName;
-                    int dayNum = elapsedDays >= 0 ? (elapsedDays + 1) : (dayIndex >= 0 ? (dayIndex + 1) : -1);
                     if (dayNum > 0) dayText += $" · Day {dayNum}";
                 }
-                else if (elapsedDays >= 0 || dayIndex >= 0)
+                else if (dayNum > 0)
                 {
-                    int dayNum = elapsedDays >= 0 ? (elapsedDays + 1) : (dayIndex + 1);
                     dayText = $"Day {dayNum}";
                 }
 
-                return !string.IsNullOrWhiteSpace(timeText) || !string.IsNullOrWhiteSpace(dayName);
+                bool ok = !string.IsNullOrWhiteSpace(formatted) || dayNum > 0 || !string.IsNullOrWhiteSpace(dayName);
+                if (!ok)
+                {
+                    LogHomepageGameTimeReadDiag($"TimeManager found but no usable values (currentTime={currentTime}, elapsedDays={elapsedDays}, dayIndex={dayIndex}, dayName='{dayName}', formatted='{formatted ?? ""}').");
+                }
+                return ok;
             }
-            catch
+            catch (Exception ex)
             {
+                LogHomepageGameTimeReadDiag($"Exception while reading TimeManager: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }
@@ -3068,34 +3298,54 @@ namespace Firesky.UnderNetBrowser
         }
         private static float _nextSettingsPageSyncRealtime = -999f;
         private static string _lastSettingsPagePayload = string.Empty;
+        private static string _lastSettingsPageUrl = string.Empty;
 
         private static string BuildCurrentSettingsJsObject()
         {
             try
             {
-                string home = UnderNetBrowserConfig.HomeUrl?.Value ?? "undernet:home";
-                string kCursor = UnderNetBrowserConfig.KeyToggleCursor?.Value ?? "F3";
-                string kReload = UnderNetBrowserConfig.KeyReload?.Value ?? "F5";
-                string kGame = UnderNetBrowserConfig.KeyGameInputMode?.Value ?? "F6";
-                bool adblock = UnderNetBrowserConfig.BasicAdBlockEnabled?.Value ?? true;
-                bool consent = UnderNetBrowserConfig.AutoConsentEnabled?.Value ?? false;
-                bool distVol = UnderNetBrowserConfig.DistanceVolumeEnabled?.Value ?? true;
-                bool dbg = UnderNetBrowserConfig.DebugLogging?.Value ?? false;
-                float chrome = UnderNetBrowserConfig.ChromeHeightFraction?.Value ?? 0.085f;
-                int rw = UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920;
-                int rh = UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080;
+                var c = typeof(UnderNetBrowserConfig);
+                string s(string? v) => JsStr(v ?? string.Empty);
+                string b(bool v) => JsBool(v);
+                string f(float v) => v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string i(int v) => v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
                 return "{"
-                    + "HomeUrl:" + JsStr(home) + ","
-                    + "KeyToggleCursor:" + JsStr(kCursor) + ","
-                    + "KeyReload:" + JsStr(kReload) + ","
-                    + "KeyGameInputMode:" + JsStr(kGame) + ","
-                    + "BasicAdBlockEnabled:" + JsBool(adblock) + ","
-                    + "AutoConsentEnabled:" + JsBool(consent) + ","
-                    + "DistanceVolumeEnabled:" + JsBool(distVol) + ","
-                    + "DebugLogging:" + JsBool(dbg) + ","
-                    + "ChromeHeightFraction:" + chrome.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
-                    + "GpuCompositionRenderWidth:" + rw.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
-                    + "GpuCompositionRenderHeight:" + rh.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + "Enabled:" + b(UnderNetBrowserConfig.Enabled?.Value ?? true) + ","
+                    + "HomeUrl:" + s(UnderNetBrowserConfig.HomeUrl?.Value ?? "undernet:home") + ","
+                    + "BasicAdBlockEnabled:" + b(UnderNetBrowserConfig.BasicAdBlockEnabled?.Value ?? true) + ","
+                    + "AutoConsentEnabled:" + b(UnderNetBrowserConfig.AutoConsentEnabled?.Value ?? false) + ","
+                    + "DistanceVolumeEnabled:" + b(UnderNetBrowserConfig.DistanceVolumeEnabled?.Value ?? true) + ","
+                    + "DistanceVolumeFullDistance:" + f(UnderNetBrowserConfig.DistanceVolumeFullDistance?.Value ?? 7.5f) + ","
+                    + "DistanceVolumeSilentDistance:" + f(UnderNetBrowserConfig.DistanceVolumeSilentDistance?.Value ?? 35.0f) + ","
+                    + "KeyToggleCursor:" + s(UnderNetBrowserConfig.KeyToggleCursor?.Value ?? "F3") + ","
+                    + "KeyReload:" + s(UnderNetBrowserConfig.KeyReload?.Value ?? "F5") + ","
+                    + "KeyGameInputMode:" + s(UnderNetBrowserConfig.KeyGameInputMode?.Value ?? "F6") + ","
+                    + "GpuCompositionRenderWidth:" + i(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920) + ","
+                    + "GpuCompositionRenderHeight:" + i(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080) + ","
+                    + "DebugLogging:" + b(UnderNetBrowserConfig.DebugLogging?.Value ?? false) + ","
+                    + "AlwaysLogDiagnostics:" + b(UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value ?? false) + ","
+                    + "PerformanceDiagnosticsEnabled:" + b(UnderNetBrowserConfig.PerformanceDiagnosticsEnabled?.Value ?? false) + ","
+                    + "DiagnosticsSampleIntervalSeconds:" + f(UnderNetBrowserConfig.DiagnosticsSampleIntervalSeconds?.Value ?? 1.0f) + ","
+                    + "DiagnosticsOutputDirectory:" + s(UnderNetBrowserConfig.DiagnosticsOutputDirectory?.Value ?? "") + ","
+                    + "WebView2ArgDisableBackgroundTimerThrottling:" + b(UnderNetBrowserConfig.WebView2ArgDisableBackgroundTimerThrottling?.Value ?? false) + ","
+                    + "WebView2ArgDisableRendererBackgrounding:" + b(UnderNetBrowserConfig.WebView2ArgDisableRendererBackgrounding?.Value ?? false) + ","
+                    + "WebView2ArgAutoplayNoUserGesture:" + b(UnderNetBrowserConfig.WebView2ArgAutoplayNoUserGesture?.Value ?? false) + ","
+                    + "WebView2ArgDisableFrameRateLimit:" + b(UnderNetBrowserConfig.WebView2ArgDisableFrameRateLimit?.Value ?? false) + ","
+                    + "WebView2CustomBrowserArguments:" + s(UnderNetBrowserConfig.WebView2CustomBrowserArguments?.Value ?? "") + ","
+                    + "AdaptiveRenderingEnabled:" + b(UnderNetBrowserConfig.AdaptiveRenderingEnabled?.Value ?? true) + ","
+                    + "AdaptiveDistanceQualityScaling:" + b(UnderNetBrowserConfig.AdaptiveDistanceQualityScaling?.Value ?? true) + ","
+                    + "AdaptiveVisualStandbyEnabled:" + b(UnderNetBrowserConfig.AdaptiveVisualStandbyEnabled?.Value ?? true) + ","
+                    + "AdaptiveResolutionScalingEnabled:" + b(UnderNetBrowserConfig.AdaptiveResolutionScalingEnabled?.Value ?? false) + ","
+                    + "AdaptiveFullDistance:" + f(UnderNetBrowserConfig.AdaptiveFullDistance?.Value ?? 7.0f) + ","
+                    + "AdaptiveReducedDistance:" + f(UnderNetBrowserConfig.AdaptiveReducedDistance?.Value ?? 14.0f) + ","
+                    + "AdaptiveLowDistance:" + f(UnderNetBrowserConfig.AdaptiveLowDistance?.Value ?? 22.0f) + ","
+                    + "AdaptiveStandbyDistance:" + f(UnderNetBrowserConfig.AdaptiveStandbyDistance?.Value ?? 30.0f) + ","
+                    + "AdaptiveHysteresisDistance:" + f(UnderNetBrowserConfig.AdaptiveHysteresisDistance?.Value ?? 1.0f) + ","
+                    + "AdaptiveTransitionDelaySeconds:" + f(UnderNetBrowserConfig.AdaptiveTransitionDelaySeconds?.Value ?? 0.5f) + ","
+                    + "AdaptiveReducedCaptureFps:" + i(UnderNetBrowserConfig.AdaptiveReducedCaptureFps?.Value ?? 15) + ","
+                    + "AdaptiveLowCaptureFps:" + i(UnderNetBrowserConfig.AdaptiveLowCaptureFps?.Value ?? 8) + ","
+                    + "ChromeHeightFraction:" + f(UnderNetBrowserConfig.ChromeHeightFraction?.Value ?? 0.06f)
                     + "}";
             }
             catch { return "{}"; }
@@ -3106,7 +3356,8 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 var app = _activeInstance;
-                if (app == null || !app.IsOpen) return;
+                if (app == null) return;
+                if (!app.IsOpen && app._gpuCompositionCapture == null) return;
                 float now = Time.realtimeSinceStartup;
                 if (!force && now < _nextSettingsPageSyncRealtime) return;
                 _nextSettingsPageSyncRealtime = now + 1.0f;
@@ -3118,7 +3369,17 @@ namespace Firesky.UnderNetBrowser
                 var curNorm = cur.Replace("\\", "/");
                 if (curNorm.IndexOf("/UnderNetBrowser/root/Homepage/settings.html", StringComparison.OrdinalIgnoreCase) < 0 &&
                     curNorm.IndexOf("/root/Homepage/settings.html", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    _lastSettingsPageUrl = string.Empty;
                     return;
+                }
+
+                // Force reinjection when navigating/reloading settings page (e.g. after save/cmd, browser restart, or HomeUrl change flow)
+                if (!string.Equals(cur, _lastSettingsPageUrl, StringComparison.Ordinal))
+                {
+                    _lastSettingsPageUrl = cur;
+                    _lastSettingsPagePayload = string.Empty;
+                }
 
                 var payload = BuildCurrentSettingsJsObject();
                 if (!force && string.Equals(payload, _lastSettingsPagePayload, StringComparison.Ordinal)) return;
@@ -3134,32 +3395,102 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 var app = _activeInstance;
-                if (app == null || !app.IsOpen) return;
+                if (app == null) return;
+                // S1API IsOpen can be false in warm/transition states while composition remains active.
+                // Don't hard-require IsOpen; require a live composition capture for homepage sync/injection.
+                if (!app.IsOpen && app._gpuCompositionCapture == null)
+                {
+                    float nowState = 0f; try { nowState = Time.realtimeSinceStartup; } catch { }
+                    if (nowState >= _nextHomepageGameTimeTickDiagRealtime)
+                    {
+                        _nextHomepageGameTimeTickDiagRealtime = nowState + 10f;
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync tick: skipped (app.IsOpen=false, capture=no, compMode={app._gpuCompositionMode}, extMirror={app._externalMirrorMode}, detached={app._detachedToGameplay})"); } catch { }
+                    }
+                    return;
+                }
                 float now = Time.realtimeSinceStartup;
                 if (now < _nextHomepageGameTimeSyncRealtime) return;
                 _nextHomepageGameTimeSyncRealtime = now + 1.0f;
 
-                if (app._gpuCompositionCapture == null) return;
-                var cur = "";
-                try { cur = app._gpuCompositionCapture.CurrentUrl ?? ""; } catch { cur = ""; }
-                if (string.IsNullOrWhiteSpace(cur)) return;
-                var curNorm = cur.Replace("\\", "/");
-                if (curNorm.IndexOf("/UnderNetBrowser/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) < 0 &&
-                    curNorm.IndexOf("/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) < 0)
-                    return;
+                if (now >= _nextHomepageGameTimeTickDiagRealtime)
+                {
+                    _nextHomepageGameTimeTickDiagRealtime = now + 10f;
+                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync tick: entered open={app.IsOpen} active={( _activeInstance != null)}"); } catch { }
+                }
 
-                if (!TryGetScheduleOneGameTime(out var timeText, out var dayText))
+                var cur = "";
+                try { cur = app._gpuCompositionCapture?.CurrentUrl ?? ""; } catch { cur = ""; }
+                var curNorm = (cur ?? "").Replace("\\", "/");
+                bool looksLikeHomepage = curNorm.IndexOf("/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool matchedHomepage = curNorm.IndexOf("/UnderNetBrowser/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || looksLikeHomepage;
+
+                if (now >= _nextHomepageGameTimeDiagRealtime - 0f && (matchedHomepage || looksLikeHomepage || string.IsNullOrWhiteSpace(cur)))
+                {
+                    // piggyback occasional detail in diag channel when relevant (separate throttle below handles main diag cases)
+                }
+
+                if (looksLikeHomepage && !matchedHomepage && now >= _nextHomepageGameTimeDiagRealtime)
+                {
+                    _nextHomepageGameTimeDiagRealtime = now + 10f;
+                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: homepage-like URL did not match expected path (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                }
+                if (!matchedHomepage)
+                {
+                    _lastHomepageGameTimeUrl = string.Empty;
+                    return;
+                }
+
+                // Force reinjection when navigating/reloading homepage (browser restart, hard reset, or leaving/returning)
+                if (!string.Equals(cur, _lastHomepageGameTimeUrl, StringComparison.Ordinal))
+                {
+                    _lastHomepageGameTimeUrl = cur;
+                    _lastHomepageGameTimePayload = string.Empty;
+                }
+
+                if (app._gpuCompositionCapture == null)
+                {
+                    if (now >= _nextHomepageGameTimeDiagRealtime)
+                    {
+                        _nextHomepageGameTimeDiagRealtime = now + 10f;
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: composition capture unavailable on homepage (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                    }
+                    return;
+                }
+
+                bool gotTime = TryGetScheduleOneGameTime(out var timeText, out var dayText);
+                if (!gotTime)
                 {
                     timeText = "--:--";
                     dayText = "Time unavailable";
+                    if (now >= _nextHomepageGameTimeDiagRealtime)
+                    {
+                        _nextHomepageGameTimeDiagRealtime = now + 10f;
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: TimeManager unavailable/not readable yet (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                    }
                 }
                 var payload = timeText + "|" + dayText;
                 if (string.Equals(payload, _lastHomepageGameTimePayload, StringComparison.Ordinal)) return;
                 _lastHomepageGameTimePayload = payload;
                 var script = "(function(){try{if(window.__underNetSetGameTime)window.__underNetSetGameTime('" + EscapeJsSingleQuoted(timeText) + "','" + EscapeJsSingleQuoted(dayText) + "');}catch(e){}})();";
                 try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+                if (gotTime && !_homepageGameTimeSyncLoggedSuccess)
+                {
+                    _homepageGameTimeSyncLoggedSuccess = true;
+                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync active: {timeText} | {dayText}"); } catch { }
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                float nowEx = 0f; try { nowEx = Time.realtimeSinceStartup; } catch { }
+                if (nowEx >= _nextHomepageGameTimeDiagRealtime)
+                {
+                    _nextHomepageGameTimeDiagRealtime = nowEx + 10f;
+                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync exception: {ex.Message}"); } catch { }
+                }
+            }
         }
 
         private static string EscapeJsString(string s)
@@ -6576,6 +6907,15 @@ namespace Firesky.UnderNetBrowser
 
                 if (_externalMirrorMode)
                 {
+                    try
+                    {
+                        if (_urlInput != null)
+                        {
+                            _urlInput.text = "undernet:discord";
+                            if (_urlInput.textComponent != null) _urlInput.textComponent.text = "undernet:discord";
+                        }
+                    }
+                    catch { }
                     try { SetUrlDisplayText("undernet:discord"); } catch { }
                     _lastSyncedUrl = "undernet:discord";
                     return;
@@ -6583,6 +6923,33 @@ namespace Firesky.UnderNetBrowser
 
                 string? url = null;
                 try { url = _gpuCompositionCapture?.CurrentUrl; } catch { url = null; }
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    // Hash-based command signaling from settings page (avoids transient navigation/error pages)
+                    try
+                    {
+                        var hashIdx = url.IndexOf('#');
+                        if (hashIdx >= 0)
+                        {
+                            var frag = url.Substring(hashIdx + 1);
+                            const string marker = "undernetcmd=";
+                            var mIdx = frag.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                            if (mIdx >= 0)
+                            {
+                                var enc = frag.Substring(mIdx + marker.Length);
+                                var amp = enc.IndexOf('&');
+                                if (amp >= 0) enc = enc.Substring(0, amp);
+                                var tail = Uri.UnescapeDataString(enc ?? string.Empty);
+                                if (!string.IsNullOrWhiteSpace(tail))
+                                {
+                                    try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail, navigateBackToSettings: true); } catch { }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
                 if (!string.IsNullOrWhiteSpace(url) && url.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
                 {
                     try { TryHandleUnderNetCommandUrl(url, navigateBackToSettings: true); } catch { }
@@ -6590,10 +6957,39 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 // Intercept in-page navigations to built-in undernet routes (custom scheme or intercept-friendly https routes).
-                if (!string.IsNullOrWhiteSpace(url))
+                if (!string.IsNullOrWhiteSpace(url) && !_externalMirrorMode)
                 {
                     var u = url.Trim();
+                    // Hash-based command signaling fallback
+                    try
+                    {
+                        var hashIdx2 = u.IndexOf('#');
+                        if (hashIdx2 >= 0)
+                        {
+                            var frag2 = u.Substring(hashIdx2 + 1);
+                            const string marker2 = "undernetcmd=";
+                            var mIdx2 = frag2.IndexOf(marker2, StringComparison.OrdinalIgnoreCase);
+                            if (mIdx2 >= 0)
+                            {
+                                var enc2 = frag2.Substring(mIdx2 + marker2.Length);
+                                var amp2 = enc2.IndexOf('&');
+                                if (amp2 >= 0) enc2 = enc2.Substring(0, amp2);
+                                var tail2 = Uri.UnescapeDataString(enc2 ?? string.Empty);
+                                if (!string.IsNullOrWhiteSpace(tail2))
+                                {
+                                    try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail2, navigateBackToSettings: true); } catch { }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    catch { }
                     var n = NormalizeUrl(u);
+                    if (n.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { TryHandleUnderNetCommandUrl(n, navigateBackToSettings: true); } catch { }
+                        return;
+                    }
                     if (n.Equals("undernet:home", StringComparison.OrdinalIgnoreCase) ||
                         n.Equals("undernet:games", StringComparison.OrdinalIgnoreCase) ||
                         n.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase) ||
@@ -8960,7 +9356,18 @@ namespace Firesky.UnderNetBrowser
                 if (_externalMirrorMode) StopExternalWindowMirror("restart");
 
                 _externalMirrorReturnUrl = _gpuCompositionCapture?.CurrentUrl;
-                if (string.IsNullOrWhiteSpace(_externalMirrorReturnUrl)) _externalMirrorReturnUrl = GetResolvedHomeUrl();
+                try
+                {
+                    var retNorm = NormalizeUrl(_externalMirrorReturnUrl ?? string.Empty);
+                    if (string.IsNullOrWhiteSpace(_externalMirrorReturnUrl)
+                        || IsDiscordMirrorRequestUrl(_externalMirrorReturnUrl)
+                        || retNorm.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase)
+                        || retNorm.StartsWith("undernet:cmd/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _externalMirrorReturnUrl = GetResolvedHomeUrl();
+                    }
+                }
+                catch { if (string.IsNullOrWhiteSpace(_externalMirrorReturnUrl)) _externalMirrorReturnUrl = GetResolvedHomeUrl(); }
 
                 // Shut down composition browser (WGC HWND capture and comp browser share native target/render path).
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var ms=document.querySelectorAll('video,audio'); for(var i=0;i<ms.length;i++){try{ms[i].pause();}catch(_){}}}catch(_){}})();"); } catch { }
@@ -8987,6 +9394,17 @@ namespace Firesky.UnderNetBrowser
                 _externalMirrorMode = true;
                 _externalMirrorLabel = string.IsNullOrWhiteSpace(target.Title) ? "Discord" : target.Title;
                 try { if (_videoDisplay != null && _externalWindowCapture.Texture != null) _videoDisplay.texture = _externalWindowCapture.Texture; } catch { }
+                try
+                {
+                    _lastSyncedUrl = "undernet:discord";
+                    if (_urlInput != null)
+                    {
+                        _urlInput.text = "undernet:discord";
+                        if (_urlInput.textComponent != null) _urlInput.textComponent.text = "undernet:discord";
+                        try { _urlInput.ForceLabelUpdate(); } catch { }
+                    }
+                }
+                catch { }
                 try { SetUrlDisplayText("undernet:discord"); } catch { }
                 try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; } } catch { }
                 UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror started: hwnd=0x{target.Hwnd.ToInt64():X} title='{_externalMirrorLabel}' pid={target.ProcessId}");
@@ -9020,6 +9438,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
+                if (_externalMirrorMode) return;
                 if (_gpuCompositionCapture != null) return;
                 _gpuCompositionMode = false;
                 // Reuse same composition profile/path as normal startup to avoid creating a duplicate WebView2 user data folder.

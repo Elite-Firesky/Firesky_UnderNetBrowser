@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=1 -->
+<!-- UnderNetBrowser:managed-homepage version=5 -->
 <title>UnderNet Settings</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -24,48 +24,277 @@
   ul{margin:0;padding-left:18px;display:grid;gap:6px}
   code{color:#dfffe3}
   .note{margin-top:8px;padding:10px;border-radius:10px;border:1px solid rgba(124,255,107,.18);background:rgba(124,255,107,.05);color:#dfffe3;font-size:13px}
+  .cfg-card{padding:14px;display:flex;flex-direction:column;gap:12px}
+  .cfg-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .cfg-head h2{margin:0 0 4px}
+  .cfg-status{min-height:20px;font-size:13px;color:#dfffe3}
+  .cfg-status.err{color:#ffb3b3}
+  .cfg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+  .cfg-group{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:10px}
+  .cfg-group h3{margin:0;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:#d9ecdf}
+  .cfg-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+  .cfg-row.stack{grid-template-columns:1fr}
+  .cfg-label{font-size:13px;color:#dcecdf;line-height:1.35}
+  .cfg-label small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+  .cfg-input,.cfg-select{width:100%;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#0b1310;color:#eefbf3;font:inherit}
+  .cfg-input[type="number"]{max-width:170px}
+  .cfg-check{width:18px;height:18px;accent-color:#7cff6b}
+  .cfg-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .cfg-btn{appearance:none;cursor:pointer;padding:8px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;font:inherit;font-size:13px;font-weight:600}
+  .cfg-btn:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
+  .cfg-inline{display:flex;gap:8px;align-items:center;justify-content:flex-end}
+  .cfg-note{font-size:12.5px;color:var(--muted);line-height:1.5}
 </style>
 </head>
 <body>
   <div class="wrap">
     <header class="hero glass">
-      <div><h1>Settings & Controls</h1><div class="sub">UnderNet Browser quick reference and config locations</div></div>
-      <div class="actions"><a class="btn" href="index.html">← Home</a><a class="btn" href="games.html">🎮 Games</a></div>
+      <div><h1>Settings & Controls</h1><div class="sub">UnderNet Browser quick reference</div></div>
+      <div class="actions"><a class="btn" href="index.html">🏠 Home</a><a class="btn" href="games.html">🎮 Games</a><a class="btn" href="notepad.html">📝 Notepad</a></div>
     </header>
     <div class="grid">
       <section class="card glass">
-        <h2>Shortcuts</h2>
+        <h2>Default Keyboard Shortcuts</h2>
         <ul>
-          <li><code>Ctrl + Mouse Wheel</code>: zoom in/out (pointer over browser)</li>
-          <li><code>Ctrl + = / + / Numpad+</code>: zoom in (fallback)</li>
-          <li><code>Ctrl + - / Numpad-</code>: zoom out (fallback)</li>
+          <li><code>Ctrl + Mouse Wheel</code>: zoom in/out</li>
+          <li><code>Ctrl Num(+) / Num(-)</code>: zoom in/out</li>
           <li><code>Ctrl + 0</code>: reset zoom</li>
-          <li><code>Ctrl + A / C / X / V / Z</code> and <code>Ctrl + Y</code>: edit shortcuts in web fields</li>
-          <li><code>F5</code>: reload page (default, configurable)</li>
-          <li><code>Space</code>: smart play/pause or space typing</li>
+          <li><code>Ctrl + A / C / V / X / Y / Z</code></li>
+          <li><code>F3</code>: Toggle cursor visibility (recover cursor)</li>
+          <li><code>F5</code>: reload page</li>
+          <li><code>F6</code>: Game Input Mode (forward keys to page/game)</li>
+          <li><code>Video control</code>: Space/Arrows (volume can be controlled outside TV)</li>
         </ul>
       </section>
+
       <section class="card glass">
-        <h2>Mod Configuration</h2>
-        <p>Preferences are stored in MelonLoader config for this mod. Edit values there, then restart/reload as needed for changes that apply on startup.</p>
-        <div class="note">Typical file: <code>&lt;Schedule I&gt;/UserData/MelonPreferences.cfg</code><br>Category ID: <code>FireskyUnderNetBrowser</code> (display name: <code>Firesky UnderNet Browser</code>)</div>
-        <ul style="margin-top:10px">
-          <li><b>HomeUrl</b>: <code>undernet:home</code> uses the built-in desktop homepage</li>
-          <li><b>Keybinds</b>: cursor toggle, reload, game-input mode (see config entries)</li>
-          <li><b>Behavior/diagnostics</b>: logging and browser behavior options (varies by version)</li>
-        </ul>
-      </section>
-      <section class="card glass">
-        <h2>Local Content</h2>
+        <h2>Local Apps</h2>
         <ul>
-          <li><b>Homepage:</b> <code>UserData/UnderNetBrowser/root/Homepage/index.html</code></li>
-          <li><b>Games page:</b> <code>UserData/UnderNetBrowser/root/Homepage/games.html</code></li>
-          <li><b>Settings page:</b> <code>UserData/UnderNetBrowser/root/Homepage/settings.html</code></li>
-          <li><b>Local apps:</b> <code>UserData/UnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code> → <code>home:&lt;app-id&gt;</code></li>
+          <li><b>App route formats:</b> <code>home:&lt;app-id&gt;</code>, <code>undernet:&lt;app-id&gt;</code>, <code>undernet:app/&lt;app-id&gt;</code></li>
+          <li><b>App location:</b> <code>UserData/UnderNetBrowser/root/Apps/&lt;app-id&gt;/index.html</code></li>
+          <li><b>Built-in example app:</b> <code>home:example</code> (ensured by the mod when needed)</li>
+          <li><b>Fallback:</b> if a requested app is missing, navigation falls back to the homepage</li>
         </ul>
-        <p style="margin-top:8px">These files are user-editable. If missing, defaults may be regenerated by the mod.</p>
+        <p style="margin-top:8px">Reserved built-in route names (<code>home</code>, <code>games</code>, <code>settings</code>, <code>notepad</code>, <code>ai</code>, <code>discord</code>) are handled as built-in pages/features, not local app IDs.</p>
       </section>
     </div>
+
+    <section class="card glass cfg-card" id="config">
+      <div class="cfg-head">
+        <div>
+          <h2>Config</h2>
+          <div class="sub">Live MelonLoader preferences for UnderNet Browser (applies via in-mod commands)</div>
+        </div>
+        <div class="cfg-actions">
+          <button class="cfg-btn" type="button" id="cfg-refresh">Refresh</button>
+          <button class="cfg-btn" type="button" id="cfg-save">Apply All &amp; Save</button>
+        </div>
+      </div>
+      <div id="cfg-status" class="cfg-status"></div>
+      <div class="cfg-grid" id="cfg-grid"></div>
+      <div class="cfg-note">Use <b>Apply</b> (or Enter) on a field to change it immediately, or <b>Apply All &amp; Save</b> to apply all fields and persist to disk. Some changes may still require reopening the browser/app, a hard reset (Home), or restart (e.g. render size, WebView2 args, some adaptive behaviors).</div>
+    </section>
   </div>
+
+<script>
+(function(){
+  const defs = [
+    { group:'Basic', items:[
+      { key:'Enabled', label:'Enable App', type:'bool', desc:'Enable or disable the UnderNet TV app.' },
+      { key:'HomeUrl', label:'Home URL', type:'string', desc:'Default page (e.g. undernet:home, home:<app-id>, or URL).' },
+      { key:'BasicAdBlockEnabled', label:'Basic Ad/Tracker Blocking', type:'bool', desc:'Built-in request blocking in WebView2.' },
+      { key:'AutoConsentEnabled', label:'Auto-Accept Consent Dialogs', type:'bool', desc:'Auto accept/dismiss some consent dialogs (may cause unintended clicks).' }
+    ]},
+    { group:'Audio / Distance Volume', items:[
+      { key:'DistanceVolumeEnabled', label:'Distance-Based Audio Volume', type:'bool', desc:'Attenuate browser audio by TV distance.' },
+      { key:'DistanceVolumeFullDistance', label:'Full Distance (m)', type:'float', desc:'At/below this distance: full volume.' },
+      { key:'DistanceVolumeSilentDistance', label:'Silent Distance (m)', type:'float', desc:'At/beyond this distance: muted (also affects detached remote controls).' }
+    ]},
+    { group:'Keybinds', items:[
+      { key:'KeyToggleCursor', label:'Toggle Cursor Key', type:'string', desc:'Unity KeyCode name (default F3).' },
+      { key:'KeyReload', label:'Reload Key', type:'string', desc:'Unity KeyCode name (default F5).' },
+      { key:'KeyGameInputMode', label:'Game Input Mode Key', type:'string', desc:'Unity KeyCode name (default F6).' }
+    ]},
+    { group:'Display / UI', items:[
+      { key:'ChromeHeightFraction', label:'Chrome Height Fraction', type:'float', desc:'Top bar height fraction (e.g. 0.06).' },
+      { key:'GpuCompositionRenderWidth', label:'Render Width', type:'int', desc:'Internal composition width (restart/reopen may be required).' },
+      { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height (restart/reopen may be required).' }
+    ]},
+    { group:'Diagnostics', items:[
+      { key:'DebugLogging', label:'Verbose Debug Logging', type:'bool', desc:'Verbose troubleshooting logs.' },
+      { key:'AlwaysLogDiagnostics', label:'Key Diagnostics Logging', type:'bool', desc:'Always log key input/HUD/navigation diagnostics.' },
+      { key:'PerformanceDiagnosticsEnabled', label:'Performance Diagnostics', type:'bool', desc:'Periodic performance/memory diagnostics.' },
+      { key:'DiagnosticsSampleIntervalSeconds', label:'Diagnostics Sample Interval (s)', type:'float', desc:'Sampling interval for performance diagnostics.' },
+      { key:'DiagnosticsOutputDirectory', label:'Diagnostics Output Folder', type:'string', desc:'Empty = default UserData/UnderNetBrowser/Diagnostics.' }
+    ]},
+    { group:'WebView2 / Testing Args', items:[
+      { key:'WebView2ArgDisableBackgroundTimerThrottling', label:'Disable Background Timer Throttling', type:'bool', desc:'Applied on WebView2 environment creation.' },
+      { key:'WebView2ArgDisableRendererBackgrounding', label:'Disable Renderer Backgrounding', type:'bool', desc:'Applied on WebView2 environment creation.' },
+      { key:'WebView2ArgAutoplayNoUserGesture', label:'Autoplay Without User Gesture', type:'bool', desc:'Applied on WebView2 environment creation.' },
+      { key:'WebView2ArgDisableFrameRateLimit', label:'Disable Frame Rate Limit', type:'bool', desc:'Test only; may increase resource usage.' },
+      { key:'WebView2CustomBrowserArguments', label:'Custom Browser Arguments', type:'string', desc:'Extra Chromium/WebView2 switches (testing).' }
+    ]},
+    { group:'Adaptive Rendering', items:[
+      { key:'AdaptiveRenderingEnabled', label:'Enable Adaptive Rendering', type:'bool', desc:'Reduce visual workload when far/not visible.' },
+      { key:'AdaptiveDistanceQualityScaling', label:'Distance Quality Scaling', type:'bool', desc:'Use distance-based visual tiers.' },
+      { key:'AdaptiveVisualStandbyEnabled', label:'Visual Standby', type:'bool', desc:'Pause visual updates at far tiers; keep audio/state.' },
+      { key:'AdaptiveResolutionScalingEnabled', label:'Resolution Scaling (Experimental)', type:'bool', desc:'Allow lower render resolution in reduced tiers.' },
+      { key:'AdaptiveFullDistance', label:'Full Quality Distance (m)', type:'float', desc:'At/below: full visual quality.' },
+      { key:'AdaptiveReducedDistance', label:'Reduced Quality Distance (m)', type:'float', desc:'Beyond full: reduced quality tier.' },
+      { key:'AdaptiveLowDistance', label:'Low Quality Distance (m)', type:'float', desc:'Further reduced tier threshold.' },
+      { key:'AdaptiveStandbyDistance', label:'Visual Standby Distance (m)', type:'float', desc:'Beyond this: visual standby may activate.' },
+      { key:'AdaptiveHysteresisDistance', label:'Hysteresis Distance (m)', type:'float', desc:'Buffer to reduce tier oscillation.' },
+      { key:'AdaptiveTransitionDelaySeconds', label:'Transition Delay (s)', type:'float', desc:'Delay before downgrading tiers.' },
+      { key:'AdaptiveReducedCaptureFps', label:'Reduced Tier Capture FPS', type:'int', desc:'Target FPS for reduced tier.' },
+      { key:'AdaptiveLowCaptureFps', label:'Low Tier Capture FPS', type:'int', desc:'Target FPS for low tier.' }
+    ]}
+  ];
+
+  const grid = document.getElementById('cfg-grid');
+  const statusEl = document.getElementById('cfg-status');
+  const state = Object.create(null);
+
+  function esc(s){ return String(s==null?'':s); }
+  function setStatus(msg, isErr){
+    statusEl.textContent = msg || '';
+    statusEl.className = 'cfg-status' + (isErr ? ' err' : '');
+  }
+  function navCmd(url){
+    try {
+      // Use URL fragment for in-page command signaling to avoid transient WebView2 navigation/error pages.
+      // C# polls CurrentUrl, extracts #undernetcmd=..., handles it, and navigates back to clean settings URL.
+      if (typeof url === 'string' && url.indexOf('undernet:cmd/') === 0) {
+        var tail = url.substring('undernet:cmd/'.length);
+        var hash = '#undernetcmd=' + encodeURIComponent(tail);
+        try { location.replace(location.pathname + location.search + hash); }
+        catch(_) { window.location.hash = 'undernetcmd=' + encodeURIComponent(tail); }
+        return;
+      }
+      window.location.href = url;
+    } catch(e) { setStatus('Navigation failed: ' + e, true); }
+  }
+  function applySetting(key, value){
+    const v = (value === undefined || value === null) ? '' : String(value);
+    navCmd('undernet:cmd/set?key=' + encodeURIComponent(key) + '&value=' + encodeURIComponent(v));
+  }
+  function valueToString(key, v){
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    if (v === null || v === undefined) return '';
+    return String(v);
+  }
+
+  function render(){
+    grid.innerHTML = '';
+    defs.forEach(group => {
+      const g = document.createElement('div');
+      g.className = 'cfg-group';
+      const h = document.createElement('h3');
+      h.textContent = group.group;
+      g.appendChild(h);
+      group.items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'cfg-row' + (item.type === 'string' ? ' stack' : '');
+        const label = document.createElement('div');
+        label.className = 'cfg-label';
+        label.innerHTML = '<b>' + item.label + '</b><small><code>' + item.key + '</code> — ' + esc(item.desc) + '</small>';
+        const controlWrap = document.createElement('div');
+        controlWrap.className = 'cfg-inline';
+
+        const cur = state[item.key];
+        if (item.type === 'bool') {
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.className = 'cfg-check';
+          input.checked = !!cur;
+          input.setAttribute('data-key', item.key);
+          input.addEventListener('change', () => { state[item.key] = input.checked; applySetting(item.key, input.checked ? 'true' : 'false'); });
+          controlWrap.appendChild(input);
+          row.appendChild(label);
+          row.appendChild(controlWrap);
+        } else {
+          const input = document.createElement('input');
+          input.className = 'cfg-input';
+          input.type = item.type === 'int' ? 'number' : (item.type === 'float' ? 'number' : 'text');
+          if (item.type === 'int') input.step = '1';
+          if (item.type === 'float') input.step = 'any';
+          input.value = valueToString(item.key, cur);
+          input.setAttribute('data-key', item.key);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'cfg-btn';
+          btn.textContent = 'Apply';
+          btn.addEventListener('click', () => { state[item.key] = input.value; applySetting(item.key, input.value); });
+          input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+          controlWrap.appendChild(input);
+          controlWrap.appendChild(btn);
+          if (item.type === 'string') {
+            row.appendChild(label);
+            const stackWrap = document.createElement('div');
+            stackWrap.className = 'cfg-inline';
+            stackWrap.style.justifyContent = 'stretch';
+            stackWrap.style.display = 'grid';
+            stackWrap.style.gridTemplateColumns = '1fr auto';
+            stackWrap.appendChild(input);
+            stackWrap.appendChild(btn);
+            row.appendChild(stackWrap);
+          } else {
+            row.appendChild(label);
+            row.appendChild(controlWrap);
+          }
+        }
+        g.appendChild(row);
+      });
+      grid.appendChild(g);
+    });
+  }
+
+  window.__underNetApplySettings = function(cfg){
+    try {
+      if (cfg && typeof cfg === 'object') {
+        Object.keys(cfg).forEach(k => { state[k] = cfg[k]; });
+        render();
+      }
+    } catch(e) { setStatus('Failed to apply settings payload: ' + e, true); }
+  };
+
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const st = params.get('cfg_status');
+    const msg = params.get('cfg_msg');
+    if (st || msg) setStatus((st ? ('[' + st + '] ') : '') + (msg || ''), st === 'err');
+  } catch(_) {}
+
+  function collectFormPayload(){
+    var parts = [];
+    defs.forEach(function(group){
+      group.items.forEach(function(item){
+        var v = state[item.key];
+        // Prefer current DOM value for fields that may be edited but not yet applied
+        var el = document.querySelector('[data-key="'+item.key+'"]');
+        if (el){
+          if (item.type === 'bool') v = !!el.checked;
+          else v = el.value;
+        }
+        if (item.type === 'bool') v = v ? 'true' : 'false';
+        if (v === undefined || v === null) v = '';
+        parts.push(encodeURIComponent(item.key) + '=' + encodeURIComponent(String(v)));
+      });
+    });
+    return parts.join('&');
+  }
+
+  document.getElementById('cfg-refresh').addEventListener('click', function(){ navCmd('undernet:cmd/getsettings'); });
+  document.getElementById('cfg-save').addEventListener('click', function(){
+    try {
+      setStatus('Applying and saving settings...', false);
+      navCmd('undernet:cmd/saveform?payload=' + encodeURIComponent(collectFormPayload()));
+    } catch(e) {
+      setStatus('Failed to save settings: ' + e, true);
+    }
+  });
+
+  render();
+})();
+</script>
 </body>
 </html>

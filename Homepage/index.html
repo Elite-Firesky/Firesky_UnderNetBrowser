@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=1 -->
+<!-- UnderNetBrowser:managed-homepage version=5 -->
 <title>UnderNet Home</title>
 <style>
   :root{
@@ -26,7 +26,10 @@
   .glass{border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg, rgba(14,22,18,.95), rgba(8,13,10,.97));box-shadow:0 16px 36px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)}
   .topbar{padding:12px 14px;display:grid;grid-template-columns:1.15fr 1fr auto;gap:12px;align-items:center}
   .brand{display:flex;align-items:center;gap:12px;min-width:0}
-  .mark{width:44px;height:44px;border-radius:12px;flex:0 0 auto;background:radial-gradient(circle at 30% 28%, #d8ffbe 0%, var(--accent) 34%, #1b8f52 72%, #0f4a2f 100%);box-shadow:0 0 24px rgba(124,255,107,.22)}
+  .mark{position:relative;width:50px;height:50px;border-radius:13px;flex:0 0 auto;background:url('UnderNetIcon.png') center/cover no-repeat;box-shadow:0 0 20px rgba(124,255,107,.22);overflow:hidden;animation:markGlow 3.2s ease-in-out infinite}
+  .mark::after{content:"";position:absolute;inset:-35% -65%;background:linear-gradient(115deg, transparent 38%, rgba(255,255,255,.22) 49%, rgba(124,255,107,.18) 54%, transparent 64%);transform:translateX(-40%) rotate(8deg);animation:markSheen 4.8s ease-in-out infinite;pointer-events:none}
+  @keyframes markGlow{0%,100%{box-shadow:0 0 16px rgba(124,255,107,.20), 0 0 4px rgba(102,217,255,.05)}50%{box-shadow:0 0 34px rgba(124,255,107,.38), 0 0 16px rgba(102,217,255,.12)}}
+  @keyframes markSheen{0%,45%,100%{transform:translateX(-50%) rotate(8deg);opacity:0}12%{opacity:.85}28%{transform:translateX(50%) rotate(8deg);opacity:0}}
   h1{margin:0;font-size:30px;line-height:1;letter-spacing:2px;text-transform:uppercase}
   h1 .u{color:var(--accent)}
   .tag{margin:4px 0 0;color:var(--muted);font-size:12px;letter-spacing:1px;text-transform:uppercase}
@@ -49,7 +52,7 @@
   .search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:inherit;font-size:14px}
   .search input::placeholder{color:#7f968b}
   .desktop-icons{flex:1;min-height:0;overflow:auto;padding:10px 6px 6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;align-content:start}
-  .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:14px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
+  .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:24px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
   .app:hover{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
   .app.hidden{display:none}
   .icon{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:24px;box-shadow:0 10px 20px rgba(0,0,0,.24)}
@@ -62,7 +65,7 @@
   .icon.set{background:linear-gradient(180deg,#d7dee2,#90a4ae);color:#10181c}
   .name{font-size:15px;font-weight:700;line-height:1.2}
   .desc{font-size:12px;color:var(--muted);line-height:1.35}
-  .badge{position:absolute;top:8px;right:8px;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#dfffe3;background:rgba(124,255,107,.10);border:1px solid rgba(124,255,107,.22);padding:3px 6px;border-radius:999px}
+  .badge{position:absolute;top:7px;right:7px;z-index:2;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#f4fff6;background:rgba(20,38,28,.92);border:1px solid rgba(124,255,107,.40);padding:4px 7px;border-radius:999px;box-shadow:0 4px 10px rgba(0,0,0,.25)}
   .side{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto;padding-right:2px}
   .widget{padding:13px 14px;border-radius:14px}
   .widget h3{margin:0 0 8px;font-size:13px;letter-spacing:1.1px;text-transform:uppercase;color:#dcecdf}
@@ -134,7 +137,7 @@
           <a class="app" data-name="games folder library browser" href="games.html"><span class="badge">Folder</span><div class="icon folder">🗂</div><div class="name">Games</div><div class="desc">Categorized browser library</div></a>
           <a class="app" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon set">S1</div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools & utilities</div></a>
           <a class="app" data-name="notepad notes write save local" href="notepad.html"><span class="badge">App</span><div class="icon note">📝</div><div class="name">Notepad</div><div class="desc">Write and save local notes</div></a>
-          <a class="app" data-name="discord chat mirror app window" href="undernet:discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window (no web redirect)</div></a>
+          <a class="app" data-name="discord chat mirror app window" href="https://undernet.route/discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window (no web redirect)</div></a>
           <a class="app" data-name="settings shortcuts controls config" href="settings.html"><div class="icon set">⚙</div><div class="name">Settings</div><div class="desc">Shortcuts & browser settings</div></a>
         </div>
       </section>
@@ -147,16 +150,6 @@
             <div class="row"><span class="k">System</span><span class="v" id="sessionSys">--:--:--</span></div>
             <div class="row"><span class="k">In-Game</span><span class="v" id="sessionIg">Waiting for sync…</span></div>
             <div class="row"><span class="k">Sync</span><span class="v"><span class="status-dot off" id="syncDot"></span><span id="syncLabel">No data</span></span></div>
-          </div>
-        </div>
-
-        <div class="widget glass">
-          <h3>Quick Actions</h3>
-          <div class="launcher-grid">
-            <a class="tile" href="games.html"><span class="t">Open Games</span><span class="s">Browse the library folder</span></a>
-            <a class="tile" href="notepad.html"><span class="t">Open Notepad</span><span class="s">Create and save notes</span></a>
-            <a class="tile" href="settings.html"><span class="t">Settings</span><span class="s">Shortcuts & preferences</span></a>
-            <a class="tile" href="https://www.google.com"><span class="t">New Search</span><span class="s">Jump to Google</span></a>
           </div>
         </div>
 
