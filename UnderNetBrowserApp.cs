@@ -866,7 +866,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 5;
+        private const int ManagedHomepageVersion = 1;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -4820,6 +4820,14 @@ namespace Firesky.UnderNetBrowser
                 try { UpdateInputOwnershipState(); } catch { }
                 try { SetAppInteractionEnabled(true); } catch { }
                 try { EnsureGraphicRaycastersEnabledForApp(reason); } catch { }
+                // Harden reattach/recovery against TV home/lock overlays reappearing over the active app.
+                try { RehideTrackedDetachedVisualOverlays(); } catch { }
+                try
+                {
+                    var appGo = GameObject.Find("UnderNetBrowser_TVApp");
+                    if (appGo != null) appGo.transform.SetAsLastSibling();
+                }
+                catch { }
                 try
                 {
                     // Best-effort focus restoration; if composition texture is not ready yet, keep retry window active.
@@ -5037,6 +5045,14 @@ namespace Firesky.UnderNetBrowser
                 try { TryForegroundS1AppForReattach(); } catch { }
                 try { SetAppInteractionEnabled(true); } catch { }
                 try { EnsureGraphicRaycastersEnabledForApp("reattach_detected_pre"); } catch { }
+                // Harden against TV home/lock UI reappearing over the app during/after probe reattach.
+                try { RehideTrackedDetachedVisualOverlays(); } catch { }
+                try
+                {
+                    var appGo = GameObject.Find("UnderNetBrowser_TVApp");
+                    if (appGo != null) appGo.transform.SetAsLastSibling();
+                }
+                catch { }
                 try { UnderNetBrowserInputHooks.EnsureInstalled(); } catch { }
                 try { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; } catch { }
                 try { TryHideGameHud(); } catch { }
@@ -5164,18 +5180,7 @@ namespace Firesky.UnderNetBrowser
                 // Re-enforce tracked hidden elements cheaply; do expensive hierarchy discovery once per detached session.
                 try
                 {
-                    // Re-hide previously tracked home-screen objects if TV reactivated them.
-                    for (int i = 0; i < _detachedHiddenHomeScreenObjects.Count; i++)
-                    {
-                        var item = _detachedHiddenHomeScreenObjects[i];
-                        try { if (item.go != null && item.go.activeSelf) item.go.SetActive(false); } catch { }
-                    }
-                    // Re-disable previously tracked clock/day renderers if re-enabled.
-                    for (int i = 0; i < _detachedHiddenClockRenderers.Count; i++)
-                    {
-                        var item = _detachedHiddenClockRenderers[i];
-                        try { if (item.renderer != null && item.renderer.enabled) item.renderer.enabled = false; } catch { }
-                    }
+                    RehideTrackedDetachedVisualOverlays();
 
                     if (!_detachedVisualTargetsScanned)
                     {
@@ -5807,6 +5812,26 @@ namespace Firesky.UnderNetBrowser
         private int _lastLoggedRaycasterCount = -1;
         private int _lastLoggedRaycasterEnabled = -1;
         private float _lastLoggedRaycasterTime = -999f;
+
+        private void RehideTrackedDetachedVisualOverlays()
+        {
+            try
+            {
+                // Re-hide previously tracked home-screen objects if TV reactivated them.
+                for (int i = 0; i < _detachedHiddenHomeScreenObjects.Count; i++)
+                {
+                    var item = _detachedHiddenHomeScreenObjects[i];
+                    try { if (item.go != null && item.go.activeSelf) item.go.SetActive(false); } catch { }
+                }
+                // Re-disable previously tracked clock/day renderers if re-enabled.
+                for (int i = 0; i < _detachedHiddenClockRenderers.Count; i++)
+                {
+                    var item = _detachedHiddenClockRenderers[i];
+                    try { if (item.renderer != null && item.renderer.enabled) item.renderer.enabled = false; } catch { }
+                }
+            }
+            catch { }
+        }
 
         private void EnsureGraphicRaycastersEnabledForApp(string reason = "")
         {
