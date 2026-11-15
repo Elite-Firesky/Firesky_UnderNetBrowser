@@ -3973,13 +3973,13 @@ namespace Firesky.UnderNetBrowser
             catch { }
 
             var chromeLayout = _chromeRoot.AddComponent<HorizontalLayoutGroup>();
-            chromeLayout.spacing = 4f;
+            chromeLayout.spacing = 3f;
             chromeLayout.childAlignment = TextAnchor.MiddleLeft;
             chromeLayout.childForceExpandWidth = false;
             chromeLayout.childForceExpandHeight = false;
             chromeLayout.childControlWidth = true;
             chromeLayout.childControlHeight = true;
-            chromeLayout.padding = new RectOffset(6, 6, 3, 3);
+            chromeLayout.padding = new RectOffset(4, 4, 2, 2);
 
             var navBg = new Color(0.165f, 0.176f, 0.198f, 1f);
             var accentBg = new Color(0.150f, 0.210f, 0.235f, 1f);
@@ -4037,13 +4037,13 @@ namespace Firesky.UnderNetBrowser
                     SetUrl(raw);
             }, 17);
 
-            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(180, 24), "Search or enter address");
+            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(140, 20), "Search or enter address");
             var urlLayout = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
             urlLayout.flexibleWidth = 1f;
-            urlLayout.minWidth = 80f;
-            urlLayout.preferredWidth = 180f;
-            urlLayout.minHeight = 22f;
-            urlLayout.preferredHeight = 24f;
+            urlLayout.minWidth = 60f;
+            urlLayout.preferredWidth = 140f;
+            urlLayout.minHeight = 18f;
+            urlLayout.preferredHeight = 20f;
             urlLayout.flexibleHeight = 0f;
             // Reliable visible URL label overlay (InputField text rendering has been unreliable in this TV UI context).
             try
@@ -4052,10 +4052,10 @@ namespace Firesky.UnderNetBrowser
                 overlayGo.transform.SetParent(_urlInput.transform, false);
                 var ort = overlayGo.AddComponent<RectTransform>();
                 ort.anchorMin = Vector2.zero; ort.anchorMax = Vector2.one;
-                ort.offsetMin = new Vector2(26, 1); ort.offsetMax = new Vector2(-8, -1);
+                ort.offsetMin = new Vector2(22, 1); ort.offsetMax = new Vector2(-6, -1);
                 _urlDisplayText = overlayGo.AddComponent<Text>();
                 _urlDisplayText.font = GetUIFont();
-                _urlDisplayText.fontSize = 12;
+                _urlDisplayText.fontSize = 10;
                 _urlDisplayText.color = new Color(0.97f, 0.98f, 1f, 1f);
                 _urlDisplayText.alignment = TextAnchor.MiddleLeft;
                 _urlDisplayText.supportRichText = false;
@@ -4219,8 +4219,8 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { }
 
-                // Fixed compact chrome height (no user config). Small enough to save space, large enough to remain usable.
-                float chromePx = Mathf.Clamp(Mathf.Round(containerH * 0.09f), 30f, 36f);
+                // Fixed ultra-compact chrome height (no user config) sized for small in-game TV canvases.
+                float chromePx = Mathf.Clamp(Mathf.Round(containerH * 0.07f), 24f, 28f);
                 float topYMin = Mathf.Clamp01(1f - (chromePx / Mathf.Max(1f, containerH)));
 
                 if (_chromeRT != null)
@@ -4233,20 +4233,20 @@ namespace Firesky.UnderNetBrowser
 
                     try
                     {
-                        int padH = 6;
-                        int padV = 3;
+                        int padH = 4;
+                        int padV = 2;
                         var hlg = _chromeRoot != null ? _chromeRoot.GetComponent<HorizontalLayoutGroup>() : null;
                         if (hlg != null)
                         {
                             hlg.childAlignment = TextAnchor.MiddleLeft;
                             hlg.padding = new RectOffset(padH, padH, padV, padV);
-                            hlg.spacing = 4f;
+                            hlg.spacing = 3f;
                         }
 
-                        float controlH = Mathf.Clamp(chromePx - 6f, 22f, 28f);
-                        float btnW = Mathf.Clamp(controlH + 2f, 24f, 30f);
-                        int btnFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.56f), 11, 15);
-                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.48f), 10, 13);
+                        float controlH = Mathf.Clamp(chromePx - 4f, 18f, 22f);
+                        float btnW = Mathf.Clamp(controlH + 1f, 19f, 23f);
+                        int btnFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.54f), 10, 12);
+                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.50f), 9, 11);
 
                         void ApplyButtonSizing(Button? b, float? widthOverride = null)
                         {
@@ -4281,12 +4281,39 @@ namespace Firesky.UnderNetBrowser
                             {
                                 var le = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
                                 le.flexibleWidth = 1f;
-                                le.minWidth = Mathf.Clamp(containerW * 0.18f, 70f, 140f);
-                                le.preferredWidth = Mathf.Clamp(containerW * 0.35f, 100f, 360f);
+                                le.minWidth = Mathf.Clamp(containerW * 0.16f, 60f, 120f);
+                                le.preferredWidth = Mathf.Clamp(containerW * 0.32f, 90f, 320f);
                                 le.preferredHeight = controlH; le.minHeight = controlH; le.flexibleHeight = 0f;
                                 if (_urlInput.textComponent != null) _urlInput.textComponent.fontSize = urlFont;
-                                if (_urlInput.placeholder is Text ph) ph.fontSize = Mathf.Max(9, urlFont - 1);
+                                if (_urlInput.placeholder is Text ph) ph.fontSize = Mathf.Max(8, urlFont - 1);
                                 if (_urlDisplayText != null) _urlDisplayText.fontSize = urlFont;
+
+                                // Keep URL internals proportionate in the ultra-compact bar.
+                                try
+                                {
+                                    var inputT = _urlInput.transform;
+                                    void SetTextRect(string childName, float left, float right)
+                                    {
+                                        var c = inputT.Find(childName);
+                                        if (c == null) return;
+                                        var rt = c.GetComponent<RectTransform>();
+                                        if (rt != null) { rt.offsetMin = new Vector2(left, 1f); rt.offsetMax = new Vector2(right, -1f); }
+                                        var tx = c.GetComponent<Text>();
+                                        if (tx != null) tx.fontSize = childName == "Placeholder" ? Mathf.Max(8, urlFont - 1) : urlFont;
+                                    }
+                                    SetTextRect("Text", 22f, -6f);
+                                    SetTextRect("Placeholder", 22f, -6f);
+                                    SetTextRect("UnderNetBrowser_UrlDisplayOverlay", 22f, -6f);
+                                    var lead = inputT.Find("LeadingIcon");
+                                    if (lead != null)
+                                    {
+                                        var lrt = lead.GetComponent<RectTransform>();
+                                        if (lrt != null) { lrt.anchoredPosition = new Vector2(4f, 0f); lrt.sizeDelta = new Vector2(14f, 0f); }
+                                        var lt = lead.GetComponent<Text>();
+                                        if (lt != null) lt.fontSize = Mathf.Max(9, urlFont);
+                                    }
+                                }
+                                catch { }
                             }
                             catch { }
                         }
@@ -4297,14 +4324,14 @@ namespace Firesky.UnderNetBrowser
                             {
                                 var ile = _gameModeIndicatorRoot.GetComponent<LayoutElement>() ?? _gameModeIndicatorRoot.AddComponent<LayoutElement>();
                                 ile.preferredHeight = controlH; ile.minHeight = controlH; ile.flexibleHeight = 0f;
-                                ile.preferredWidth = 68f; ile.minWidth = 60f; ile.flexibleWidth = 0f;
+                                ile.preferredWidth = 50f; ile.minWidth = 46f; ile.flexibleWidth = 0f;
                                 if (_gameModeIndicatorText != null)
                                 {
                                     _gameModeIndicatorText.text = "GM F6";
-                                    _gameModeIndicatorText.fontSize = Mathf.Max(9, urlFont - 1);
+                                    _gameModeIndicatorText.fontSize = Mathf.Max(8, urlFont - 1);
                                     _gameModeIndicatorText.resizeTextForBestFit = true;
-                                    _gameModeIndicatorText.resizeTextMinSize = 8;
-                                    _gameModeIndicatorText.resizeTextMaxSize = Mathf.Max(9, urlFont - 1);
+                                    _gameModeIndicatorText.resizeTextMinSize = 7;
+                                    _gameModeIndicatorText.resizeTextMaxSize = Mathf.Max(8, urlFont - 1);
                                 }
                             }
                             catch { }
@@ -4327,7 +4354,7 @@ namespace Firesky.UnderNetBrowser
                                         capRT.anchorMax = new Vector2(1f, 1f);
                                         capRT.pivot = new Vector2(1f, 0.5f);
                                         capRT.anchoredPosition = Vector2.zero;
-                                        capRT.sizeDelta = new Vector2(Mathf.Clamp(btnW + padH + 2f, 30f, 42f), 0f);
+                                        capRT.sizeDelta = new Vector2(Mathf.Clamp(btnW + padH + 1f, 24f, 34f), 0f);
                                     }
                                 }
                             }
@@ -8158,17 +8185,17 @@ namespace Firesky.UnderNetBrowser
             var textGo = new GameObject("Text");
             textGo.transform.SetParent(go.transform, false);
             var trt = textGo.AddComponent<RectTransform>();
-            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(26, 1); trt.offsetMax = new Vector2(-8, -1);
+            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(22, 1); trt.offsetMax = new Vector2(-6, -1);
             var txt = textGo.AddComponent<Text>();
-            txt.font = GetUIFont(); txt.fontSize = 12; txt.color = new Color(0.97f, 0.98f, 1f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
+            txt.font = GetUIFont(); txt.fontSize = 10; txt.color = new Color(0.97f, 0.98f, 1f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
             input.textComponent = txt;
 
             var phGo = new GameObject("Placeholder");
             phGo.transform.SetParent(go.transform, false);
             var prt = phGo.AddComponent<RectTransform>();
-            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(26, 1); prt.offsetMax = new Vector2(-8, -1);
+            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(22, 1); prt.offsetMax = new Vector2(-6, -1);
             var ptxt = phGo.AddComponent<Text>();
-            ptxt.font = GetUIFont(); ptxt.fontSize = 11; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.60f, 0.66f, 0.74f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter address";
+            ptxt.font = GetUIFont(); ptxt.fontSize = 9; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.60f, 0.66f, 0.74f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter address";
             input.placeholder = ptxt;
 
             // Leading search/site glyph for a browser-like omnibox feel
@@ -8179,12 +8206,12 @@ namespace Firesky.UnderNetBrowser
                 var lrt = leadGo.AddComponent<RectTransform>();
                 lrt.anchorMin = new Vector2(0f, 0f); lrt.anchorMax = new Vector2(0f, 1f);
                 lrt.pivot = new Vector2(0f, 0.5f);
-                lrt.anchoredPosition = new Vector2(6f, 0f);
-                lrt.sizeDelta = new Vector2(16f, 0f);
+                lrt.anchoredPosition = new Vector2(4f, 0f);
+                lrt.sizeDelta = new Vector2(14f, 0f);
                 var lt = leadGo.AddComponent<Text>();
                 lt.font = GetUIFont();
                 lt.text = "⌕";
-                lt.fontSize = 12;
+                lt.fontSize = 10;
                 lt.color = new Color(0.62f, 0.74f, 0.95f, 0.95f);
                 lt.alignment = TextAnchor.MiddleCenter;
                 lt.raycastTarget = false;
