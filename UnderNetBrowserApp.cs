@@ -3876,12 +3876,8 @@ namespace Firesky.UnderNetBrowser
                         int edgeY = Mathf.Clamp(_lastSentPointerY, 0, vh - 1);
                         if (mouseHeld || rHeld)
                         {
-                            bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
-                            if (due)
-                            {
-                                _lastSentPointerX = edgeX; _lastSentPointerY = edgeY; _lastPointerMoveSendTime = Time.unscaledTime;
-                                try { _gpuCompositionCapture.SendMouseMove(edgeX, edgeY, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
-                            }
+                            _lastSentPointerX = edgeX; _lastSentPointerY = edgeY; _lastPointerMoveSendTime = Time.unscaledTime;
+                            try { _gpuCompositionCapture.SendMouseMove(edgeX, edgeY, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
                         }
                         if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, false); } catch { } _browserPointerDown = false; }
                         if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, true); } catch { } _browserPointerRightDown = false; }
@@ -3969,12 +3965,8 @@ namespace Firesky.UnderNetBrowser
 
                     if (_browserPointerDown || _browserPointerRightDown)
                     {
-                        bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
-                        if (due)
-                        {
-                            _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
-                            try { _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
-                        }
+                        _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
+                        try { _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
                         if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, false); } catch { } _browserPointerDown = false; }
                         if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, true); } catch { } _browserPointerRightDown = false; }
                         return;
@@ -4049,8 +4041,7 @@ namespace Firesky.UnderNetBrowser
                 else
                 {
                     bool moved = (px != _lastSentPointerX || py != _lastSentPointerY);
-                    bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f; // ~83Hz cap to reduce input flooding
-                    if (moved || due)
+                    if (moved || mouseHeld || rHeld)
                     {
                         _lastSentPointerX = px;
                         _lastSentPointerY = py;
@@ -9654,8 +9645,7 @@ namespace Firesky.UnderNetBrowser
                 else
                 {
                     bool moved = (px != _lastSentPointerX || py != _lastSentPointerY);
-                    bool due = (Time.unscaledTime - _lastPointerMoveSendTime) >= 0.012f;
-                    if (moved && (due || mouseHeld || rHeld || _browserPointerDown || _browserPointerRightDown))
+                    if (moved || mouseHeld || rHeld)
                     {
                         _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
                         UnderNetBrowserExternalWindowMirror.SendMouseMove(_externalMirrorHwnd, px, py);
