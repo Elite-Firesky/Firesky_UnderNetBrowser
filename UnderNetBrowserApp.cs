@@ -120,6 +120,16 @@ namespace Firesky.UnderNetBrowser
         private static Font? _cachedFont;
         private static UnderNetBrowserApp? _activeInstance;
 
+        internal static bool HasActiveBrowserSyncContext()
+        {
+            try
+            {
+                var app = _activeInstance;
+                return app != null && (app.IsOpen || app._gpuCompositionCapture != null || app._externalMirrorMode);
+            }
+            catch { return false; }
+        }
+
         protected override void OnCreatedUI(GameObject container)
         {
             _activeInstance = this;
@@ -603,7 +613,10 @@ namespace Firesky.UnderNetBrowser
                 catch { }
                 try { UnderNetBrowserInputHooks.LogDiagnostics(); } catch { }
 
-                // F3 cursor toggle is handled globally in UnderNetBrowserMod (works inside/outside TV).
+                if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F3, UnderNetBrowserConfig.KeyToggleCursor)))
+                {
+                    try { UnderNetBrowserMod.ToggleCursorVisibility(); } catch { }
+                }
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F5, UnderNetBrowserConfig.KeyReload)))
                 {
                     _gpuCompositionCapture?.Reload();

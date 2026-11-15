@@ -206,7 +206,6 @@ namespace Firesky.UnderNetBrowser
         }
 
         private bool _graphicsApiLogged;
-        private static float _nextHomepageSyncCallDiagRealtime = -999f;
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
@@ -242,32 +241,18 @@ namespace Firesky.UnderNetBrowser
 
         public override void OnUpdate()
         {
-            // Stage 4 diagnostics: lightweight periodic sampling + frame-time accumulation (no-op when disabled).
-            try { UnderNetBrowserDiagnostics.OnFrame(); } catch { }
+            // Stage 4 diagnostics: lightweight periodic sampling + frame-time accumulation (enabled sessions only).
+            try { if (UnderNetBrowserDiagnostics.IsEnabled) UnderNetBrowserDiagnostics.OnFrame(); } catch { }
 
-            // Push Schedule I in-game time/day and settings state to built-in homepage pages (best-effort, throttled internally).
+            // Push Schedule I in-game time/day, installed apps, and settings state to built-in homepage pages
+            // only while a browser instance/composition context is active (avoids unnecessary work/log spam in menus).
             try
             {
-                float now = 0f;
-                try { now = UnityEngine.Time.realtimeSinceStartup; } catch { now = 0f; }
-                if (now >= _nextHomepageSyncCallDiagRealtime)
+                if (UnderNetBrowserApp.HasActiveBrowserSyncContext())
                 {
-                    _nextHomepageSyncCallDiagRealtime = now + 10f;
-                    try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Mod.OnUpdate: calling TryUpdateHomepageGameTime"); } catch { }
-                }
-            }
-            catch { }
-            try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
-            try { UnderNetBrowserApp.TryUpdateHomepageInstalledApps(); } catch { }
-            try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
-
-            // Global cursor toggle (works outside TV/app as well).
-            try
-            {
-                var key = UnderNetBrowserConfig.GetKey(KeyCode.F3, UnderNetBrowserConfig.KeyToggleCursor);
-                if (Input.GetKeyDown(key))
-                {
-                    ToggleCursorVisibility();
+                    try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
+                    try { UnderNetBrowserApp.TryUpdateHomepageInstalledApps(); } catch { }
+                    try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
                 }
             }
             catch { }
