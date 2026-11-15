@@ -4813,6 +4813,7 @@ namespace Firesky.UnderNetBrowser
         private bool _warmCloseRequested;
         private float _lastDetachedReattachCheckRealtime;
         private bool _detachedTvInterfaceWasOpen;
+        private bool _detachedLocalPlayerWasInTv;
         private float _lastDetachedVisualMaintainRealtime;
         private float _lastDetachedExitEnsureRealtime;
         private float _lastTvScreenMirrorAttemptRealtime;
@@ -4825,6 +4826,9 @@ namespace Firesky.UnderNetBrowser
         private float _nextReattachFocusRetryRealtime = -999f;
         private int _reattachFocusRetryCount;
         private int _lastLoggedReattachBlockBucket = int.MinValue;
+        private int _detachedUnreadableProbeCount;
+        private float _lastSpeculativeReattachRealtime = -999f;
+        private float _lastDetachedCloseBlockedRealtime = -999f;
         private readonly List<(GameObject go, bool wasActive)> _detachedHiddenHomeScreenObjects = new List<(GameObject, bool)>();
         private readonly List<(Renderer renderer, bool wasEnabled)> _detachedHiddenClockRenderers = new List<(Renderer, bool)>();
         private readonly List<(Renderer renderer, Material? materialInstance, Texture? originalMainTexture, string? originalShaderName)> _tvScreenMirrorStates = new List<(Renderer, Material?, Texture?, string?)>();
@@ -4927,6 +4931,7 @@ namespace Firesky.UnderNetBrowser
                     // If detaching (or recently detached), keep app alive/open instead of closing it.
                     if (app._detachRequested || (AnyDetachActive && (Time.realtimeSinceStartup - app._detachRequestedTime) < 3.0f))
                     {
+                        try { app._lastDetachedCloseBlockedRealtime = Time.realtimeSinceStartup; } catch { }
                         UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose during detach (keeping app open).");
                         return false; // skip original close
                     }
@@ -4935,6 +4940,7 @@ namespace Firesky.UnderNetBrowser
                     // Do not re-invoke TVInterface exit here: ESC/close attempts can cause feedback loops and break pause menu.
                     if (app._detachedToGameplay)
                     {
+                        try { app._lastDetachedCloseBlockedRealtime = Time.realtimeSinceStartup; } catch { }
                         UnderNetBrowserConfig.Log("[UnderNetBrowser] Blocked TVApp.Close/ForceClose while detached (keeping app running in background).");
                         return false;
                     }
@@ -5028,12 +5034,17 @@ namespace Firesky.UnderNetBrowser
                 _detachRequestedTime = nowRt;
                 AnyDetachActive = true;
                 _detachedToGameplay = true;
+                // Capture TV/interface baseline before forcing exit so reattach detection can distinguish resume signals.
+                try { CaptureDetachedTvBaselineState("detach_pre_exit"); } catch { }
                 // Block immediate false-positive reattach while TV/game state settles after detach.
                 _reattachBlockedUntilRealtime = Mathf.Max(_reattachBlockedUntilRealtime, nowRt + 0.45f);
                 _lastLoggedReattachBlockBucket = int.MinValue;
                 _reattachFocusRecoveryUntilRealtime = -999f;
                 _nextReattachFocusRetryRealtime = -999f;
                 _reattachFocusRetryCount = 0;
+                _detachedUnreadableProbeCount = 0;
+                _lastSpeculativeReattachRealtime = -999f;
+                _lastDetachedCloseBlockedRealtime = -999f;
 
                 // Keep rendering active while detached so video playback remains visible on TV (audio already continues).
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
@@ -5059,6 +5070,9 @@ namespace Firesky.UnderNetBrowser
                     _lastDetachExitInvokeRealtime = nowRt;
                     TryExitTvInterfaceBestEffort();
                 }
+                // We intentionally force Close()/RemovePlayer on detach; treat detached baseline as exited unless proven otherwise.
+                // This makes reattach detection resilient when TVInterface.IsOpen transitions back to true on resume.
+                try { _detachedTvInterfaceWasOpen = false; _detachedLocalPlayerWasInTv = false; } catch { }
 
                 // Keep gameplay released after detach even if S1API/game still considers app open.
                 try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
@@ -5695,9 +5709,10 @@ namespace Firesky.UnderNetBrowser
                 _lastDetachedReattachCheckRealtime = nowRt;
 
                 // Detect game TV interaction resumed.
-                // After RemovePlayer-only detach the interface may remain open/visible; prefer player-presence over IsOpen alone.
+                // Prefer player-presence over IsOpen; fall back to robust open-state signals because reflection/player detection can vary by system/mod mix.
                 try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(false); } catch { }
                 bool shouldReattach = false;
+                string reattachReason = "none";
                 try
                 {
                     var go = GameObject.Find("TVInterface");
@@ -5722,34 +5737,97 @@ namespace Firesky.UnderNetBrowser
 
                         if (ifaceObj != null && ifaceType != null)
                         {
-                            bool tvOpen = false;
-                            try
+                            bool tvOpen = TryGetTvInterfaceIsOpen(ifaceType, ifaceObj, out var tvOpenKnown);
+                            bool localInPlayers = IsLocalPlayerInTvInterface(ifaceType, ifaceObj, out var playersKnown, out var playerCount);
+
+                            if (localInPlayers)
                             {
-                                var isOpenProp = ifaceType.GetProperty("IsOpen", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                                if (isOpenProp != null)
+                                shouldReattach = true;
+                                reattachReason = "localPlayerInTv";
+                            }
+                            else if (tvOpenKnown && tvOpen)
+                            {
+                                // Primary robust case: detach flow forces Close()/RemovePlayer, so a resumed TV interaction commonly reopens interface.
+                                if (!_detachedTvInterfaceWasOpen)
                                 {
-                                    var v = isOpenProp.GetValue(ifaceObj);
-                                    if (v is bool b) tvOpen = b;
+                                    shouldReattach = true;
+                                    reattachReason = "tvOpenTransition";
+                                }
+                                // If baseline said no player in TV at detach, but interface is open now, treat as resumed interaction.
+                                else if (!_detachedLocalPlayerWasInTv)
+                                {
+                                    shouldReattach = true;
+                                    reattachReason = "tvOpenNoBaselinePlayer";
+                                }
+                                // Ambiguous case: interface stayed/reported open. If players are known and non-empty, prefer reattach over getting stuck.
+                                else if (playersKnown && playerCount > 0)
+                                {
+                                    shouldReattach = true;
+                                    reattachReason = "tvOpenPlayersPresent";
+                                }
+                                // Last-resort fallback: if probe timing/state is odd, allow reattach after settle when TV is open and our app session is still active.
+                                else if ((nowRt - _detachRequestedTime) >= 0.75f)
+                                {
+                                    shouldReattach = true;
+                                    reattachReason = "tvOpenFallback";
                                 }
                             }
-                            catch { }
 
-                            bool localInPlayers = IsLocalPlayerInTvInterface(ifaceType, ifaceObj);
-                            if (localInPlayers)
-                                shouldReattach = true;
-                            else if (tvOpen)
+                            // Fallback: if TV state is unreadable/reflection-incomplete on some systems/saves, do not stay stuck detached forever.
+                            // Only use this when the game/S1API is actively trying to close the TV app while detached (strong signal of TV/app re-entry
+                            // or focus/state conflict) to avoid stealing gameplay input/HUD when the player is simply away from the TV.
+                            if (!shouldReattach && !tvOpenKnown && !playersKnown && !localInPlayers)
                             {
-                                // If we cannot confirm player presence, be conservative: only reattach when IsOpen transitions from false->true.
-                                // (When detaching via Close(), IsOpen becomes false then true on re-interact. When detaching via RemovePlayer-only,
-                                // IsOpen may stay true, so this avoids immediate false reattach.)
-                                if (!_detachedTvInterfaceWasOpen)
+                                _detachedUnreadableProbeCount++;
+                                bool appFocused = false;
+                                try { appFocused = Application.isFocused; } catch { appFocused = true; }
+                                bool closeBlockedRecently = (nowRt - _lastDetachedCloseBlockedRealtime) <= 4.0f;
+                                float unreadableDelay = 1.25f;
+                                if (closeBlockedRecently && (nowRt - _detachRequestedTime) >= unreadableDelay && appFocused && (nowRt - _lastSpeculativeReattachRealtime) >= 3.0f && _detachedUnreadableProbeCount >= 4)
+                                {
                                     shouldReattach = true;
+                                    reattachReason = "tvStateUnreadableCloseBlockedFallback";
+                                    _lastSpeculativeReattachRealtime = nowRt;
+                                    _detachedUnreadableProbeCount = 0;
+                                }
                             }
-                            _detachedTvInterfaceWasOpen = tvOpen;
+                            else
+                            {
+                                _detachedUnreadableProbeCount = 0;
+                            }
+
+                            if (tvOpenKnown) _detachedTvInterfaceWasOpen = tvOpen;
+                            if (playersKnown || localInPlayers) _detachedLocalPlayerWasInTv = localInPlayers;
+
+                            bool verboseReattachDiag = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
+                            if (shouldReattach || verboseReattachDiag)
+                            {
+                                try
+                                {
+                                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach probe: tvFound=True tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount} baselineOpen={_detachedTvInterfaceWasOpen} baselinePlayer={_detachedLocalPlayerWasInTv} reason='{reattachReason}' unreadableCount={_detachedUnreadableProbeCount}");
+                                }
+                                catch { }
+                            }
+                        }
+                        else
+                        {
+                            _detachedUnreadableProbeCount = 0;
+                            if (UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true)
+                            {
+                                try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Reattach probe: TVInterface GO found but TVInterface component/type unresolved."); } catch { }
+                            }
                         }
                     }
+                    else
+                    {
+                        _detachedUnreadableProbeCount = 0;
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _detachedUnreadableProbeCount = 0;
+                    try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Reattach probe failed (non-fatal): {ex.Message}"); } catch { }
+                }
 
                 if (!shouldReattach) return false;
 
@@ -5757,6 +5835,8 @@ namespace Firesky.UnderNetBrowser
                 _detachedToGameplay = false;
                 _detachRequested = false;
                 AnyDetachActive = false;
+                _detachedUnreadableProbeCount = 0;
+                _lastDetachedCloseBlockedRealtime = -999f;
                 _compositionFocusPrimed = false;
                 _compositionWebFocused = true; // default back to web interaction after reattach
                 if (_gameInputMode && UnderNetBrowserConfig.DebugLogging?.Value == true)
@@ -6732,61 +6812,347 @@ namespace Firesky.UnderNetBrowser
             return (null, null);
         }
 
-        private static bool IsLocalPlayerInTvInterface(Type ifaceType, UnityEngine.Object ifaceObj)
+        private bool TryGetTvInterfaceIsOpen(Type ifaceType, UnityEngine.Object ifaceObj, out bool known)
         {
+            known = false;
+            if (ifaceType == null || ifaceObj == null) return false;
             try
             {
-                var localPlayer = FindGameLocalPlayer();
-                if (localPlayer == null) return false;
-
-                // Try Players list/collection property/field
-                object? playersObj = null;
-                try
-                {
-                    var p = ifaceType.GetProperty("Players", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (p != null) playersObj = p.GetValue(ifaceObj);
-                }
-                catch { }
-                if (playersObj == null)
+                foreach (var name in new[] { "IsOpen", "isOpen", "Open", "Opened", "IsOpened", "isOpened", "Active", "IsActive", "isActive" })
                 {
                     try
                     {
-                        var f = ifaceType.GetField("Players", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (f != null) playersObj = f.GetValue(ifaceObj);
+                        var p = ifaceType.GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                        if (p != null && p.CanRead)
+                        {
+                            var v = p.GetValue(ifaceObj);
+                            if (v is bool b) { known = true; return b; }
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        var f = ifaceType.GetField(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                        if (f != null)
+                        {
+                            var v = f.GetValue(ifaceObj);
+                            if (v is bool b) { known = true; return b; }
+                        }
                     }
                     catch { }
                 }
+
+                foreach (var name in new[] { "get_IsOpen", "get_Open", "IsOpened", "GetIsOpen" })
+                {
+                    try
+                    {
+                        var m = ifaceType.GetMethod(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase, null, Type.EmptyTypes, null);
+                        if (m != null && m.ReturnType == typeof(bool))
+                        {
+                            var v = m.Invoke(ifaceObj, null);
+                            if (v is bool b) { known = true; return b; }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void CaptureDetachedTvBaselineState(string reason)
+        {
+            try
+            {
+                bool tvOpen = false;
+                bool tvOpenKnown = false;
+                bool localInPlayers = false;
+                bool playersKnown = false;
+                int playerCount = -1;
+
+                var go = GameObject.Find("TVInterface");
+                if (go != null)
+                {
+                    var (ifaceObj, ifaceType) = TryGetIl2CppComponentByTypeNames(go, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
+                    if (ifaceObj == null || ifaceType == null)
+                    {
+                        Component[]? comps = null;
+                        try { comps = go.GetComponents<Component>(); } catch { comps = null; }
+                        if (comps != null)
+                        {
+                            foreach (var c in comps)
+                            {
+                                if (c == null) continue;
+                                var casted = TryCastIl2CppObject(c, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
+                                if (casted.obj != null && casted.type != null) { ifaceObj = casted.obj; ifaceType = casted.type; break; }
+                            }
+                        }
+                    }
+
+                    if (ifaceObj != null && ifaceType != null)
+                    {
+                        tvOpen = TryGetTvInterfaceIsOpen(ifaceType, ifaceObj, out tvOpenKnown);
+                        localInPlayers = IsLocalPlayerInTvInterface(ifaceType, ifaceObj, out playersKnown, out playerCount);
+                    }
+                }
+
+                _detachedTvInterfaceWasOpen = tvOpenKnown && tvOpen;
+                _detachedLocalPlayerWasInTv = localInPlayers;
+
+                if (UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true)
+                {
+                    try
+                    {
+                        UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Detach baseline ({reason}): tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount}");
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        private static bool IsLocalPlayerInTvInterface(Type ifaceType, UnityEngine.Object ifaceObj, out bool playersKnown, out int playerCount)
+        {
+            playersKnown = false;
+            playerCount = -1;
+            try
+            {
+                var localPlayer = FindGameLocalPlayer();
+                if (localPlayer == null)
+                {
+                    // Still inspect players collection for diagnostics/fallback context.
+                    localPlayer = null;
+                }
+
+                // Try Players list/collection property/field/method (robust names for IL2CPP/game variants)
+                object? playersObj = null;
+                foreach (var name in new[] { "Players", "players", "m_Players", "_players", "OpenPlayers", "openPlayers", "CurrentPlayers", "currentPlayers", "ActivePlayers", "activePlayers", "Occupants", "occupants" })
+                {
+                    try
+                    {
+                        var p = ifaceType.GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                        if (p != null && p.CanRead) playersObj = p.GetValue(ifaceObj);
+                    }
+                    catch { }
+                    if (playersObj == null)
+                    {
+                        try
+                        {
+                            var f = ifaceType.GetField(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                            if (f != null) playersObj = f.GetValue(ifaceObj);
+                        }
+                        catch { }
+                    }
+                    if (playersObj == null)
+                    {
+                        try
+                        {
+                            var m = ifaceType.GetMethod(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase, null, Type.EmptyTypes, null);
+                            if (m != null) playersObj = m.Invoke(ifaceObj, null);
+                        }
+                        catch { }
+                    }
+                    if (playersObj != null) break;
+                }
+                if (playersObj == null)
+                {
+                    foreach (var name in new[] { "GetPlayers", "GetOpenPlayers", "GetOccupants" })
+                    {
+                        try
+                        {
+                            var m = ifaceType.GetMethod(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase, null, Type.EmptyTypes, null);
+                            if (m != null) playersObj = m.Invoke(ifaceObj, null);
+                        }
+                        catch { }
+                        if (playersObj != null) break;
+                    }
+                }
                 if (playersObj == null) return false;
 
-                // Try Contains(localPlayer)
+                playersKnown = true;
+
+                // Try Count property
                 try
                 {
-                    var miContains = playersObj.GetType().GetMethod("Contains", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    if (miContains != null)
+                    var pCount = playersObj.GetType().GetProperty("Count", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (pCount?.GetValue(playersObj) is int cInt) playerCount = cInt;
+                }
+                catch { }
+                try
+                {
+                    if (playerCount < 0)
                     {
-                        var r = miContains.Invoke(playersObj, new[] { localPlayer });
-                        if (r is bool b) return b;
+                        var pLen = playersObj.GetType().GetProperty("Length", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (pLen?.GetValue(playersObj) is int lInt) playerCount = lInt;
                     }
                 }
                 catch { }
 
-                // Fallback: enumerate and compare by reference/equality
+                // Try Contains(localPlayer) with a few arg shapes
+                if (localPlayer != null)
+                {
+                    try
+                    {
+                        foreach (var miContains in playersObj.GetType().GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                        {
+                            if (miContains.Name != "Contains") continue;
+                            var ps = miContains.GetParameters();
+                            if (ps.Length != 1) continue;
+                            try
+                            {
+                                object? arg = localPlayer;
+                                if (!ps[0].ParameterType.IsInstanceOfType(localPlayer))
+                                {
+                                    // Attempt Il2Cpp cast when possible
+                                    var castedArg = TryCastObjectToType(localPlayer, ps[0].ParameterType);
+                                    if (castedArg != null) arg = castedArg;
+                                }
+                                var r = miContains.Invoke(playersObj, new[] { arg });
+                                if (r is bool b) return b;
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+
+                // Enumerate and compare robustly
                 try
                 {
                     if (playersObj is System.Collections.IEnumerable en)
                     {
+                        int seen = 0;
                         foreach (var item in en)
                         {
+                            seen++;
                             if (item == null) continue;
-                            if (ReferenceEquals(item, localPlayer)) return true;
-                            try { if (item.Equals(localPlayer)) return true; } catch { }
+                            if (localPlayer != null && AreLikelySamePlayerObject(item, localPlayer)) return true;
                         }
+                        if (playerCount < 0) playerCount = seen;
                     }
                 }
                 catch { }
+
+                return false;
             }
             catch { }
             return false;
+        }
+
+        private static bool AreLikelySamePlayerObject(object a, object b)
+        {
+            try { if (ReferenceEquals(a, b)) return true; } catch { }
+            try { if (a.Equals(b)) return true; } catch { }
+            try { if (b.Equals(a)) return true; } catch { }
+
+            // Unity instance IDs (if available via reflection)
+            try
+            {
+                int? ida = TryGetUnityInstanceId(a);
+                int? idb = TryGetUnityInstanceId(b);
+                if (ida.HasValue && idb.HasValue && ida.Value != 0 && idb.Value != 0 && ida.Value == idb.Value) return true;
+            }
+            catch { }
+
+            // IL2CPP object pointer equality (best-effort, reflection-only)
+            try
+            {
+                var pa = TryGetIl2CppPointer(a);
+                var pb = TryGetIl2CppPointer(b);
+                if (pa.HasValue && pb.HasValue && pa.Value != IntPtr.Zero && pa.Value == pb.Value) return true;
+            }
+            catch { }
+
+            // Compare common identity-like members if exposed
+            foreach (var name in new[] { "PlayerCode", "OwnerClientId", "ClientId", "NetworkObjectId", "ObjectId", "ID", "Id" })
+            {
+                try
+                {
+                    var va = GetMemberValueLoose(a, name);
+                    var vb = GetMemberValueLoose(b, name);
+                    if (va != null && vb != null && string.Equals(va.ToString(), vb.ToString(), StringComparison.Ordinal)) return true;
+                }
+                catch { }
+            }
+
+            return false;
+        }
+
+        private static int? TryGetUnityInstanceId(object obj)
+        {
+            try
+            {
+                var t = obj.GetType();
+                var mi = t.GetMethod("GetInstanceID", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, null, Type.EmptyTypes, null);
+                if (mi != null)
+                {
+                    var v = mi.Invoke(obj, null);
+                    if (v is int i) return i;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static IntPtr? TryGetIl2CppPointer(object obj)
+        {
+            try
+            {
+                var t = obj.GetType();
+                var p = t.GetProperty("Pointer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (p != null)
+                {
+                    var v = p.GetValue(obj);
+                    if (v is IntPtr ip) return ip;
+                }
+                var f = t.GetField("Pointer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                     ?? t.GetField("m_Pointer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (f != null)
+                {
+                    var v = f.GetValue(obj);
+                    if (v is IntPtr ip2) return ip2;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static object? GetMemberValueLoose(object obj, string memberName)
+        {
+            try
+            {
+                var t = obj.GetType();
+                var p = t.GetProperty(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                if (p != null && p.CanRead) return p.GetValue(obj);
+                var f = t.GetField(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                if (f != null) return f.GetValue(obj);
+            }
+            catch { }
+            return null;
+        }
+
+        private static object? TryCastObjectToType(object obj, Type targetType)
+        {
+            if (obj == null) return null;
+            try { if (targetType.IsInstanceOfType(obj)) return obj; } catch { }
+            try
+            {
+                var methods = obj.GetType().GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                foreach (var mi in methods)
+                {
+                    if (mi.Name != "TryCast" || !mi.IsGenericMethodDefinition) continue;
+                    try
+                    {
+                        var gmi = mi.MakeGenericMethod(targetType);
+                        var res = gmi.Invoke(obj, null);
+                        if (res != null) return res;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static Type? FindLoadedTypeByName(string fullName)

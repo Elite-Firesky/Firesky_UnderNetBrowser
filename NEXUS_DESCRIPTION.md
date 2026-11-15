@@ -1,14 +1,16 @@
 # Firesky UnderNet Browser
 
-Started as an idea to stream a W2G room, ended up as a real in-game browser, GPU rendered.
+## Description
+
+Started as an idea to stream a W2G room, ended up as a real in-game browser — **GPU rendered**.
 
 **Firesky UnderNet Browser** adds an **UnderNet** TV app for **Schedule I** powered by **Microsoft Edge WebView2** (composition mode). Pages are rendered off-screen and captured into Unity (D3D11 / Windows Graphics Capture), so you can browse, watch videos, and run browser-based content on the in-game TV without an external browser window.
 
-> **Status:** Near completion / active testing. Performance and compatibility depend on your game version, MelonLoader/S1API, WebView2 runtime, GPU/driver, Windows version, and the content you load. Some features are experimental or best-effort (see Known Issues & Limitations).
+> **Status:** Near completion / active testing. Performance and compatibility depend on your game version, MelonLoader/S1API, WebView2 runtime, GPU/driver, Windows version, and the content you load. Some features are experimental or best-effort (see **Known Issues & Limitations**).
 
 ---
 
-## Features
+## Main features
 
 ### In-game WebView2 browser
 - Native **WebView2 CompositionController** rendering path (no visible external browser window), presented in the Schedule I TV UI.
@@ -41,7 +43,7 @@ Started as an idea to stream a W2G room, ended up as a real in-game browser, GPU
 - **F3 (configurable):** toggle cursor visibility/lock (global).
 - **F5 (configurable):** reload page while the browser/TV app is active.
 
-### Discord shortcut (best-effort / placeholder behavior)
+### Discord shortcut (best-effort)
 - `undernet:discord` uses a stable mirror/shortcut flow: attempts to mirror a running Discord window when available, otherwise falls back to Discord Web.
 - Back/exit behavior is handled to avoid black/`about:blank` states where possible.
 - Discord window mirroring is primarily visual and best-effort; mirror interactivity (clicks/typing/chat forwarding) may be limited or unreliable.
@@ -60,6 +62,24 @@ Started as an idea to stream a W2G room, ended up as a real in-game browser, GPU
 - **Basic ad/tracker blocking:** configurable built-in request blocking.
 - **Auto-accept consent dialogs:** optional best-effort behavior (may cause unintended clicks on some sites; off by default).
 
+## Installation instructions
+
+1. Install **MelonLoader 0.7.x (net6)** for Schedule I and confirm the game launches with it.
+2. Install **S1API** (and any dependencies it requires) into your Schedule I mod setup.
+3. Install the **Microsoft Edge WebView2 Runtime (Evergreen, x64)** if it is not already installed.
+4. Download and extract the mod package.
+5. Copy/merge the package contents into your **Schedule I** game directory so the files end up in these locations:
+   - `Mods\Firesky_UnderNetBrowser.dll`
+   - `Mods\UnderNetBrowser\Microsoft.Web.WebView2.Core.dll`
+   - `Mods\UnderNetBrowser\WebView2Loader.dll`
+   - `Schedule I_Data\Plugins\x86_64\UnderNetGpuRenderer.dll`
+   - `UserData\UnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` *(default extension, pre-seeded/recommended)*
+6. Launch the game and open the **UnderNet** app from the in-game TV.
+
+**Notes:**
+- After updating `UnderNetGpuRenderer.dll` (native plugin), **restart the game**.
+- After updating/replacing mod files, a restart is recommended to ensure clean WebView2/native plugin loads.
+
 ## Requirements
 
 ### Game / mod loader
@@ -74,29 +94,13 @@ Started as an idea to stream a W2G room, ended up as a real in-game browser, GPU
 
 > WebView2 Evergreen Runtime is required on the player's machine. The mod uses the system WebView2 runtime and stores browser profile/user data locally under MelonLoader `UserData`.
 
-## Installation
-
-1. Install **MelonLoader 0.7.x (net6)** for Schedule I and confirm the game launches with it.
-2. Install **S1API** (and any dependencies it requires) into your Schedule I mod setup.
-3. Install the **Microsoft Edge WebView2 Runtime (Evergreen, x64)** if it is not already installed.
-4. Download and extract the mod package.
-5. Copy/merge the package contents into your **Schedule I** game directory so the files end up in these locations:
-   - `Mods\Firesky_UnderNetBrowser.dll`
-   - `Mods\UnderNetBrowser\Microsoft.Web.WebView2.Core.dll`
-   - `Mods\UnderNetBrowser\WebView2Loader.dll`
-   - `Schedule I_Data\Plugins\x86_64\UnderNetGpuRenderer.dll`
-   - `UserData\UnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` *(default extension, pre-seeded/recommended)*
-6. Launch the game and open the **UnderNet** app from the in-game TV.
-
-> After updating `UnderNetGpuRenderer.dll` (native plugin), restart the game.
-
 ## Usage & Controls
 
 - **Open:** Launch **UnderNet** from the in-game TV.
 - **Navigate:** Use the address bar, Home/Reload controls, on-page links/shortcuts, and supported `undernet:*` / `home:*` routes.
 - **Close:**
-  - Normal close = **warm** session (faster reopen).
-  - **X** button = **full shutdown/cleanup** (recommended if you want to ensure WebView2/browser processes are fully stopped).
+  - **Normal close:** warm session (faster reopen).
+  - **X button:** full shutdown/cleanup (recommended if you want to ensure WebView2/browser processes are fully stopped).
 
 ### Keybinds / shortcuts
 
@@ -132,11 +136,11 @@ Runtime data (WebView2 profile/cache, managed homepage/apps content, diagnostics
 - **Cold start can be slow:** first open (or reopen after a full X-close shutdown) may take several seconds while WebView2 creates the composition controller/profile and initializes extensions/runtime. Reopening after a normal close is much faster (warm session reuse).
 - **Render quality / blur:** even at higher render resolutions (including > native/4K), perceived sharpness can be limited by the in-game TV/app presentation path (surface/material/scaling/filtering outside the WebView2 source texture). Blurriness affecting both web content and Unity browser chrome may indicate this presentation bottleneck. Texture sampling/filtering behavior may be adjusted during testing.
 - **Game Input Mode FPS overlay is best-effort:** the in-game overlay shows **page/rAF FPS**, not the game’s FPS and not a guaranteed WebGPU engine FPS or capture FPS. Some pages/content may report differently or interfere with overlays.
+- **RMB detach / TV reattach robustness:** detach/reattach behavior has been improved (including recovery for cases where TV state becomes temporarily unreadable), but because TV/app state can vary by save, system, and game behavior, please report any remaining cases where you get stuck or lose interaction (include `MelonLoader\Latest.log`).
 - **Discord mirror limitations:** Discord window mirroring is best-effort and primarily visual; interactivity (clicks/typing/chat forwarding) may be unreliable. Discord Web fallback is used when Discord is not running.
 - **Site/app compatibility and performance:** complex websites, video sites, WebGL/WebGPU pages, and browser games depend on WebView2/Chromium behavior, site scripts, and hardware. Input/render/performance can vary by content.
 - **Known reported issues under investigation:**
   - Up/Down arrow navigation for search suggestions (e.g. Google/YouTube) may not behave as expected in all cases.
-  - Client-specific issue reported: **RMB detach → E reattach** can leave the browser non-interactive in some scenarios.
   - Intermittent CLR fatal world-load crash reported as `0x80131506` in `S1API.SaveableAutoRegistry.DiscoverSaveableTypes` / `Assembly.GetTypes()` (may be external to this mod; include logs/details when reporting).
 - **Restart required for native updates:** replacing `UnderNetGpuRenderer.dll` requires a game restart.
 
@@ -149,12 +153,20 @@ Runtime data (WebView2 profile/cache, managed homepage/apps content, diagnostics
 - **After updating:** restart the game, especially if `UnderNetGpuRenderer.dll` changed.
 - **Logs:** check `MelonLoader\Latest.log` for `[Firesky UnderNet Browser]` entries (and enable diagnostics options only when needed).
 
-## Credits & Third-Party Notices
+## Shout outs
 
+Huge thanks to everyone and everything that made this possible:
+
+- **TVGS / Schedule I** for the game and sandbox that inspired this mod.
+- **MelonLoader** and the IL2CPP/Harmony modding ecosystem for the mod loader foundation.
+- **S1API** and its contributors for the TV app integration layer used by this mod.
+- **Microsoft Edge WebView2** team/project for the embedded browser runtime that powers rendering and web compatibility.
+- **uBlock Origin Lite** developers and contributors for the bundled extension assets (see third-party notices below).
+- The **Schedule I modding community** for testing, feedback, ideas, and issue reports.
+
+### Third-party notices
 - **uBlock Origin Lite** — bundled extension assets in `BrowserExtensions/uBlockOriginLite/` include their own license/readme files; use and redistribution must comply with their terms.
 - **Microsoft Edge WebView2** — runtime/redistributable components are subject to Microsoft's licenses/terms.
-- Built for the **Schedule I** modding ecosystem using **MelonLoader** and **S1API** (and related IL2CPP/Harmony interop tooling provided by the mod loader environment).
 
-## Permissions
-
+### Permissions
 Please review and respect the licenses of included third-party components (especially bundled browser extension assets). For redistribution, mod packs, or derivative releases, include appropriate attribution and comply with all applicable third-party license terms. If you are unsure, ask the mod author before reuploading.

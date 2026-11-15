@@ -224,14 +224,14 @@ namespace Firesky.UnderNetBrowser
                 "Minimum time a new visual tier condition must hold before switching (reduces oscillation). Upgrades to higher quality restore quickly.");
 
             AdaptiveReducedCaptureFps = _category.CreateEntry(
-                "AdaptiveReducedCaptureFps", 15,
+                "AdaptiveReducedCaptureFps", 30,
                 "Adaptive Rendering: Reduced Tier Capture FPS",
-                "Target capture/update rate for the Reduced tier (1-60). Lower values save more CPU/GPU/capture work.");
+                "Target capture/update rate for the Reduced tier (1-60). Higher values improve smoothness/responsiveness at increased capture cost.");
 
             AdaptiveLowCaptureFps = _category.CreateEntry(
-                "AdaptiveLowCaptureFps", 8,
+                "AdaptiveLowCaptureFps", 15,
                 "Adaptive Rendering: Low Tier Capture FPS",
-                "Target capture/update rate for the Low tier (1-60). Lower values save more CPU/GPU/capture work.");
+                "Target capture/update rate for the Low tier (1-60). Higher values improve smoothness/responsiveness at increased capture cost.");
 
             // Ensure saved preferences are applied to created entries (deterministic activation across restarts/load order).
             try { _category?.LoadFromFile(false); } catch { try { MelonPreferences.Load(); } catch { } }
