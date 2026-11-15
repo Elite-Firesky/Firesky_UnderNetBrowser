@@ -5,8 +5,8 @@ using UnityEngine;
 namespace Firesky.UnderNetBrowser
 {
     /// <summary>
-    /// Phase 4B (PoC): capture an existing HWND (WebView2 host) via native WGC and present into a Unity-owned texture.
-    /// Uses the proven render-thread shader blit path (no CPU readback, no JPEG/managed per-frame uploads in this path).
+    /// Captures an existing HWND (WebView2 host) via native WGC and presents into a Unity-owned texture.
+    /// Uses the render-thread shader blit path (no CPU readback, no JPEG/managed per-frame uploads in this path).
     /// JPEG/screencast fallback remains in the browser/WebView for non-GPU mode or failure.
     /// </summary>
     internal sealed class UnderNetBrowserGpuCapture : IDisposable

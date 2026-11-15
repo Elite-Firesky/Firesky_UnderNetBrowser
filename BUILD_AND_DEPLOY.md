@@ -59,7 +59,7 @@ cmake --build native/GpuRenderer/build --config Release
 
 ### 3) Optional components
 
-- **`native/CompositionPoC/`**: standalone feasibility scaffold; build separately if needed (see its README/CMake). Not required for normal mod deployment.
+- **`native/CompositionPoC/`**: standalone composition prototype scaffold (not included in this repository/build). Not required for normal mod deployment.
 - **`tools/VirtualEndpointLoopbackTest/`**: standalone investigation harness with its own `build.cmd`/sources; not part of mod runtime.
 
 ## Deployment
@@ -76,7 +76,7 @@ Deploy to a **local** Schedule I install (paths vary by user). Do not commit gam
 | `UnderNetGpuRenderer.dll` (native) | `<Schedule I>\Schedule I_Data\Plugins\x86_64\` (Unity native plugin path; restart game after changes) |
 | Default browser extension (`uBlockOriginLite`) | pre-seed in `<Schedule I>\UserData\UnderNetBrowser\WebView2Composition\Extensions\uBlockOriginLite\` for clients, or keep a source copy (e.g. `BrowserExtensions\uBlockOriginLite` in repo) for auto-deploy; runtime uses the WebView2 composition profile under `UserData\UnderNetBrowser\WebView2Composition\` (do not duplicate into extra `UserData\...\Extensions` or game `Mods` folders at runtime) |
 
-A local `for_client/`-style package folder may be used to stage these files for distribution/testing, but it is a deployment artifact and is excluded from version control. The staged client package should contain only files required by the client runtime (no redundant extension copies).
+A local `for_client/`-style package folder may be used to collect these files for distribution/testing, but it is a deployment artifact and is excluded from version control. The client package should contain only files required by the client runtime (no redundant extension copies).
 
 ### Notes
 

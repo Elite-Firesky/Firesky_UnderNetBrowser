@@ -1,4 +1,4 @@
-# UnderNetGpuRenderer (native PoC)
+# UnderNetGpuRenderer (native plugin)
 
 Experimental native DLL for **Target A (zero CPU pixel copies)** GPU rendering integration with Schedule I (Unity 2022.3.62f2, IL2CPP, MelonLoader, D3D11).
 

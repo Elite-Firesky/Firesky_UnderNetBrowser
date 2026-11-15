@@ -106,7 +106,7 @@ struct CompositionBrowser::Impl {
     std::atomic<uint32_t> diagLastKeyMsg{0};
     std::atomic<uint64_t> diagLastKeyWParam{0};
     std::atomic<uint64_t> diagNativeBlockedRequests{0};
-    // Stage 3 PoC diagnostics (read-only observation; no behavior changes)
+    // Runtime diagnostics (read-only observation)
     std::atomic<int> diagAudioStateKnown{0};      // 1 if ICoreWebView2_8 audio/mute APIs available
     std::atomic<int> diagDocumentPlayingAudio{0}; // 1 if WebView2 reports document playing audio
     std::atomic<int> diagIsMuted{0};              // 1 if WebView2 core is muted
@@ -126,7 +126,7 @@ struct CompositionBrowser::Impl {
     std::atomic<int> zoomFactorMilli{1000}; // 1.0 = 1000
     std::atomic<int> currentZoomFactorMilli{1000};
 
-    // Stage 4.1 startup timeline markers (ms since Start thread baseline; -1 = not observed)
+    // Startup timeline markers (ms since Start thread baseline; -1 = not observed)
     std::atomic<uint64_t> startTickMs{0};
     std::atomic<int64_t> tEnvReqMs{-1};
     std::atomic<int64_t> tEnvCbMs{-1};
@@ -240,7 +240,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
     auto* impl = m_impl;
     impl->thread = std::thread([this, impl, t0, tWrapMs]() {
         using clock = std::chrono::steady_clock;
-        auto stageMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
+        auto stepMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
             char b[96]; sprintf_s(b, "%s=%dms", name, (int)std::chrono::duration_cast<std::chrono::milliseconds>(e-s).count());
             if(!into.empty()) into += ", ";
             into += b;
@@ -259,7 +259,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
 
         try { winrt::init_apartment(winrt::apartment_type::single_threaded); } catch(...) {}
 
-        auto tSta = clock::now(); stageMs("sta", tThread, tSta, timings); SetDiag("Starting: STA ready | " + timings);
+        auto tSta = clock::now(); stepMs("sta", tThread, tSta, timings); SetDiag("Starting: STA ready | " + timings);
 
         auto tDq0 = clock::now();
         DispatcherQueueOptions opt{ sizeof(DispatcherQueueOptions), DQTYPE_THREAD_CURRENT, DQTAT_COM_STA };
@@ -267,7 +267,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         if (SUCCEEDED(CreateDispatcherQueueController(opt, &dqRaw)) && dqRaw) {
             winrt::attach_abi(impl->dq, dqRaw);
         }
-        auto tDq1 = clock::now(); stageMs("dq", tDq0, tDq1, timings);
+        auto tDq1 = clock::now(); stepMs("dq", tDq0, tDq1, timings);
 
         auto tHwnd0 = clock::now();
         WNDCLASSW wc{}; wc.lpfnWndProc=HostProc; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"UN_CompHost"; RegisterClassW(&wc);
@@ -275,7 +275,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         impl->hostHwnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"UN_CompHost", WS_POPUP,
             -32000, -32000, impl->width, impl->height, nullptr, nullptr, wc.hInstance, nullptr);
         ShowWindow(impl->hostHwnd, SW_SHOWNA);
-        auto tHwnd1 = clock::now(); stageMs("hwnd", tHwnd0, tHwnd1, timings);
+        auto tHwnd1 = clock::now(); stepMs("hwnd", tHwnd0, tHwnd1, timings);
         SetDiag("Starting: host window created | " + timings);
 
         // Ensure explicit WebView2 user data/profile folder exists (prevents default <exe>.WebView2 in game root)
@@ -305,13 +305,13 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         CreateCoreWebView2EnvironmentWithOptions(nullptr, userDataArg, envOptionsBase.Get(),
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([this,impl, timings, tEnvReq, tThread](HRESULT hr, ICoreWebView2Environment* env)->HRESULT{
                 using clock = std::chrono::steady_clock;
-                auto stageMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
+                auto stepMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
                     char b[96]; sprintf_s(b, "%s=%dms", name, (int)std::chrono::duration_cast<std::chrono::milliseconds>(e-s).count());
                     if(!into.empty()) into += ", ";
                     into += b;
                 };
                 std::string t = timings;
-                auto tEnvCb = clock::now(); stageMs("env", tEnvReq, tEnvCb, t);
+                auto tEnvCb = clock::now(); stepMs("env", tEnvReq, tEnvCb, t);
                 impl->tEnvCbMs.store((int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(tEnvCb - tThread).count(), std::memory_order_relaxed);
                 SetDiag("Starting: environment callback | " + t);
 
@@ -323,13 +323,13 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                 env3->CreateCoreWebView2CompositionController(impl->hostHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>([this,impl,t,tCtrlReq,tThread](HRESULT hr, ICoreWebView2CompositionController* cc)->HRESULT{
                         using clock = std::chrono::steady_clock;
-                        auto stageMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
+                        auto stepMs = [&](const char* name, clock::time_point s, clock::time_point e, std::string& into){
                             char b[96]; sprintf_s(b, "%s=%dms", name, (int)std::chrono::duration_cast<std::chrono::milliseconds>(e-s).count());
                             if(!into.empty()) into += ", ";
                             into += b;
                         };
                         std::string tt = t;
-                        auto tCtrlCb = clock::now(); stageMs("compCtrl", tCtrlReq, tCtrlCb, tt);
+                        auto tCtrlCb = clock::now(); stepMs("compCtrl", tCtrlReq, tCtrlCb, tt);
                         impl->tCtrlCbMs.store((int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(tCtrlCb - tThread).count(), std::memory_order_relaxed);
                         SetDiag("Starting: composition controller | " + tt);
 
@@ -372,7 +372,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     return S_OK;
                                 }).Get(), nullptr);
 
-                            // Security hardening (Stage 2): centralized navigation policy (main + frame)
+                            // Security hardening: centralized navigation policy (main + frame)
                             try {
                                 auto toLowerW = [](std::wstring s) {
                                     std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
@@ -534,7 +534,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     }).Get(), nullptr);
                             } catch (...) {}
 
-                            // Stage 4.1: navigation/content/readiness timeline markers (best-effort, async).
+                            // Navigation/content/readiness timeline markers (best-effort, async).
                             try {
                                 impl->core->add_ContentLoading(
                                     Callback<ICoreWebView2ContentLoadingEventHandler>([impl](ICoreWebView2* /*sender*/, ICoreWebView2ContentLoadingEventArgs* /*args*/) -> HRESULT {
@@ -601,7 +601,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     }).Get(), nullptr);
                             } catch (...) {}
 
-                            // Stage 3 PoC diagnostics (read-only): observe WebView2 audio/mute state when available (ICoreWebView2_8).
+                            // Runtime diagnostics (read-only): observe WebView2 audio/mute state when available (ICoreWebView2_8).
                             try {
                                 ComPtr<ICoreWebView2_8> core8;
                                 if (SUCCEEDED(impl->core->QueryInterface(IID_PPV_ARGS(&core8))) && core8) {
@@ -995,7 +995,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                         impl->webVisual.RelativeSizeAdjustment({1.f,1.f});
                         impl->compController->put_RootVisualTarget(winrt::get_unknown(impl->webVisual));
                         if(impl->controller){ RECT b{0,0,impl->width,impl->height}; impl->controller->put_Bounds(b); impl->controller->put_IsVisible(TRUE); }
-                        auto tVis1 = clock::now(); stageMs("visual", tVis0, tVis1, tt);
+                        auto tVis1 = clock::now(); stepMs("visual", tVis0, tVis1, tt);
                         { uint64_t s=impl->startTickMs.load(std::memory_order_relaxed); impl->tVisualDoneMs.store(s?(int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed); }
 
                         auto tCap0 = clock::now();
@@ -1029,11 +1029,11 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                               { uint64_t s=impl->startTickMs.load(std::memory_order_relaxed); impl->tCaptureStartMs.store(s?(int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed); }
                             }
                         } catch(...) { /* capture init failure reported later */ }
-                        auto tCap1 = clock::now(); stageMs("capture", tCap0, tCap1, tt);
+                        auto tCap1 = clock::now(); stepMs("capture", tCap0, tCap1, tt);
 
                         auto tNav0 = clock::now();
                         if(impl->core && !impl->initialUrl.empty()) impl->core->Navigate(impl->initialUrl.c_str());
-                        auto tNav1 = clock::now(); stageMs("navReq", tNav0, tNav1, tt);
+                        auto tNav1 = clock::now(); stepMs("navReq", tNav0, tNav1, tt);
                         { uint64_t s=impl->startTickMs.load(std::memory_order_relaxed); impl->tNavReqMs.store(s?(int64_t)(GetTickCount64()-s):-1, std::memory_order_relaxed); }
 
                         auto totalMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(tNav1 - tThread).count();
@@ -1414,7 +1414,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
         PumpMessagesFor(100);
     });
 
-    // Async init: do not block Unity main thread. Thread will set status ready(1)/error(<0) and diag with per-stage timings.
+    // Async init: do not block Unity main thread. Thread will set status ready(1)/error(<0) and diag with per-step timings.
     // outError remains empty on accepted start; callers should poll status/diag for progress or failure.
     m_running.store(true);
     return true;

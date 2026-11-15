@@ -5,7 +5,7 @@
 #include <mutex>
 #include <string>
 
-// Minimal Phase 4A WGC capture helper.
+// Minimal WGC capture helper.
 // - Uses Unity's D3D11 device (obtained from Unity-owned texture path).
 // - Captures an HWND into a frame pool and keeps the latest frame texture.
 // - Unity render thread copies latest frame into Unity-owned target texture (GPU copy).
@@ -13,7 +13,6 @@
 // Notes:
 // - WGC commonly provides BGRA8 frames. Format/size mismatches are handled best-effort.
 // - Frame callback runs on WGC's thread; latest frame access is synchronized.
-// - This is a PoC for milestone A/B before WebView2 integration.
 
 class WgcCapture {
 public:

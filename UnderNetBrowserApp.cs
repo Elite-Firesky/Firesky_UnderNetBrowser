@@ -13,7 +13,7 @@ namespace Firesky.UnderNetBrowser
     /// <summary>
     /// WebView2-only TV browser app for Schedule I (IL2CPP/MelonLoader, net6).
     /// Renders WebView2 frames to the in-game TV texture and provides basic navigation controls.
-    /// Stage E: legacy yt-dlp/FFmpeg/download/cache/transcode/local MP4/VideoPlayer pipeline removed.
+    /// Legacy yt-dlp/FFmpeg/download/cache/transcode/local MP4/VideoPlayer pipeline has been removed.
     /// </summary>
     public class UnderNetBrowserApp : TVApp
     {

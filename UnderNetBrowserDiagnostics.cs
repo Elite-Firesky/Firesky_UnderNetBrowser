@@ -12,7 +12,7 @@ using UnityEngine;
 namespace Firesky.UnderNetBrowser
 {
     /// <summary>
-    /// Stage 4 lightweight diagnostics: periodic sampling, phase markers (A-F), CSV log + session summary.
+    /// Lightweight performance diagnostics: periodic sampling, phase markers (A-F), CSV log + session summary.
     /// Opt-in via config; avoids per-frame logging and expensive forced profiling.
     /// </summary>
     internal static class UnderNetBrowserDiagnostics
@@ -484,7 +484,7 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 using var sw = new StreamWriter(_summaryPath, false, new UTF8Encoding(false));
-                sw.WriteLine("Firesky UnderNet Browser - Stage 4 Performance Diagnostics Summary");
+                sw.WriteLine("Firesky UnderNet Browser - Performance Diagnostics Summary");
                 sw.WriteLine($"Log: {_logPath}");
                 sw.WriteLine($"GeneratedUtc: {DateTime.UtcNow:o}");
                 sw.WriteLine($"SampleIntervalSec: {_sampleInterval:0.###}");

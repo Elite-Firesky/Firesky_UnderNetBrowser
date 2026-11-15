@@ -11,7 +11,7 @@ A MelonLoader/S1API mod for **Schedule I** that adds an in-game **UnderNet** TV/
   - `Firesky_UnderNetBrowser.csproj`, `Properties/` — managed build/project metadata.
 - **Native (C++ / CMake, Windows x64):** `native/`
   - `native/GpuRenderer/` — primary native plugin/DLL (`UnderNetGpuRenderer`): Unity D3D11 interop, WebView2 CompositionController hosting, WGC visual capture, D3D11 blit/copy to Unity-owned texture, input forwarding, diagnostics.
-  - `native/CompositionPoC/` — standalone feasibility/prototype scaffold for the composition+WGC path (not required for normal mod runtime).
+  - `native/CompositionPoC/` — standalone composition prototype scaffold (not included in this repository/build; not required for normal mod runtime).
 - **Tools:** `tools/` (e.g. `VirtualEndpointLoopbackTest` harness/source for audio-capture investigation).
 - **Browser assets:** `BrowserExtensions/uBlockOriginLite/` — bundled extension assets deployed into the WebView2 profile/user data as configured by the mod.
 - **Redistributables (build/runtime deps):** `Redist/WebView2/` — WebView2 loader/core assemblies referenced/packaged for the managed build (see build guide).

@@ -5,7 +5,7 @@ namespace Firesky.UnderNetBrowser
 {
     /// <summary>
     /// Configuration for Firesky UnderNet Browser (WebView2-only playback). Entries are exposed in Mod Manager settings.
-    /// Legacy yt-dlp/FFmpeg/download/cache/VideoPlayer settings removed in Stage E.
+    /// Legacy yt-dlp/FFmpeg/download/cache/VideoPlayer settings have been removed.
     /// </summary>
     public static class UnderNetBrowserConfig
     {
@@ -30,7 +30,7 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<string>? KeyReload { get; private set; }
         public static MelonPreferences_Entry<string>? KeyGameInputMode { get; private set; }
 
-        // Stage 4 diagnostics (lightweight, opt-in). No rebuild required to enable/disable.
+        // Performance diagnostics (lightweight, opt-in). No rebuild required to enable/disable.
         public static MelonPreferences_Entry<bool>? PerformanceDiagnosticsEnabled { get; private set; }
         public static MelonPreferences_Entry<float>? DiagnosticsSampleIntervalSeconds { get; private set; }
         public static MelonPreferences_Entry<string>? DiagnosticsOutputDirectory { get; private set; }

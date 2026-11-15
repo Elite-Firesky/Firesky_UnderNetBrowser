@@ -39,7 +39,7 @@ UN_EXPORT int32_t __stdcall UnGpu_GetTestTextureHeight();
 #define UN_GPU_EVENT_TARGET_INIT_UPDATE   20  // validate target, acquire device/context, create src, render+copy
 #define UN_GPU_EVENT_TARGET_UPDATE        21  // render+copy frame
 #define UN_GPU_EVENT_TARGET_RELEASE       22  // release native-owned resources (never Unity texture)
-// WGC capture (Phase 4A PoC) - uses Unity-owned target texture/device acquired from it
+// WGC capture - uses Unity-owned target texture/device acquired from it
 #define UN_GPU_EVENT_WGC_START            30  // init/start WGC capture for pending HWND (requires target ready)
 #define UN_GPU_EVENT_WGC_COPY_LATEST      31  // copy latest captured frame into Unity-owned target texture
 #define UN_GPU_EVENT_WGC_STOP             32  // stop capture and release WGC resources

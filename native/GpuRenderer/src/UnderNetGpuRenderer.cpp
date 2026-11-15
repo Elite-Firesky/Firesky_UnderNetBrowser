@@ -50,7 +50,7 @@ namespace {
     std::vector<uint32_t> g_targetPixels; // RGBA8 staging for UpdateSubresource into src
     std::atomic<int32_t> g_targetReady{ 0 };
 
-    // Phase 4A: WGC capture PoC (captures HWND into Unity-owned target texture via GPU copy on render thread)
+    // WGC capture (captures HWND into Unity-owned target texture via GPU copy on render thread)
     WgcCapture g_wgc;
     std::atomic<void*> g_wgcPendingHwnd{ nullptr };
     std::atomic<int32_t> g_wgcWantStart{ 0 };
@@ -208,7 +208,7 @@ namespace {
                 int barY = (int)((t * 4) % (uint32_t)(h > 0 ? h : 1));
                 if (std::abs(x - barX) < 10) { r = 255; g = 80; b = 80; }
                 if (std::abs(y - barY) < 10) { r = 80; g = 160; b = 255; }
-                if (((x / 32 + y / 32 + (int)(t / 8)) % 2) == 0) { b = (uint8_t)std::min(255, b + 40); }
+                if (((x / 32 + y / 32 + (int)(t / 8)) % 2) == 0) { b = (uint8_t)(std::min)(255, b + 40); }
                 if (x < 6 || y < 6 || x >= w - 6 || y >= h - 6) { r = 124; g = 255; b = 107; }
                 pixels[(size_t)y * w + x] = (0xFFu << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | r;
             }

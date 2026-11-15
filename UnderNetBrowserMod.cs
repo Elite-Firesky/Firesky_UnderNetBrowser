@@ -131,7 +131,7 @@ namespace Firesky.UnderNetBrowser
                 MelonLogger.Warning($"[Firesky UnderNet Browser] TVApp close patch init failed (non-fatal): {ex.Message}");
             }
 
-            // Stage 4 diagnostics (opt-in). Starts baseline session if enabled in config.
+            // Performance diagnostics (opt-in). Starts baseline session if enabled in config.
             try { UnderNetBrowserDiagnostics.InitializeIfEnabled(); } catch (Exception ex) { MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] init failed (non-fatal): {ex.Message}"); }
         }
 
@@ -230,18 +230,18 @@ namespace Firesky.UnderNetBrowser
                 _graphicsApiLogged = true;
                 try
                 {
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [StageB/Probe] Graphics API: {SystemInfo.graphicsDeviceType}, device='{SystemInfo.graphicsDeviceName}', version='{SystemInfo.graphicsDeviceVersion}'");
+                    MelonLogger.Msg($"[Firesky UnderNet Browser] [Probe] Graphics API: {SystemInfo.graphicsDeviceType}, device='{SystemInfo.graphicsDeviceName}', version='{SystemInfo.graphicsDeviceVersion}'");
                 }
                 catch (Exception ex)
                 {
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [StageB/Probe] Failed to query graphics API: {ex.Message}");
+                    MelonLogger.Warning($"[Firesky UnderNet Browser] [Probe] Failed to query graphics API: {ex.Message}");
                 }
             }
         }
 
         public override void OnUpdate()
         {
-            // Stage 4 diagnostics: lightweight periodic sampling + frame-time accumulation (enabled sessions only).
+            // Performance diagnostics: lightweight periodic sampling + frame-time accumulation (enabled sessions only).
             try { if (UnderNetBrowserDiagnostics.IsEnabled) UnderNetBrowserDiagnostics.OnFrame(); } catch { }
 
             // Push Schedule I in-game time/day, installed apps, and settings state to built-in homepage pages
