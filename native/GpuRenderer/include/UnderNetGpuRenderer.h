@@ -87,8 +87,7 @@ UN_EXPORT void __stdcall UnGpu_CompRequestFocus();
 UN_EXPORT void __stdcall UnGpu_CompSetZoomFactor(double zoomFactor);
 UN_EXPORT double __stdcall UnGpu_CompGetZoomFactor();
 
-// Stage 3 Gate A PoC (dev-only): configure experimental WASAPI process-loopback capture diagnostics.
-// targetPid: WebView2 process PID to target (e.g. audio.mojom.AudioService). 0 disables target selection.
+// Best-effort distance-based attenuation for WebView2 browser process-tree audio sessions (volume01 in [0,1]).
 UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float volume01);
 
 // Unity plugin exports are defined in .cpp (UnityPluginLoad/Unload, GetRenderEventFunc)

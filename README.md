@@ -2,7 +2,7 @@
 
 A MelonLoader/S1API mod for **Schedule I** that adds an in-game **UnderNet** TV/browser app using a native WebView2 CompositionController rendering path (WGC/D3D11) blitted into Unity. It is designed for IL2CPP Schedule I (Unity 2022.3.x, D3D11) and keeps managed UI/input/lifecycle logic separate from the native rendering/browser host.
 
-> **Status:** active development. Behavior, performance, and compatibility depend on game version, MelonLoader/S1API, WebView2 runtime, GPU/driver, and OS. Some features are experimental; spatial audio capture is currently gated/disabled by config.
+> **Status:** active development. Behavior, performance, and compatibility depend on game version, MelonLoader/S1API, WebView2 runtime, GPU/driver, and OS. Some features are experimental.
 
 ## Project layout (logical separation)
 

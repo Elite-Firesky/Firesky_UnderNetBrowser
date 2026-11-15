@@ -81,7 +81,7 @@ namespace Firesky.UnderNetBrowser
             DistanceVolumeEnabled = _category.CreateEntry(
                 "DistanceVolumeEnabled", true,
                 "Distance-Based Audio Volume",
-                "Attenuate browser/WebView2 audio based on distance from the TV (best-effort process audio; not spatial/3D audio).");
+                "Attenuate browser/WebView2 audio based on distance from the TV (best-effort process-level volume attenuation).");
 
             DistanceVolumeFullDistance = _category.CreateEntry(
                 "DistanceVolumeFullDistance", 7.5f,

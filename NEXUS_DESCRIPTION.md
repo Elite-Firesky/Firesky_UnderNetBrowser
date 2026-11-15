@@ -43,7 +43,7 @@ Some features are experimental or best-effort (see Known Issues).
   - Home URL, render resolution (composition width/height).
   - Keybinds: global cursor toggle, reload, Game Input Mode.
   - Ad-block/consent options and optional performance diagnostics output.
-  - Spatial audio PoC toggle is present but **off by default** and currently non-functional/experimental (see Known Issues).
+
 
 ## Requirements
 
@@ -113,7 +113,6 @@ Runtime data (WebView2 profile/cache, home page, diagnostics output when enabled
 
 - **Cold start can be slow:** First open (or reopen after a full X-close shutdown) may take several seconds while WebView2 creates the composition controller/profile and initializes extensions/runtime. Reopening after a **normal** close is much faster due to warm session reuse.
 - **Discord mirror is a placeholder:** Mirroring a running Discord window is best-effort and primarily visual; click/typing/chat interactivity is not reliable. Discord Web fallback is used when Discord is not running.
-- **Spatial audio:** Spatial audio proof-of-concept is **disabled/off by default** and currently not an active supported feature due to runtime/platform constraints.
 - **Site/app compatibility and performance:** Complex websites, video sites, WebGL pages, and browser games depend heavily on WebView2/Chromium behavior, site scripts, and your hardware. Input/render performance may vary by content.
 - **Restart required for native updates:** Replacing `UnderNetGpuRenderer.dll` requires a game restart.
 - **Experimental mod:** Expect occasional bugs or edge cases; check MelonLoader logs when reporting issues.

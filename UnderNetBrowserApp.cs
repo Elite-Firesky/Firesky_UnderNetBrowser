@@ -9008,7 +9008,6 @@ namespace Firesky.UnderNetBrowser
             try { _sync.Shutdown(); } catch { }
         }
 
-        // --- Stage 3/4 PoC: spatial TV audio playback (WASAPI process-loopback capture -> Unity 3D AudioSource) ---
         private void GetDesiredCompositionRenderSize(out int width, out int height)
         {
             // Prefer player's native display resolution as a quality cap, fitted to the TV/video viewport aspect ratio.
@@ -9398,7 +9397,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
         }
-        // --- Stage 3/4 PoC: spatial TV audio playback (WASAPI process-loopback capture -> Unity 3D AudioSource) ---
+        // Distance-based browser audio attenuation (best-effort process-tree session volume via native renderer).
         private void TryUpdateDistanceBasedVolume(bool force = false)
         {
             try
