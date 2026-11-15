@@ -3594,7 +3594,7 @@ namespace Firesky.UnderNetBrowser
                 var payload = BuildInstalledAppsPayloadJson();
                 if (!force && string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal)) return;
                 _lastHomepageInstalledAppsPayload = payload;
-                var script = "(function(){try{if(window.__underNetSetInstalledApps)window.__underNetSetInstalledApps(" + payload + ");}catch(e){}})();";
+                var script = "(function(){try{var p=" + payload + ";function go(){try{if(window.__underNetSetInstalledApps){window.__underNetSetInstalledApps(p);return true;}}catch(e){}return false;}if(!go()){var n=0,t=setInterval(function(){n++;if(go()||n>20)clearInterval(t);},250);}}catch(e){}})();";
                 try { app._gpuCompositionCapture?.ExecuteScript(script); } catch { }
             }
             catch { }
