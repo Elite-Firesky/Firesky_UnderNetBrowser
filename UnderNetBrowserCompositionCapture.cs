@@ -254,7 +254,7 @@ namespace Firesky.UnderNetBrowser
                 _unityTexture = null;
 
                 _unityTexture = new Texture2D(width, height, TextureFormat.BGRA32, false, false);
-                _unityTexture.filterMode = FilterMode.Bilinear;
+                _unityTexture.filterMode = FilterMode.Point;
                 _unityTexture.anisoLevel = 16;
                 _unityTexture.wrapMode = TextureWrapMode.Clamp;
                 var fill = new Color32[width * height];
