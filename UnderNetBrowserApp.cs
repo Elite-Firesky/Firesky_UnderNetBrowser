@@ -892,7 +892,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 7;
+        private const int ManagedHomepageVersion = 8;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()

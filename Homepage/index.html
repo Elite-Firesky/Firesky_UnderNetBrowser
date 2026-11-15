@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=7 -->
+<!-- UnderNetBrowser:managed-homepage version=8 -->
 <title>UnderNet Home</title>
 <style>
   :root{
@@ -56,7 +56,7 @@
   .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:24px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
   .app:hover{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
   .app.hidden{display:none}
-  .icon{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:24px;box-shadow:0 10px 20px rgba(0,0,0,.24)}
+  .icon{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:24px;box-shadow:0 10px 20px rgba(0,0,0,.24);overflow:hidden;position:relative}
   .icon.yt{background:linear-gradient(180deg,#ff9a9a,#ff3b3b);color:#fff}
   .icon.gg{background:linear-gradient(180deg,#ecff9a,#7cff6b);color:#0a1710}
   .icon.folder{background:linear-gradient(180deg,#ffe08a,#ffb347);color:#241607}
@@ -66,6 +66,9 @@
   .icon.set{background:linear-gradient(180deg,#d7dee2,#90a4ae);color:#10181c}
   .icon.tw{background:linear-gradient(180deg,#d1b3ff,#9146ff);color:#fff}
   .icon.nx{background:linear-gradient(180deg,#ffd39a,#da8e35);color:#1f1408}
+  .icon.web{background:rgba(255,255,255,.06);color:#eefbf3}
+  .icon .favicon{width:100%;height:100%;object-fit:cover;display:block;background:#fff}
+  .icon .icon-fallback{width:100%;height:100%;display:none;place-items:center;font-weight:800;font-size:24px}
   .name{font-size:15px;font-weight:700;line-height:1.2}
   .desc{font-size:12px;color:var(--muted);line-height:1.35}
   .badge{position:absolute;top:7px;right:7px;z-index:2;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#f4fff6;background:rgba(20,38,28,.92);border:1px solid rgba(124,255,107,.40);padding:4px 7px;border-radius:999px;box-shadow:0 4px 10px rgba(0,0,0,.25)}
@@ -134,12 +137,13 @@
           <button class="chip-btn secondary" id="clearFilter" type="button">Clear</button>
         </div>
         <div class="desktop-icons" id="appGrid">
-          <a class="app" data-name="youtube videos music streams" href="https://www.youtube.com"><div class="icon yt">▶</div><div class="name">YouTube</div><div class="desc">Videos, music & streams</div></a>
-          <a class="app" data-name="google search web" href="https://www.google.com"><div class="icon gg">G</div><div class="name">Google</div><div class="desc">Search the web</div></a>
-          <a class="app" data-name="ai assistant chat undernet built-in google ai" href="https://www.google.com/ai"><span class="badge">AI</span><div class="icon appi">AI</div><div class="name">AI</div><div class="desc">UnderNet AI assistant</div></a>
+                    <a class="app" data-name="youtube videos music streams" href="https://www.youtube.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.youtube.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">Y</span></div><div class="name">YouTube</div><div class="desc">Videos, music & streams</div></a>
+          <a class="app" data-name="twitch live streams gaming chat" href="https://www.twitch.tv"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.twitch.tv" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">T</span></div><div class="name">Twitch</div><div class="desc">Live streams & chat</div></a>
+          <a class="app" data-name="google search web" href="https://www.google.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">G</span></div><div class="name">Google</div><div class="desc">Search the web</div></a>
+          <a class="app" data-name="ai assistant chat undernet built-in google ai" href="https://www.google.com/ai"><span class="badge">AI</span><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">AI</span></div><div class="name">AI</div><div class="desc">UnderNet AI assistant</div></a>
           <a class="app" data-name="games folder library browser" href="games.html"><span class="badge">Folder</span><div class="icon folder">🗂</div><div class="name">Games</div><div class="desc">Categorized browser library</div></a>
-          <a class="app" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon set">S1</div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools & utilities</div></a>
-          <a class="app" data-name="nexus mods schedule 1 schedule1 mod downloads community" href="https://www.nexusmods.com/games/schedule1"><div class="icon nx">N</div><div class="name">Nexus Mods</div><div class="desc">Schedule 1 mods on Nexus</div></a>
+          <a class="app" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://schedule1.tools" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">S1</span></div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools & utilities</div></a>
+          <a class="app" data-name="nexus mods schedule 1 schedule1 mod downloads community" href="https://www.nexusmods.com/games/schedule1"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.nexusmods.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">N</span></div><div class="name">Nexus Mods</div><div class="desc">Schedule 1 mods on Nexus</div></a>
           <a class="app" data-name="notepad notes write save local" href="notepad.html"><span class="badge">App</span><div class="icon note">📝</div><div class="name">Notepad</div><div class="desc">Write and save local notes</div></a>
           <a class="app" data-name="discord chat mirror app window" href="https://undernet.route/discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window (no web redirect)</div></a>
           <a class="app" data-name="settings shortcuts controls config" href="settings.html"><div class="icon set">⚙</div><div class="name">Settings</div><div class="desc">Shortcuts & browser settings</div></a>
