@@ -11,7 +11,6 @@ namespace Firesky.UnderNetBrowser
     {
         private static MelonPreferences_Category? _category;
 
-        public static MelonPreferences_Entry<bool>? Enabled { get; private set; }
         public static MelonPreferences_Entry<bool>? DebugLogging { get; private set; }
         public static MelonPreferences_Entry<string>? HomeUrl { get; private set; }
 
@@ -67,11 +66,6 @@ namespace Firesky.UnderNetBrowser
             _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser", "Firesky UnderNet Browser");
 
             // --- Basic ---
-            Enabled = _category.CreateEntry(
-                "Enabled", true,
-                "Enable App",
-                "Enable or disable the UnderNet TV app.");
-
             HomeUrl = _category.CreateEntry(
                 "HomeUrl", "undernet:home",
                 "Home URL",

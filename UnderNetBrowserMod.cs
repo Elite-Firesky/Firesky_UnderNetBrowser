@@ -356,7 +356,6 @@ namespace Firesky.UnderNetBrowser
         private static bool _modManagerOrderPatchAttempted;
         private static readonly string[] _modManagerPreferredEntryOrder = new[]
         {
-            "Enabled",
             "HomeUrl",
             "BasicAdBlockEnabled",
             "AutoConsentEnabled",

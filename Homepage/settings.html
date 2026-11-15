@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=5 -->
+<!-- UnderNetBrowser:managed-homepage version=6 -->
 <title>UnderNet Settings</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -44,6 +44,8 @@
   .cfg-btn:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
   .cfg-inline{display:flex;gap:8px;align-items:center;justify-content:flex-end}
   .cfg-note{font-size:12.5px;color:var(--muted);line-height:1.5}
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid rgba(124,255,107,.85);outline-offset:2px}
+  .btn:focus-visible,.cfg-btn:focus-visible,.cfg-input:focus-visible,.cfg-check:focus-visible{box-shadow:0 0 0 3px rgba(124,255,107,.18)}
 </style>
 </head>
 <body>
@@ -92,7 +94,7 @@
       </div>
       <div id="cfg-status" class="cfg-status"></div>
       <div class="cfg-grid" id="cfg-grid"></div>
-      <div class="cfg-note">Use <b>Apply</b> (or Enter) on a field to change it immediately, or <b>Apply All &amp; Save</b> to apply all fields and persist to disk. Some changes may still require reopening the browser/app, a hard reset (Home), or restart (e.g. render size, WebView2 args, some adaptive behaviors).</div>
+      <div class="cfg-note">Use <b>Tab</b> to move between controls, <b>Enter</b>/click to apply where relevant, or <b>Apply All &amp; Save</b> to apply all fields and persist to disk. Some changes may still require reopening the browser/app, a hard reset (Home), or restart (e.g. render size, WebView2 args, some adaptive behaviors).</div>
     </section>
   </div>
 
@@ -100,7 +102,6 @@
 (function(){
   const defs = [
     { group:'Basic', items:[
-      { key:'Enabled', label:'Enable App', type:'bool', desc:'Enable or disable the UnderNet TV app.' },
       { key:'HomeUrl', label:'Home URL', type:'string', desc:'Default page (e.g. undernet:home, home:<app-id>, or URL).' },
       { key:'BasicAdBlockEnabled', label:'Basic Ad/Tracker Blocking', type:'bool', desc:'Built-in request blocking in WebView2.' },
       { key:'AutoConsentEnabled', label:'Auto-Accept Consent Dialogs', type:'bool', desc:'Auto accept/dismiss some consent dialogs (may cause unintended clicks).' }

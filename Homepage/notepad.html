@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=5 -->
+<!-- UnderNetBrowser:managed-homepage version=6 -->
 <title>UnderNet Notepad</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -17,6 +17,7 @@
   .actions,.tools{display:flex;gap:8px;flex-wrap:wrap}
   .btn,.mini{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;text-decoration:none;font-size:13px;font-weight:600;cursor:pointer}
   .btn:hover,.mini:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
+  a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,.btn:focus-visible,.mini:focus-visible,.note-item:focus-visible{outline:2px solid rgba(124,255,107,.9);outline-offset:2px;box-shadow:0 0 0 3px rgba(124,255,107,.18)}
   .layout{display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:0;flex:1}
   .panel{padding:14px;min-height:0;display:flex;flex-direction:column}
   .panel h2{margin:0 0 8px;font-size:14px;letter-spacing:1.2px;text-transform:uppercase;color:#d9ecdf}
@@ -81,10 +82,13 @@
     for(var i=0;i<notes.length;i++){
       (function(n){
         var item=document.createElement('div'); item.className='note-item'+(n.id===activeId?' active':'');
+        item.setAttribute('tabindex','0');
+        item.setAttribute('role','button');
         var t=document.createElement('div'); t.className='t'; t.textContent=n.title||'Untitled note';
         var m=document.createElement('div'); m.className='m'; m.textContent='Updated '+fmt(n.updated||n.created||now());
         item.appendChild(t); item.appendChild(m);
         item.addEventListener('click', function(){ select(n.id); });
+        item.addEventListener('keydown', function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); select(n.id); } });
         list.appendChild(item);
       })(notes[i]);
     }

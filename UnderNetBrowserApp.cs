@@ -872,7 +872,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 5;
+        private const int ManagedHomepageVersion = 6;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1540,9 +1540,6 @@ namespace Firesky.UnderNetBrowser
                 string trimmed = raw.Trim();
                 switch ((key ?? "").Trim())
                 {
-                    case "Enabled":
-                        if (UnderNetBrowserConfig.Enabled != null && ParseBool(raw, out var bEnabled)) { UnderNetBrowserConfig.Enabled.Value = bEnabled; Save(); message = "Enable App updated."; return true; }
-                        break;
                     case "HomeUrl":
                         if (UnderNetBrowserConfig.HomeUrl != null) { UnderNetBrowserConfig.HomeUrl.Value = string.IsNullOrWhiteSpace(trimmed) ? "undernet:home" : trimmed; Save(); message = "Home URL updated."; return true; }
                         break;
@@ -2381,7 +2378,7 @@ namespace Firesky.UnderNetBrowser
                             }
                             if (c == '\b') { _gpuCompositionCapture.SendKey(WM_KD, 0x08, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x08, 0); sentCtrl++; MarkWebTextEntryActivity("backspace"); }
                             else if (c == '\r' || c == '\n') { _gpuCompositionCapture.SendKey(WM_KD, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_CH, 0x0D, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x0D, 0); sentCtrl++; MarkWebTextEntryActivity("enter"); }
-                            else if (c == '\t') { _gpuCompositionCapture.SendKey(WM_KD, 0x09, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x09, 0); sentCtrl++; MarkWebTextEntryActivity("tab"); }
+                            else if (c == '\t') { /* handled by explicit KeyDown path (supports Shift+Tab, avoids duplicate sends) */ }
                             else if (c == 27) { _gpuCompositionCapture.SendKey(WM_KD, 0x1B, 0); _gpuCompositionCapture.SendKey(WM_KU, 0x1B, 0); sentCtrl++; }
                             continue;
                         }
@@ -2453,7 +2450,13 @@ namespace Firesky.UnderNetBrowser
                     }
                     catch { }
                 }
-                if (Input.GetKeyDown(KeyCode.Tab)) SendVk(0x09);
+                if (Input.GetKeyDown(KeyCode.Tab))
+                {
+                    // Use DOM focus traversal; avoid extra native RequestFocus() here which may disrupt current DOM focus in WebView2.
+                    try { SendTabFocusScriptFallback(); } catch { }
+                    sentVks++;
+                    MarkWebTextEntryActivity("tab");
+                }
                 if (Input.GetKeyDown(KeyCode.Escape))
                 {
                     bool isFullscreenNow = _isPageFullscreen;
@@ -2613,6 +2616,25 @@ namespace Firesky.UnderNetBrowser
                     _ => ""
                 };
                 if (!string.IsNullOrEmpty(script)) _gpuCompositionCapture.ExecuteScript(script);
+            }
+            catch { }
+        }
+
+        private void SendTabFocusScriptFallback()
+        {
+            try
+            {
+                if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
+                // Best-effort DOM focus traversal fallback: some composition/WebView2 hosts may not honor forwarded WM_TAB.
+                _gpuCompositionCapture.ExecuteScript(
+                    "(function(){try{var d=document;" +
+                    "var sel='a[href],area[href],button:not([disabled]),input:not([disabled]):not([type=\"hidden\"]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex=\"-1\"]),[contenteditable=\"\"],[contenteditable=\"true\"]';" +
+                    "function vis(el){if(!el||!el.getBoundingClientRect) return false; var s=window.getComputedStyle(el); if(!s||s.visibility==='hidden'||s.display==='none') return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0;}" +
+                    "var all=Array.prototype.slice.call(d.querySelectorAll(sel)).filter(function(el){if(!el) return false; if(el.disabled) return false; if(el.getAttribute&&el.getAttribute('aria-hidden')==='true') return false; return vis(el);});" +
+                    "if(!all.length) return;" +
+                    "var ae=d.activeElement; var i=all.indexOf(ae); if(i<0 && ae && ae.closest){var p=ae.closest(sel); i=all.indexOf(p);}" +
+                    "var n=all[(i+1+all.length)%all.length]; if(!n) n=all[0]; try{n.focus({preventScroll:false});}catch(_){try{n.focus();}catch(__){}} try{n.scrollIntoView&&n.scrollIntoView({block:'nearest',inline:'nearest'});}catch(_){}" +
+                    "}catch(_){}})();");
             }
             catch { }
         }
@@ -3311,7 +3333,6 @@ namespace Firesky.UnderNetBrowser
                 string i(int v) => v.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
                 return "{"
-                    + "Enabled:" + b(UnderNetBrowserConfig.Enabled?.Value ?? true) + ","
                     + "HomeUrl:" + s(UnderNetBrowserConfig.HomeUrl?.Value ?? "undernet:home") + ","
                     + "BasicAdBlockEnabled:" + b(UnderNetBrowserConfig.BasicAdBlockEnabled?.Value ?? true) + ","
                     + "AutoConsentEnabled:" + b(UnderNetBrowserConfig.AutoConsentEnabled?.Value ?? false) + ","
