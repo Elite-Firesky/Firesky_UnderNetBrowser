@@ -1639,9 +1639,6 @@ namespace Firesky.UnderNetBrowser
                     case "AdaptiveLowCaptureFps":
                         if (UnderNetBrowserConfig.AdaptiveLowCaptureFps != null && ParseInt(trimmed, out var iArLf)) { UnderNetBrowserConfig.AdaptiveLowCaptureFps.Value = iArLf; Save(); message = "Adaptive low capture FPS updated."; return true; }
                         break;
-                    case "ChromeHeightFraction":
-                        if (UnderNetBrowserConfig.ChromeHeightFraction != null && ParseFloat(trimmed, out var fChrome)) { UnderNetBrowserConfig.ChromeHeightFraction.Value = fChrome; Save(); message = "Chrome height updated."; return true; }
-                        break;
                 }
                 message = "Unsupported setting or invalid value.";
             }
@@ -3365,8 +3362,7 @@ namespace Firesky.UnderNetBrowser
                     + "AdaptiveHysteresisDistance:" + f(UnderNetBrowserConfig.AdaptiveHysteresisDistance?.Value ?? 1.0f) + ","
                     + "AdaptiveTransitionDelaySeconds:" + f(UnderNetBrowserConfig.AdaptiveTransitionDelaySeconds?.Value ?? 0.5f) + ","
                     + "AdaptiveReducedCaptureFps:" + i(UnderNetBrowserConfig.AdaptiveReducedCaptureFps?.Value ?? 15) + ","
-                    + "AdaptiveLowCaptureFps:" + i(UnderNetBrowserConfig.AdaptiveLowCaptureFps?.Value ?? 8) + ","
-                    + "ChromeHeightFraction:" + f(UnderNetBrowserConfig.ChromeHeightFraction?.Value ?? 0.06f)
+                    + "AdaptiveLowCaptureFps:" + i(UnderNetBrowserConfig.AdaptiveLowCaptureFps?.Value ?? 8)
                     + "}";
             }
             catch { return "{}"; }
@@ -3977,20 +3973,20 @@ namespace Firesky.UnderNetBrowser
             catch { }
 
             var chromeLayout = _chromeRoot.AddComponent<HorizontalLayoutGroup>();
-            chromeLayout.spacing = 8f;
-            chromeLayout.childAlignment = TextAnchor.MiddleCenter;
+            chromeLayout.spacing = 4f;
+            chromeLayout.childAlignment = TextAnchor.MiddleLeft;
             chromeLayout.childForceExpandWidth = false;
             chromeLayout.childForceExpandHeight = false;
             chromeLayout.childControlWidth = true;
             chromeLayout.childControlHeight = true;
-            chromeLayout.padding = new RectOffset(10, 10, 6, 6);
+            chromeLayout.padding = new RectOffset(6, 6, 3, 3);
 
             var navBg = new Color(0.165f, 0.176f, 0.198f, 1f);
             var accentBg = new Color(0.150f, 0.210f, 0.235f, 1f);
             var homeBg = new Color(0.150f, 0.205f, 0.175f, 1f);
             var dangerBg = new Color(0.38f, 0.16f, 0.18f, 1f);
 
-            _backButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_BackBtn", "←", new Vector2(34, 30), navBg, () => {
+            _backButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_BackBtn", "←", new Vector2(26, 24), navBg, () => {
                 if (_externalMirrorMode)
                 {
                     var ret = _externalMirrorReturnUrl;
@@ -4000,11 +3996,11 @@ namespace Firesky.UnderNetBrowser
                 }
                 _gpuCompositionCapture?.GoBack();
             }, 18);
-            _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", "→", new Vector2(34, 30), navBg, () => {
+            _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", "→", new Vector2(26, 24), navBg, () => {
                 if (_externalMirrorMode) { SetHint("Discord mirror active: Back/Home to return."); return; }
                 _gpuCompositionCapture?.GoForward();
             }, 18);
-            _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "↻", new Vector2(34, 30), accentBg, () => {
+            _reloadButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_ReloadBtn", "↻", new Vector2(26, 24), accentBg, () => {
                 if (_externalMirrorMode)
                 {
                     try { StopExternalWindowMirror("reload_button"); } catch { }
@@ -4017,7 +4013,7 @@ namespace Firesky.UnderNetBrowser
                 }
                 _gpuCompositionCapture?.Reload();
             }, 17);
-            _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "⌂", new Vector2(34, 30), homeBg, () => {
+            _homeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_HomeBtn", "⌂", new Vector2(26, 24), homeBg, () => {
                 try { ReleaseAllGameKeys("home_button"); } catch { }
                 if (_externalMirrorMode)
                 {
@@ -4041,13 +4037,13 @@ namespace Firesky.UnderNetBrowser
                     SetUrl(raw);
             }, 17);
 
-            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(240, 30), "Search or enter address");
+            _urlInput = CreateInput(_chromeRoot.transform, "UnderNetBrowser_UrlInput", new Vector2(180, 24), "Search or enter address");
             var urlLayout = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
             urlLayout.flexibleWidth = 1f;
-            urlLayout.minWidth = 90f;
-            urlLayout.preferredWidth = 240f;
-            urlLayout.minHeight = 24f;
-            urlLayout.preferredHeight = 30f;
+            urlLayout.minWidth = 80f;
+            urlLayout.preferredWidth = 180f;
+            urlLayout.minHeight = 22f;
+            urlLayout.preferredHeight = 24f;
             urlLayout.flexibleHeight = 0f;
             // Reliable visible URL label overlay (InputField text rendering has been unreliable in this TV UI context).
             try
@@ -4056,10 +4052,10 @@ namespace Firesky.UnderNetBrowser
                 overlayGo.transform.SetParent(_urlInput.transform, false);
                 var ort = overlayGo.AddComponent<RectTransform>();
                 ort.anchorMin = Vector2.zero; ort.anchorMax = Vector2.one;
-                ort.offsetMin = new Vector2(34, 2); ort.offsetMax = new Vector2(-14, -2);
+                ort.offsetMin = new Vector2(26, 1); ort.offsetMax = new Vector2(-8, -1);
                 _urlDisplayText = overlayGo.AddComponent<Text>();
                 _urlDisplayText.font = GetUIFont();
-                _urlDisplayText.fontSize = 14;
+                _urlDisplayText.fontSize = 12;
                 _urlDisplayText.color = new Color(0.97f, 0.98f, 1f, 1f);
                 _urlDisplayText.alignment = TextAnchor.MiddleLeft;
                 _urlDisplayText.supportRichText = false;
@@ -4122,7 +4118,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
 
-            _closeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_CloseBtn", "✕", new Vector2(34, 30), dangerBg, CloseAppToTvHome, 16);
+            _closeButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_CloseBtn", "✕", new Vector2(26, 24), dangerBg, CloseAppToTvHome, 13);
             // Opaque cap behind the close button region to hide URL overlay overflow under/around the X (RectMask2D on the input broke text visibility).
             try
             {
@@ -4196,59 +4192,79 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                float chromeHFrac = UnderNetBrowserConfig.GetChromeHeightFraction();
-                float topYMin = Mathf.Clamp01(1f - chromeHFrac);
                 bool showChrome = !_isPageFullscreen;
+                float containerH = 400f;
+                float containerW = 685f;
+                try
+                {
+                    var parentRt = _videoRT != null ? _videoRT.parent as RectTransform : null;
+                    if (parentRt != null)
+                    {
+                        if (parentRt.rect.height > 10f) containerH = parentRt.rect.height;
+                        if (parentRt.rect.width > 10f) containerW = parentRt.rect.width;
+                    }
+                    else
+                    {
+                        var rootRt = _chromeRT != null ? _chromeRT.root as RectTransform : null;
+                        if (rootRt != null)
+                        {
+                            if (rootRt.rect.height > 10f) containerH = rootRt.rect.height;
+                            if (rootRt.rect.width > 10f) containerW = rootRt.rect.width;
+                        }
+                    }
+                    if (_chromeRT != null)
+                    {
+                        if (_chromeRT.rect.width > 10f) containerW = _chromeRT.rect.width;
+                    }
+                }
+                catch { }
+
+                // Fixed compact chrome height (no user config). Small enough to save space, large enough to remain usable.
+                float chromePx = Mathf.Clamp(Mathf.Round(containerH * 0.09f), 30f, 36f);
+                float topYMin = Mathf.Clamp01(1f - (chromePx / Mathf.Max(1f, containerH)));
 
                 if (_chromeRT != null)
                 {
                     _chromeRT.anchorMin = new Vector2(0f, topYMin);
                     _chromeRT.anchorMax = new Vector2(1f, 1f);
+                    _chromeRT.pivot = new Vector2(0.5f, 1f);
                     _chromeRT.offsetMin = Vector2.zero;
                     _chromeRT.offsetMax = Vector2.zero;
 
-                    // Scale chrome controls/padding to better match configured height (stable with ChromeHeightFraction config).
                     try
                     {
-                        float containerH = 1080f;
-                        try
-                        {
-                            var rootRt = _chromeRT.root as RectTransform;
-                            if (rootRt != null && rootRt.rect.height > 10f) containerH = rootRt.rect.height;
-                            else if (_videoRT != null && _videoRT.parent is RectTransform prt && prt.rect.height > 10f) containerH = prt.rect.height;
-                        }
-                        catch { }
-                        float chromePx = Mathf.Clamp(containerH * chromeHFrac, 24f, 220f);
-                        int padV = Mathf.Clamp(Mathf.RoundToInt(chromePx * 0.14f), 3, 14);
-                        int padH = Mathf.Clamp(Mathf.RoundToInt(chromePx * 0.22f), 6, 22);
-                        int padTop = Mathf.Clamp(padV + 2, 3, 16);
-                        int padBottom = Mathf.Max(2, padV - 1);
-                        float innerH = Mathf.Max(16f, chromePx - padTop - padBottom - 1f);
-                        float controlH = Mathf.Clamp(innerH, 16f, 56f);
-                        if (chromePx < 38f) controlH = Mathf.Max(14f, chromePx - (padTop + padBottom + 1f));
-                        float btnW = Mathf.Clamp(controlH * 1.05f, 24f, 64f);
-                        int font = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.58f), 11, 26);
-                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.46f), 10, 22);
-
+                        int padH = 6;
+                        int padV = 3;
                         var hlg = _chromeRoot != null ? _chromeRoot.GetComponent<HorizontalLayoutGroup>() : null;
                         if (hlg != null)
                         {
                             hlg.childAlignment = TextAnchor.MiddleLeft;
-                            // Extra top padding reduces content clipping under TV screen/canvas edge masks.
-                            hlg.padding = new RectOffset(padH, padH, padTop, padBottom);
-                            hlg.spacing = Mathf.Clamp(chromePx * 0.10f, 4f, 12f);
+                            hlg.padding = new RectOffset(padH, padH, padV, padV);
+                            hlg.spacing = 4f;
                         }
 
-                        void ApplyButtonSizing(Button? b)
+                        float controlH = Mathf.Clamp(chromePx - 6f, 22f, 28f);
+                        float btnW = Mathf.Clamp(controlH + 2f, 24f, 30f);
+                        int btnFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.56f), 11, 15);
+                        int urlFont = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.48f), 10, 13);
+
+                        void ApplyButtonSizing(Button? b, float? widthOverride = null)
                         {
                             if (b == null) return;
                             try
                             {
                                 var le = b.GetComponent<LayoutElement>() ?? b.gameObject.AddComponent<LayoutElement>();
-                                le.preferredWidth = btnW; le.minWidth = Mathf.Max(22f, btnW * 0.9f);
-                                le.preferredHeight = controlH; le.minHeight = controlH;
+                                float w = widthOverride ?? btnW;
+                                le.preferredWidth = w; le.minWidth = w; le.flexibleWidth = 0f;
+                                le.preferredHeight = controlH; le.minHeight = controlH; le.flexibleHeight = 0f;
                                 var t = b.GetComponentInChildren<Text>(true);
-                                if (t != null) t.fontSize = font;
+                                if (t != null)
+                                {
+                                    t.fontSize = btnFont;
+                                    t.resizeTextForBestFit = true;
+                                    t.resizeTextMinSize = 9;
+                                    t.resizeTextMaxSize = btnFont;
+                                }
                             }
                             catch { }
                         }
@@ -4259,30 +4275,17 @@ namespace Firesky.UnderNetBrowser
                         ApplyButtonSizing(_homeButton);
                         ApplyButtonSizing(_closeButton);
 
-                        float containerW = 685f;
-                        try
-                        {
-                            if (_chromeRT != null && _chromeRT.rect.width > 10f) containerW = _chromeRT.rect.width;
-                            else
-                            {
-                                var rootRt = _chromeRT != null ? _chromeRT.root as RectTransform : null;
-                                if (rootRt != null && rootRt.rect.width > 10f) containerW = rootRt.rect.width;
-                            }
-                        }
-                        catch { }
-
                         if (_urlInput != null)
                         {
                             try
                             {
                                 var le = _urlInput.GetComponent<LayoutElement>() ?? _urlInput.gameObject.AddComponent<LayoutElement>();
                                 le.flexibleWidth = 1f;
-                                le.preferredHeight = controlH; le.minHeight = controlH;
-                                // Keep URL bar shrinkable on small in-game TV canvases (e.g. ~685px wide).
-                                le.minWidth = Mathf.Clamp(containerW * 0.22f, 90f, 180f);
-                                le.preferredWidth = Mathf.Clamp(containerW * 0.42f, 140f, 520f);
+                                le.minWidth = Mathf.Clamp(containerW * 0.18f, 70f, 140f);
+                                le.preferredWidth = Mathf.Clamp(containerW * 0.35f, 100f, 360f);
+                                le.preferredHeight = controlH; le.minHeight = controlH; le.flexibleHeight = 0f;
                                 if (_urlInput.textComponent != null) _urlInput.textComponent.fontSize = urlFont;
-                                if (_urlInput.placeholder is Text ph) ph.fontSize = Mathf.Max(10, urlFont - 1);
+                                if (_urlInput.placeholder is Text ph) ph.fontSize = Mathf.Max(9, urlFont - 1);
                                 if (_urlDisplayText != null) _urlDisplayText.fontSize = urlFont;
                             }
                             catch { }
@@ -4293,21 +4296,43 @@ namespace Firesky.UnderNetBrowser
                             try
                             {
                                 var ile = _gameModeIndicatorRoot.GetComponent<LayoutElement>() ?? _gameModeIndicatorRoot.AddComponent<LayoutElement>();
-                                ile.preferredHeight = Mathf.Max(22f, controlH * 0.92f);
-                                ile.minHeight = Mathf.Max(20f, controlH * 0.85f);
-                                // Compact status pill so it doesn't crowd small widths.
-                                ile.preferredWidth = Mathf.Clamp(controlH * 4.2f, 96f, 150f);
-                                ile.minWidth = Mathf.Max(88f, ile.preferredWidth * 0.85f);
+                                ile.preferredHeight = controlH; ile.minHeight = controlH; ile.flexibleHeight = 0f;
+                                ile.preferredWidth = 68f; ile.minWidth = 60f; ile.flexibleWidth = 0f;
                                 if (_gameModeIndicatorText != null)
                                 {
-                                    _gameModeIndicatorText.fontSize = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.34f), 9, 14);
+                                    _gameModeIndicatorText.text = "GM F6";
+                                    _gameModeIndicatorText.fontSize = Mathf.Max(9, urlFont - 1);
                                     _gameModeIndicatorText.resizeTextForBestFit = true;
                                     _gameModeIndicatorText.resizeTextMinSize = 8;
-                                    _gameModeIndicatorText.resizeTextMaxSize = Mathf.Clamp(Mathf.RoundToInt(controlH * 0.34f), 9, 14);
+                                    _gameModeIndicatorText.resizeTextMaxSize = Mathf.Max(9, urlFont - 1);
                                 }
                             }
                             catch { }
                         }
+
+                        // Keep right-side cap aligned with compact chrome padding/close area.
+                        try
+                        {
+                            if (_chromeRoot != null)
+                            {
+                                var cap = _chromeRoot.transform.Find("UnderNetBrowser_ChromeRightCap");
+                                if (cap != null)
+                                {
+                                    var capRT = cap.GetComponent<RectTransform>();
+                                    var capLE = cap.GetComponent<LayoutElement>();
+                                    if (capLE != null) capLE.ignoreLayout = true;
+                                    if (capRT != null)
+                                    {
+                                        capRT.anchorMin = new Vector2(1f, 0f);
+                                        capRT.anchorMax = new Vector2(1f, 1f);
+                                        capRT.pivot = new Vector2(1f, 0.5f);
+                                        capRT.anchoredPosition = Vector2.zero;
+                                        capRT.sizeDelta = new Vector2(Mathf.Clamp(btnW + padH + 2f, 30f, 42f), 0f);
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
                     }
                     catch { }
                 }
@@ -4316,7 +4341,6 @@ namespace Firesky.UnderNetBrowser
                 {
                     if (showChrome)
                     {
-                        // Flush join to chrome strip to avoid visible seam/gap artifacts.
                         _videoRT.anchorMin = new Vector2(0f, 0f);
                         _videoRT.anchorMax = new Vector2(1f, topYMin);
                     }
@@ -8134,17 +8158,17 @@ namespace Firesky.UnderNetBrowser
             var textGo = new GameObject("Text");
             textGo.transform.SetParent(go.transform, false);
             var trt = textGo.AddComponent<RectTransform>();
-            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(34, 2); trt.offsetMax = new Vector2(-14, -2);
+            trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(26, 1); trt.offsetMax = new Vector2(-8, -1);
             var txt = textGo.AddComponent<Text>();
-            txt.font = GetUIFont(); txt.fontSize = 14; txt.color = new Color(0.97f, 0.98f, 1f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
+            txt.font = GetUIFont(); txt.fontSize = 12; txt.color = new Color(0.97f, 0.98f, 1f, 1f); txt.alignment = TextAnchor.MiddleLeft; txt.supportRichText = false; txt.raycastTarget = false; txt.horizontalOverflow = HorizontalWrapMode.Overflow; txt.verticalOverflow = VerticalWrapMode.Truncate;
             input.textComponent = txt;
 
             var phGo = new GameObject("Placeholder");
             phGo.transform.SetParent(go.transform, false);
             var prt = phGo.AddComponent<RectTransform>();
-            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(34, 2); prt.offsetMax = new Vector2(-14, -2);
+            prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = new Vector2(26, 1); prt.offsetMax = new Vector2(-8, -1);
             var ptxt = phGo.AddComponent<Text>();
-            ptxt.font = GetUIFont(); ptxt.fontSize = 13; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.60f, 0.66f, 0.74f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter address";
+            ptxt.font = GetUIFont(); ptxt.fontSize = 11; ptxt.fontStyle = FontStyle.Italic; ptxt.color = new Color(0.60f, 0.66f, 0.74f, 1f); ptxt.alignment = TextAnchor.MiddleLeft; ptxt.supportRichText = false; ptxt.raycastTarget = false; ptxt.text = placeholder ?? "Search or enter address";
             input.placeholder = ptxt;
 
             // Leading search/site glyph for a browser-like omnibox feel
@@ -8155,12 +8179,12 @@ namespace Firesky.UnderNetBrowser
                 var lrt = leadGo.AddComponent<RectTransform>();
                 lrt.anchorMin = new Vector2(0f, 0f); lrt.anchorMax = new Vector2(0f, 1f);
                 lrt.pivot = new Vector2(0f, 0.5f);
-                lrt.anchoredPosition = new Vector2(8f, 0f);
-                lrt.sizeDelta = new Vector2(22f, 0f);
+                lrt.anchoredPosition = new Vector2(6f, 0f);
+                lrt.sizeDelta = new Vector2(16f, 0f);
                 var lt = leadGo.AddComponent<Text>();
                 lt.font = GetUIFont();
                 lt.text = "⌕";
-                lt.fontSize = 15;
+                lt.fontSize = 12;
                 lt.color = new Color(0.62f, 0.74f, 0.95f, 0.95f);
                 lt.alignment = TextAnchor.MiddleCenter;
                 lt.raycastTarget = false;

@@ -56,9 +56,6 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<int>? AdaptiveReducedCaptureFps { get; private set; }
         public static MelonPreferences_Entry<int>? AdaptiveLowCaptureFps { get; private set; }
 
-        // --- UI ---
-        public static MelonPreferences_Entry<float>? ChromeHeightFraction { get; private set; }
-
         public static void Initialize()
         {
             // Keep stable identifier for Mod Manager & Phone App settings discovery/compatibility.
@@ -236,12 +233,6 @@ namespace Firesky.UnderNetBrowser
                 "Adaptive Rendering: Low Tier Capture FPS",
                 "Target capture/update rate for the Low tier (1-60). Lower values save more CPU/GPU/capture work.");
 
-            // --- UI ---
-            ChromeHeightFraction = _category.CreateEntry(
-                "ChromeHeightFraction", 0.06f,
-                "UI: Chrome Height",
-                "Height of the top browser chrome/address bar area as a fraction of the TV screen height (0.04-0.20). Default 0.08.");
-
             // Ensure saved preferences are applied to created entries (deterministic activation across restarts/load order).
             try { _category?.LoadFromFile(false); } catch { try { MelonPreferences.Load(); } catch { } }
 
@@ -286,16 +277,7 @@ namespace Firesky.UnderNetBrowser
             return fallback;
         }
 
-        public static float GetChromeHeightFraction()
-        {
-            try
-            {
-                float v = ChromeHeightFraction?.Value ?? 0.06f;
-                if (float.IsNaN(v) || float.IsInfinity(v)) v = 0.08f;
-                return UnityEngine.Mathf.Clamp(v, 0.04f, 0.20f);
-            }
-            catch { return 0.06f; }
-        }
+        // Chrome height is now fixed internally for a consistent, compact UI.
 
         /// <summary>
         /// Builds AdditionalBrowserArguments for WebView2 environment creation from testing toggles and custom args.
