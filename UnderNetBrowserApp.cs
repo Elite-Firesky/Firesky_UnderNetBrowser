@@ -892,7 +892,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 9;
+        private const int ManagedHomepageVersion = 10;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1593,10 +1593,10 @@ namespace Firesky.UnderNetBrowser
                         if (UnderNetBrowserConfig.KeyGameInputMode != null) { UnderNetBrowserConfig.KeyGameInputMode.Value = string.IsNullOrWhiteSpace(trimmed) ? "F6" : trimmed; Save(); message = "Game Input Mode key updated."; return true; }
                         break;
                     case "GpuCompositionRenderWidth":
-                        if (UnderNetBrowserConfig.GpuCompositionRenderWidth != null && ParseInt(trimmed, out var iRw)) { UnderNetBrowserConfig.GpuCompositionRenderWidth.Value = Math.Max(640, iRw); Save(); message = "Render width updated (restart/reopen may be required)."; return true; }
+                        if (UnderNetBrowserConfig.GpuCompositionRenderWidth != null && ParseInt(trimmed, out var iRw)) { UnderNetBrowserConfig.GpuCompositionRenderWidth.Value = Mathf.Clamp(iRw, 854, 3840); Save(); message = "Render width updated (restart/reopen required to apply)."; return true; }
                         break;
                     case "GpuCompositionRenderHeight":
-                        if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(trimmed, out var iRh)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Math.Max(360, iRh); Save(); message = "Render height updated (restart/reopen may be required)."; return true; }
+                        if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(trimmed, out var iRh)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Mathf.Clamp(iRh, 480, 2160); Save(); message = "Render height updated (restart/reopen required to apply)."; return true; }
                         break;
                     case "DebugLogging":
                         if (UnderNetBrowserConfig.DebugLogging != null && ParseBool(raw, out var bDbg)) { UnderNetBrowserConfig.DebugLogging.Value = bDbg; Save(); message = "Verbose debug logging updated."; return true; }
@@ -9017,30 +9017,20 @@ namespace Firesky.UnderNetBrowser
 
         private void GetDesiredCompositionRenderSize(out int width, out int height)
         {
-            // Prefer player's native display resolution as a quality cap, fitted to the TV/video viewport aspect ratio.
-            int nativeW = 1920;
-            int nativeH = 1080;
-            try
-            {
-                int rw = 0, rh = 0;
-                try { rw = Screen.currentResolution.width; rh = Screen.currentResolution.height; } catch { rw = 0; rh = 0; }
-                if (rw <= 0 || rh <= 0) { try { rw = Screen.width; rh = Screen.height; } catch { rw = 0; rh = 0; } }
-                if (rw > 0) nativeW = rw;
-                if (rh > 0) nativeH = rh;
-            }
-            catch { nativeW = 1920; nativeH = 1080; }
+            // Resolve native display resolution (kept for diagnostics/fallback context). Configured render size controls quality cap.
 
-            // Respect configured values as an upper bound/cap when explicitly set within valid range.
-            int capW = nativeW;
-            int capH = nativeH;
+            // Use configured render dimensions as the quality cap/target (clamped), fitted to viewport aspect.
+            // This allows higher-than-native composition rendering (e.g. 4K on a 1080p game display) when desired.
+            int capW = 1920;
+            int capH = 1080;
             try
             {
                 int cfgW = UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920;
                 int cfgH = UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080;
-                if (cfgW > 0) capW = Mathf.Min(capW, Mathf.Clamp(cfgW, 854, 3840));
-                if (cfgH > 0) capH = Mathf.Min(capH, Mathf.Clamp(cfgH, 480, 2160));
+                if (cfgW > 0) capW = Mathf.Clamp(cfgW, 854, 3840);
+                if (cfgH > 0) capH = Mathf.Clamp(cfgH, 480, 2160);
             }
-            catch { }
+            catch { capW = 1920; capH = 1080; }
 
             float targetAspect = 16f / 9f;
             try

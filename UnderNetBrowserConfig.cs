@@ -113,12 +113,12 @@ namespace Firesky.UnderNetBrowser
             GpuCompositionRenderWidth = _category.CreateEntry(
                 "GpuCompositionRenderWidth", 1920,
                 "Advanced: Render Width",
-                "Internal WebView2 composition render width (e.g. 1280, 1920). Restart/reopen may be required.");
+                "Internal WebView2 composition render width (e.g. 1920, 2560, 3840). Used as the render quality target/cap (fitted to viewport aspect), independent of game display resolution. Restart/reopen required to apply.");
 
             GpuCompositionRenderHeight = _category.CreateEntry(
                 "GpuCompositionRenderHeight", 1080,
                 "Advanced: Render Height",
-                "Internal WebView2 composition render height (e.g. 720, 1080). Restart/reopen may be required.");
+                "Internal WebView2 composition render height (e.g. 1080, 1440, 2160). Used as the render quality target/cap (fitted to viewport aspect), independent of game display resolution. Restart/reopen required to apply.");
 
             // --- Advanced / Diagnostics & Developer ---
             DebugLogging = _category.CreateEntry(

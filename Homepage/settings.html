@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=9 -->
+<!-- UnderNetBrowser:managed-homepage version=10 -->
 <title>UnderNet Settings</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -95,7 +95,7 @@
       </div>
       <div id="cfg-status" class="cfg-status"></div>
       <div class="cfg-grid" id="cfg-grid"></div>
-      <div class="cfg-note">Use <b>Tab</b> to move between controls, <b>Enter</b>/click to apply where relevant, or <b>Apply All &amp; Save</b> to apply all fields and persist to disk. Some changes may still require reopening the browser/app, a hard reset (Home), or restart (e.g. render size, WebView2 args, some adaptive behaviors).</div>
+      <div class="cfg-note">Use <b>Tab</b> to move between controls, <b>Enter</b>/click to apply where relevant, or <b>Apply All &amp; Save</b> to apply all fields and persist to disk. Render resolution can be set independently of game display resolution (e.g. 3840×2160), but requires closing/reopening the browser app (or restart) to take effect and may increase GPU/capture cost.</div>
     </section>
   </div>
 
@@ -118,8 +118,8 @@
       { key:'KeyGameInputMode', label:'Game Input Mode Key', type:'string', desc:'Unity KeyCode name (default F6).' }
     ]},
     { group:'Display / UI', items:[
-      { key:'GpuCompositionRenderWidth', label:'Render Width', type:'int', desc:'Internal composition width (restart/reopen may be required).' },
-      { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height (restart/reopen may be required).' }
+      { key:'GpuCompositionRenderWidth', label:'Render Width', type:'int', desc:'Internal composition width/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 3840 for 4K). Restart/reopen required to apply.' },
+      { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 2160 for 4K). Restart/reopen required to apply.' }
     ]},
     { group:'Diagnostics', items:[
       { key:'DebugLogging', label:'Verbose Debug Logging', type:'bool', desc:'Verbose troubleshooting logs.' },
@@ -192,12 +192,120 @@
       const h = document.createElement('h3');
       h.textContent = group.group;
       g.appendChild(h);
+
+      // Combined render resolution controls (width + height + single apply)
+      if (group.group === 'Display / UI') {
+        const wItem = group.items.find(x => x.key === 'GpuCompositionRenderWidth');
+        const hItem = group.items.find(x => x.key === 'GpuCompositionRenderHeight');
+        if (wItem && hItem) {
+          const row = document.createElement('div');
+          row.className = 'cfg-row stack';
+          const label = document.createElement('div');
+          label.className = 'cfg-label';
+          label.innerHTML = '<b>Render Resolution</b><small><code>GpuCompositionRenderWidth</code> × <code>GpuCompositionRenderHeight</code> - ' + esc(wItem.desc) + '</small>';
+          row.appendChild(label);
+
+          const wrap = document.createElement('div');
+          wrap.className = 'cfg-inline';
+          wrap.style.justifyContent = 'stretch';
+          wrap.style.display = 'grid';
+          wrap.style.gridTemplateColumns = '1fr auto 1fr auto';
+          wrap.style.alignItems = 'center';
+          wrap.style.gap = '8px';
+
+          const wInput = document.createElement('input');
+          wInput.className = 'cfg-input';
+          wInput.type = 'number';
+          wInput.step = '1';
+          wInput.min = '854';
+          wInput.max = '3840';
+          wInput.placeholder = 'Width';
+          wInput.value = valueToString(wItem.key, state[wItem.key]);
+          wInput.setAttribute('data-key', wItem.key);
+          wInput.title = 'Render width (e.g. 1920, 2560, 3840)';
+
+          const x = document.createElement('span');
+          x.textContent = '×';
+          x.style.color = 'var(--muted)';
+          x.style.textAlign = 'center';
+
+          const hInput = document.createElement('input');
+          hInput.className = 'cfg-input';
+          hInput.type = 'number';
+          hInput.step = '1';
+          hInput.min = '480';
+          hInput.max = '2160';
+          hInput.placeholder = 'Height';
+          hInput.value = valueToString(hItem.key, state[hItem.key]);
+          hInput.setAttribute('data-key', hItem.key);
+          hInput.title = 'Render height (e.g. 1080, 1440, 2160)';
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'cfg-btn';
+          btn.textContent = 'Apply';
+          btn.addEventListener('click', () => {
+            state[wItem.key] = wInput.value;
+            state[hItem.key] = hInput.value;
+            try {
+              setStatus('Applying render resolution...', false);
+              const payload = encodeURIComponent(wItem.key) + '=' + encodeURIComponent(String(wInput.value ?? '')) + '&' + encodeURIComponent(hItem.key) + '=' + encodeURIComponent(String(hInput.value ?? ''));
+              navCmd('undernet:cmd/saveform?payload=' + encodeURIComponent(payload));
+            } catch(e) { setStatus('Failed to apply render resolution: ' + e, true); }
+          });
+          const onEnter = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+          wInput.addEventListener('keydown', onEnter);
+          hInput.addEventListener('keydown', onEnter);
+
+          wrap.appendChild(wInput);
+          wrap.appendChild(x);
+          wrap.appendChild(hInput);
+          wrap.appendChild(btn);
+          row.appendChild(wrap);
+          g.appendChild(row);
+        }
+
+        // Render any other Display/UI items normally (none currently), skipping the paired keys.
+        group.items.forEach(item => {
+          if (item.key === 'GpuCompositionRenderWidth' || item.key === 'GpuCompositionRenderHeight') return;
+          const row = document.createElement('div');
+          row.className = 'cfg-row' + (item.type === 'string' ? ' stack' : '');
+          const label = document.createElement('div');
+          label.className = 'cfg-label';
+          label.innerHTML = '<b>' + item.label + '</b><small><code>' + item.key + '</code> - ' + esc(item.desc) + '</small>';
+          const controlWrap = document.createElement('div');
+          controlWrap.className = 'cfg-inline';
+          const cur = state[item.key];
+          const input = document.createElement('input');
+          input.className = 'cfg-input';
+          input.type = item.type === 'int' ? 'number' : (item.type === 'float' ? 'number' : 'text');
+          if (item.type === 'int') input.step = '1';
+          if (item.type === 'float') input.step = 'any';
+          input.value = valueToString(item.key, cur);
+          input.setAttribute('data-key', item.key);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'cfg-btn';
+          btn.textContent = 'Apply';
+          btn.addEventListener('click', () => { state[item.key] = input.value; applySetting(item.key, input.value); });
+          input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+          controlWrap.appendChild(input);
+          controlWrap.appendChild(btn);
+          row.appendChild(label);
+          row.appendChild(controlWrap);
+          g.appendChild(row);
+        });
+
+        grid.appendChild(g);
+        return;
+      }
+
       group.items.forEach(item => {
         const row = document.createElement('div');
         row.className = 'cfg-row' + (item.type === 'string' ? ' stack' : '');
         const label = document.createElement('div');
         label.className = 'cfg-label';
-        label.innerHTML = '<b>' + item.label + '</b><small><code>' + item.key + '</code> — ' + esc(item.desc) + '</small>';
+        label.innerHTML = '<b>' + item.label + '</b><small><code>' + item.key + '</code> - ' + esc(item.desc) + '</small>';
         const controlWrap = document.createElement('div');
         controlWrap.className = 'cfg-inline';
 
