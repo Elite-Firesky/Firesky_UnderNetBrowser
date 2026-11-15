@@ -1290,12 +1290,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                 std::vector<std::wstring> extRoots;
                                 if (!impl->userDataFolder.empty()) {
                                     std::wstring ud = trimSlash(impl->userDataFolder);
-                                    extRoots.push_back(ud + L"\\Extensions"); // e.g. ...\UnderNetBrowser\WebView2Composition\Extensions
-                                    // Also support parent-level Extensions for convenience: ...\UnderNetBrowser\Extensions
-                                    size_t sep = ud.find_last_of(L"\\/");
-                                    if (sep != std::wstring::npos) {
-                                        extRoots.push_back(ud.substr(0, sep) + L"\\Extensions");
-                                    }
+                                    extRoots.push_back(ud + L"\\Extensions"); // ...\UserData\UnderNetBrowser\WebView2Composition\Extensions
                                 }
 
                                 // Create extension roots automatically and enumerate unpacked candidates.
