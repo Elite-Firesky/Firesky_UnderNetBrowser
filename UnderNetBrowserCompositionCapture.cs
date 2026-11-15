@@ -154,6 +154,29 @@ namespace Firesky.UnderNetBrowser
         public int ViewWidth => _width;
         public int ViewHeight => _height;
 
+        /// <summary>Best-effort runtime resize of the composition render target (used when viewport aspect changes, e.g. app fullscreen).</summary>
+        public bool TryResize(int targetWidth, int targetHeight)
+        {
+            try
+            {
+                if (_disposed || !_createIssued) return false;
+                targetWidth = Math.Max(2, targetWidth);
+                targetHeight = Math.Max(2, targetHeight);
+                if (targetWidth == _width && targetHeight == _height) return true;
+                // Recreate the Unity render target for the new dimensions. The native composition pipeline has no
+                // dedicated resize API; reissuing target init + params is best-effort and may reload/restart capture.
+                if (!CreateOrResizeTargetTexture(targetWidth, targetHeight, issueInitEvent: true, log: true))
+                    return false;
+                try { UnderNetBrowserGpuNative.CompSetParams(_lastUrl, _width, _height, null); } catch { }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] TryResize failed: {ex.Message}"); } catch { }
+                return false;
+            }
+        }
+
         public void Tick()
         {
             if (_disposed || !_createIssued || _renderEventFunc == IntPtr.Zero) return;

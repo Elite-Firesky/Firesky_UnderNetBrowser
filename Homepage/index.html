@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=6 -->
+<!-- UnderNetBrowser:managed-homepage version=7 -->
 <title>UnderNet Home</title>
 <style>
   :root{
@@ -227,6 +227,34 @@
       setNotesStatus('Cleared');
     }catch(_){ setNotesStatus('Clear failed'); }
   }
+  function escText(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+  function renderInstalledApps(apps){
+    try{
+      var grid=document.getElementById('appGrid'); if(!grid) return;
+      var old=grid.querySelectorAll('[data-installed-app="1"]');
+      for(var i=0;i<old.length;i++){ try{ old[i].parentNode.removeChild(old[i]); }catch(_){} }
+      if(!apps || !apps.length){ applyFilter(); return; }
+      for(var j=0;j<apps.length;j++){
+        var app=apps[j]||{};
+        var id=String(app.id||'').trim();
+        if(!id) continue;
+        var name=String(app.name||id).trim() || id;
+        var desc=String(app.description||'Installed mod app').trim() || 'Installed mod app';
+        var route=String(app.route||('home:'+id)).trim() || ('home:'+id);
+        var a=document.createElement('a');
+        a.className='app';
+        a.setAttribute('data-installed-app','1');
+        a.setAttribute('href', route);
+        a.setAttribute('data-name', (name+' '+desc+' '+id+' installed mod app').toLowerCase());
+        a.innerHTML='<span class="badge">Mod</span><div class="icon appi">'+escText((name||'?').charAt(0).toUpperCase())+'</div><div class="name">'+escText(name)+'</div><div class="desc">'+escText(desc)+'</div>';
+        grid.appendChild(a);
+      }
+      applyFilter();
+    }catch(_){ try{ applyFilter(); }catch(__){} }
+  }
+  window.__underNetSetInstalledApps=function(apps){
+    try{ renderInstalledApps(apps || []); }catch(_){ }
+  };
   window.__underNetSetGameTime=function(timeText,dayText){
     try{
       var hasTime = !!(timeText && timeText.indexOf('--')===-1);

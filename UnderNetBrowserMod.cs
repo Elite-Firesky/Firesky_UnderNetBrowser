@@ -258,6 +258,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
+            try { UnderNetBrowserApp.TryUpdateHomepageInstalledApps(); } catch { }
             try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
 
             // Global cursor toggle (works outside TV/app as well).

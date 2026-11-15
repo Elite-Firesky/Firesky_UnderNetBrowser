@@ -43,6 +43,7 @@ namespace Firesky.UnderNetBrowser
         private bool _browserPointerDown;
         private bool _browserPointerRightDown;
         private bool _isPageFullscreen;
+        private bool _appFullscreen;
         private bool _detachedToGameplay; // app open/background but player returned to gameplay (no TV input ownership/suppression)
         // Game Input Mode: forwards real key down/up transitions for gameplay keys to WebView2.
         private bool _gameInputMode;
@@ -253,6 +254,7 @@ namespace Firesky.UnderNetBrowser
             base.OnOpened();
             _browserPointerDown = false;
             _isPageFullscreen = false;
+            _appFullscreen = false;
             _detachRequested = false;
             AnyDetachActive = false;
             _explicitCloseRequested = false;
@@ -402,6 +404,7 @@ namespace Firesky.UnderNetBrowser
                 try { TryRestoreGameInput(); } catch { }
                 TryRestoreGameHud();
                 _isPageFullscreen = false;
+                _appFullscreen = false;
                 _compositionWebFocused = false;
                 UpdateChromeVisibility();
                 // Do not dispose browser/capture/composition state.
@@ -608,6 +611,10 @@ namespace Firesky.UnderNetBrowser
                 if (Input.GetKeyDown(UnderNetBrowserConfig.GetKey(KeyCode.F6, UnderNetBrowserConfig.KeyGameInputMode)))
                 {
                     SetGameInputMode(!_gameInputMode, "toggle");
+                }
+                if (Input.GetKeyDown(KeyCode.F11))
+                {
+                    try { ToggleAppFullscreen(); } catch { }
                 }
 
                 // Right-click: exit TV mode but keep this app running/paused in background (do not close app).
@@ -872,7 +879,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 6;
+        private const int ManagedHomepageVersion = 7;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -2273,12 +2280,12 @@ namespace Firesky.UnderNetBrowser
                 // Not in active game mode: ensure no stuck keys and use normal browser text/input behavior.
                 if (_gameKeysHeld.Count > 0) ReleaseAllGameKeys("inactive_or_unfocused");
 
-                // ESC during page fullscreen must exit web fullscreen (not close app), even if web focus tracking is stale.
-                if (!webFocused && (Input.GetKeyDown(KeyCode.Escape)))
+                // ESC: exit page fullscreen first, then app fullscreen (F11), even if web focus tracking is stale.
+                if (!webFocused && Input.GetKeyDown(KeyCode.Escape))
                 {
-                    bool isFullscreenNow = _isPageFullscreen;
-                    try { isFullscreenNow = isFullscreenNow || _gpuCompositionCapture.IsFullscreen; } catch { }
-                    if (isFullscreenNow)
+                    bool pageFsNow = _isPageFullscreen;
+                    try { pageFsNow = pageFsNow || _gpuCompositionCapture.IsFullscreen; } catch { }
+                    if (pageFsNow)
                     {
                         SuppressAppCloseBriefly(2.5f);
                         const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
@@ -2291,7 +2298,14 @@ namespace Firesky.UnderNetBrowser
                                 "try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
                         }
                         catch { }
-                        LogCompositionTypingDiag($"esc-fullscreen fallback (webFocused=false) fs={isFullscreenNow}");
+                        LogCompositionTypingDiag($"esc-fullscreen fallback (webFocused=false) fs={pageFsNow}");
+                        return;
+                    }
+                    if (_appFullscreen)
+                    {
+                        SuppressAppCloseBriefly(1.5f);
+                        try { ToggleAppFullscreen(); } catch { _appFullscreen = false; UpdateChromeVisibility(); }
+                        LogCompositionTypingDiag("esc-app-fullscreen (webFocused=false)");
                         return;
                     }
                 }
@@ -2456,10 +2470,10 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (Input.GetKeyDown(KeyCode.Escape))
                 {
-                    bool isFullscreenNow = _isPageFullscreen;
-                    try { isFullscreenNow = isFullscreenNow || (_gpuCompositionCapture != null && _gpuCompositionCapture.IsFullscreen); } catch { }
+                    bool pageFsNow = _isPageFullscreen;
+                    try { pageFsNow = pageFsNow || (_gpuCompositionCapture != null && _gpuCompositionCapture.IsFullscreen); } catch { }
 
-                    if (isFullscreenNow)
+                    if (pageFsNow)
                     {
                         // ESC in page fullscreen: exit web fullscreen only (stay in app).
                         SuppressAppCloseBriefly(2.5f);
@@ -2472,6 +2486,12 @@ namespace Firesky.UnderNetBrowser
                                 "try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
                         }
                         catch { }
+                    }
+                    else if (_appFullscreen)
+                    {
+                        // ESC exits app fullscreen (F11) before normal app back/close behavior.
+                        SuppressAppCloseBriefly(1.5f);
+                        try { ToggleAppFullscreen(); } catch { _appFullscreen = false; UpdateChromeVisibility(); }
                     }
                     else
                     {
@@ -3407,6 +3427,154 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+        private static bool IsHomepageUrl(string? url)
+        {
+            try
+            {
+                var curNorm = (url ?? "").Replace("\\", "/");
+                return curNorm.IndexOf("/UnderNetBrowser/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
+
+        private static string EscapeJsonString(string? s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var sb = new System.Text.StringBuilder(s!.Length + 8);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"': sb.Append("\\\""); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string BuildInstalledAppsPayloadJson()
+        {
+            try
+            {
+                EnsureWebAppsFoundation();
+                var appsRoot = GetAppsRootDir();
+                if (!Directory.Exists(appsRoot)) return "[]";
+
+                var items = new System.Collections.Generic.List<string>();
+                string[] dirs;
+                try { dirs = Directory.GetDirectories(appsRoot); } catch { return "[]"; }
+                Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
+                foreach (var dir in dirs)
+                {
+                    try
+                    {
+                        var id = Path.GetFileName(dir?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        if (!IsSafeAppId(id)) continue;
+                        var index = Path.Combine(dir, "index.html");
+                        if (!File.Exists(index)) continue;
+
+                        string name = id!;
+                        string desc = "Installed app";
+                        try
+                        {
+                            string? manifestPath = null;
+                            var p1 = Path.Combine(dir, "app.json");
+                            var p2 = Path.Combine(dir, "manifest.json");
+                            if (File.Exists(p1)) manifestPath = p1; else if (File.Exists(p2)) manifestPath = p2;
+                            if (!string.IsNullOrWhiteSpace(manifestPath))
+                            {
+                                var json = File.ReadAllText(manifestPath);
+                                // Lightweight extraction to avoid adding JSON parser dependencies in mod runtime.
+                                string? TryGet(string key)
+                                {
+                                    try
+                                    {
+                                        var k = "\"" + key + "\"";
+                                        var i = json.IndexOf(k, StringComparison.OrdinalIgnoreCase);
+                                        if (i < 0) return null;
+                                        i = json.IndexOf(':', i + k.Length); if (i < 0) return null;
+                                        i++; while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
+                                        if (i >= json.Length || json[i] != '"') return null;
+                                        i++;
+                                        var sb = new System.Text.StringBuilder();
+                                        while (i < json.Length)
+                                        {
+                                            var ch = json[i++];
+                                            if (ch == '"') break;
+                                            if (ch == '\\' && i < json.Length)
+                                            {
+                                                var esc = json[i++];
+                                                sb.Append(esc switch { '"' => '"', '\\' => '\\', '/' => '/', 'n' => '\n', 'r' => '\r', 't' => '\t', _ => esc });
+                                                continue;
+                                            }
+                                            sb.Append(ch);
+                                        }
+                                        return sb.ToString();
+                                    }
+                                    catch { return null; }
+                                }
+                                var n = TryGet("name") ?? TryGet("title");
+                                var d = TryGet("description") ?? TryGet("desc");
+                                if (!string.IsNullOrWhiteSpace(n)) name = n!.Trim();
+                                if (!string.IsNullOrWhiteSpace(d)) desc = d!.Trim();
+                            }
+                        }
+                        catch { }
+
+                        items.Add("{\"id\":\"" + EscapeJsonString(id) + "\",\"name\":\"" + EscapeJsonString(name) + "\",\"description\":\"" + EscapeJsonString(desc) + "\",\"route\":\"home:" + EscapeJsonString(id) + "\"}");
+                    }
+                    catch { }
+                }
+                return "[" + string.Join(",", items) + "]";
+            }
+            catch { return "[]"; }
+        }
+
+        private static float _nextHomepageInstalledAppsSyncRealtime = -999f;
+        private static string _lastHomepageInstalledAppsPayload = string.Empty;
+        private static string _lastHomepageInstalledAppsUrl = string.Empty;
+
+        internal static void TryUpdateHomepageInstalledApps(bool force = false)
+        {
+            try
+            {
+                var app = _activeInstance;
+                if (app == null || app._gpuCompositionCapture == null) return;
+
+                float now = Time.realtimeSinceStartup;
+                if (!force && now < _nextHomepageInstalledAppsSyncRealtime) return;
+                _nextHomepageInstalledAppsSyncRealtime = now + 2.0f;
+
+                var cur = "";
+                try { cur = app._gpuCompositionCapture?.CurrentUrl ?? ""; } catch { cur = ""; }
+                if (!IsHomepageUrl(cur)) return;
+
+                if (!string.Equals(cur, _lastHomepageInstalledAppsUrl, StringComparison.Ordinal))
+                {
+                    _lastHomepageInstalledAppsUrl = cur;
+                    _lastHomepageInstalledAppsPayload = string.Empty;
+                }
+
+                var payload = BuildInstalledAppsPayloadJson();
+                if (!force && string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal)) return;
+                _lastHomepageInstalledAppsPayload = payload;
+                var script = "(function(){try{if(window.__underNetSetInstalledApps)window.__underNetSetInstalledApps(" + payload + ");}catch(e){}})();";
+                try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+            }
+            catch { }
+        }
+
         internal static void TryUpdateHomepageGameTime()
         {
             try
@@ -4143,6 +4311,7 @@ namespace Firesky.UnderNetBrowser
             catch { }
 
             _isPageFullscreen = false;
+            _appFullscreen = false;
             UpdateChromeVisibility();
 
             try
@@ -4181,7 +4350,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                bool showChrome = !_isPageFullscreen;
+                bool showChrome = !(_isPageFullscreen || _appFullscreen);
                 if (_chromeRoot != null && _chromeRoot.activeSelf != showChrome) _chromeRoot.SetActive(showChrome);
                 ApplyChromeLayout();
             }
@@ -4192,7 +4361,7 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                bool showChrome = !_isPageFullscreen;
+                bool showChrome = !(_isPageFullscreen || _appFullscreen);
                 float containerH = 400f;
                 float containerW = 685f;
                 try
@@ -4383,6 +4552,104 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
+        private void ToggleAppFullscreen()
+        {
+            try
+            {
+                if (_detachedToGameplay) return;
+                _appFullscreen = !_appFullscreen;
+                UpdateChromeVisibility();
+                try { Canvas.ForceUpdateCanvases(); } catch { }
+                try { if (_chromeRT != null) UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(_chromeRT); } catch { }
+                try { if (_videoRT != null) UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(_videoRT); } catch { }
+                // Recalculate composition render size for the new viewport aspect (chrome hidden/shown) so content uses
+                // the extra space correctly. This is done as a single controlled restart preserving current URL to avoid
+                // nonstop flicker from unsafe in-place native resizes; page JS/runtime state may reset.
+                try { ResizeCompositionForCurrentViewportPreserveUrl("app_fullscreen_toggle"); } catch { }
+                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] App fullscreen {(_appFullscreen ? "ON" : "OFF")}"); } catch { }
+            }
+            catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] ToggleAppFullscreen failed: {ex.Message}"); } catch { } }
+        }
+
+        private void ApplyCompositionRenderSizeForCurrentViewport(bool force = false)
+        {
+            // Kept for compatibility; fullscreen toggles use ResizeCompositionForCurrentViewportPreserveUrl for a
+            // controlled one-shot resize that preserves URL while avoiding nonstop flicker.
+            try { _ = force; } catch { }
+        }
+
+        private void ResizeCompositionForCurrentViewportPreserveUrl(string reason)
+        {
+            try
+            {
+                if (_detachedToGameplay) return;
+                if (_externalMirrorMode) return; // mirror mode has no composition page to resize
+                if (_gpuCompositionCapture == null) return;
+                if (_browserUiCriticalActionInProgress) return;
+
+                GetDesiredCompositionRenderSize(out int desiredW, out int desiredH);
+                int curW = 0, curH = 0;
+                try { curW = _gpuCompositionCapture.ViewWidth; curH = _gpuCompositionCapture.ViewHeight; } catch { curW = 0; curH = 0; }
+                if (curW == desiredW && curH == desiredH) return;
+
+                string url = "";
+                try { url = _gpuCompositionCapture.CurrentUrl ?? ""; } catch { url = ""; }
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    try { url = GetResolvedHomeUrl(); } catch { url = "undernet:home"; }
+                }
+
+                _browserUiCriticalActionInProgress = true;
+                try
+                {
+                    try { _compositionWebFocused = false; _browserPointerDown = false; _browserPointerRightDown = false; } catch { }
+                    try { ReleaseAllGameKeys("resize:" + reason); } catch { }
+                    try { UnderNetBrowserInputHooks.UpdateOwnership(IsOpen && !_detachedToGameplay, false, false, false); } catch { }
+
+                    var oldCapture = _gpuCompositionCapture;
+                    _gpuCompositionCapture = null;
+                    _gpuCompositionMode = false;
+                    try { oldCapture?.SendMouseUp(0, 0, false); } catch { }
+                    try { oldCapture?.SendMouseUp(0, 0, true); } catch { }
+                    try { oldCapture?.Dispose(); } catch { }
+                    try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
+
+                    string compUserData = "";
+                    try { compUserData = System.IO.Path.Combine(GetUserDataRoot(), "WebView2Composition"); } catch { compUserData = ""; }
+                    try { EnsureDefaultBrowserExtensionDeployed(compUserData); } catch { }
+                    try { UnderNetBrowserDiagnostics.OnBrowserLoadingBegin(); UnderNetBrowserDiagnostics.OnWebViewInitStart(); } catch { }
+
+                    var newCapture = new UnderNetBrowserCompositionCapture();
+                    bool started = false;
+                    try { started = newCapture.TryStart(url, desiredW, desiredH, compUserData); } catch { started = false; }
+                    if (started)
+                    {
+                        _gpuCompositionCapture = newCapture;
+                        _gpuCompositionMode = true;
+                        _compositionWebFocused = true;
+                        try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { }
+                        try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
+                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Composition render resized ({reason}): {curW}x{curH} -> {desiredW}x{desiredH} url={TruncateUrlForLog(url)}"); } catch { }
+                    }
+                    else
+                    {
+                        try { newCapture.Dispose(); } catch { }
+                        _gpuCompositionCapture = null;
+                        _gpuCompositionMode = false;
+                        try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Composition resize restart failed ({reason})"); } catch { }
+                    }
+                }
+                finally
+                {
+                    _browserUiCriticalActionInProgress = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] ResizeCompositionForCurrentViewportPreserveUrl failed ({reason}): {ex.Message}"); } catch { }
+            }
+        }
+
         // Composition mode polls page fullscreen state during OnUpdate to hide/show chrome.
 
         private void CloseAppToTvHome()
@@ -4536,7 +4803,7 @@ namespace Firesky.UnderNetBrowser
                         try { esc = Input.GetKeyDown(KeyCode.Escape) || Input.GetKey(KeyCode.Escape); } catch { }
                         if (esc)
                         {
-                            bool fs = app._isPageFullscreen;
+                            bool fs = app._isPageFullscreen || app._appFullscreen;
                             try { fs = fs || (app._gpuCompositionCapture != null && app._gpuCompositionCapture.IsFullscreen); } catch { }
                             if (app._gameInputMode || fs)
                             {
@@ -4643,7 +4910,7 @@ namespace Firesky.UnderNetBrowser
                         try { esc = Input.GetKeyDown(KeyCode.Escape) || Input.GetKey(KeyCode.Escape); } catch { }
                         if (esc)
                         {
-                            bool fs = app._isPageFullscreen;
+                            bool fs = app._isPageFullscreen || app._appFullscreen;
                             try { fs = fs || (app._gpuCompositionCapture != null && app._gpuCompositionCapture.IsFullscreen); } catch { }
                             if (app._gameInputMode || fs)
                             {
