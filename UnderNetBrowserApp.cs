@@ -47,6 +47,7 @@ namespace Firesky.UnderNetBrowser
         private bool _detachedToGameplay; // app open/background but player returned to gameplay (no TV input ownership/suppression)
         // Game Input Mode: forwards real key down/up transitions for gameplay keys to WebView2.
         private bool _gameInputMode;
+        private float _lastPageFpsOverlayInjectRealtime = -999f;
         private readonly System.Collections.Generic.HashSet<int> _gameKeysHeld = new System.Collections.Generic.HashSet<int>();
         private bool _gameInputPrevUrlFocused;
         private bool _repairStateLoggedBad;
@@ -674,6 +675,21 @@ namespace Firesky.UnderNetBrowser
                 }
                 else if (_gpuCompositionCapture != null)
                 {
+                    // Best-effort: keep page FPS overlay alive in Game Input Mode across in-page navigations/reloads.
+                    try
+                    {
+                        if (_gameInputMode)
+                        {
+                            float nowRt = 0f; try { nowRt = Time.realtimeSinceStartup; } catch { nowRt = 0f; }
+                            if (nowRt - _lastPageFpsOverlayInjectRealtime >= 3f)
+                            {
+                                _lastPageFpsOverlayInjectRealtime = nowRt;
+                                InjectPageFpsOverlayScript();
+                            }
+                        }
+                    }
+                    catch { }
+
                     // Intercept built-in shortcut routes from in-page navigation/clicks (e.g. homepage shortcuts).
                     try
                     {
@@ -1871,12 +1887,14 @@ namespace Firesky.UnderNetBrowser
             if (_gameInputMode == enabled)
             {
                 try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(_gameInputMode); } catch { }
+                try { if (enabled) InjectPageFpsOverlayScript(); else RemovePageFpsOverlayScript(); } catch { }
                 return;
             }
             _gameInputMode = enabled;
             if (!enabled)
             {
                 ReleaseAllGameKeys("mode_off:" + reason);
+                try { RemovePageFpsOverlayScript(); } catch { }
             }
             else
             {
@@ -1909,6 +1927,7 @@ namespace Firesky.UnderNetBrowser
                 // Best-effort: focus canvas/document for browser games when enabling game input (retry briefly for async pages).
                 // Includes click nudge for canvas/WebGPU games that require user-activation-like focus behavior (best-effort).
                 try { _gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; function pick(){try{var ae=d.activeElement; if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable)){try{ae.blur&&ae.blur();}catch(_){}}}catch(_){} var c=null; try{c=d.querySelector('canvas');}catch(_){} if(!c){try{c=d.querySelector('video, [tabindex], iframe, embed, object, body, html');}catch(_){}} return c;} function f(){try{try{window&&window.focus&&window.focus();}catch(_){} try{(d.body||d.documentElement)&&((d.body||d.documentElement).focus&&((d.body||d.documentElement).focus()));}catch(_){} var c=pick(); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{c.focus&&c.focus({preventScroll:true});}catch(_){try{c.focus&&c.focus();}catch(__){}} try{c.click&&c.click();}catch(_){} try{var r=c.getBoundingClientRect?c.getBoundingClientRect():null; var x=r?Math.floor(r.left+r.width/2):Math.floor((window.innerWidth||800)/2); var y=r?Math.floor(r.top+r.height/2):Math.floor((window.innerHeight||600)/2); var opts={bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:1}; c.dispatchEvent(new PointerEvent('pointerdown',opts)); c.dispatchEvent(new MouseEvent('mousedown',opts)); c.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0})); c.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0})); c.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:0}));}catch(_){} }}catch(_){}} f(); setTimeout(f,50); setTimeout(f,150); setTimeout(f,350); setTimeout(f,700); setTimeout(f,1200);}catch(_){}})();"); } catch { }
+                try { InjectPageFpsOverlayScript(); } catch { }
                 try { _lastGameModeFocusNudge = Time.realtimeSinceStartup; } catch { }
                 try { UnderNetBrowserInputHooks.SetGameInputModeActive(_gameInputMode); } catch { }
                 try { UpdateInputOwnershipState(); } catch { }
@@ -1926,6 +1945,28 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
             UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] GameInputMode={( _gameInputMode ? "ON" : "OFF" )} reason={reason}");
+        }
+
+        private void InjectPageFpsOverlayScript()
+        {
+            try
+            {
+                if (_gpuCompositionCapture == null || !_gameInputMode) return;
+                const string script = "(function(){try{var id='__undernet_fps_overlay';var root=document.getElementById(id);if(!root){root=document.createElement('div');root.id=id;root.setAttribute('data-undernet-fps','1');root.style.cssText='position:fixed;top:6px;left:6px;z-index:2147483647;pointer-events:none;padding:4px 7px;border-radius:6px;background:rgba(0,0,0,.55);color:#eaffea;font:600 12px/1.2 Consolas,monospace;letter-spacing:.2px;text-shadow:0 1px 1px rgba(0,0,0,.8);white-space:nowrap;user-select:none;';root.textContent='FPS: -- (page)';(document.documentElement||document.body||document.head).appendChild(root);}var now=(performance&&performance.now)?performance.now():Date.now();if(!window.__undernetFpsState){window.__undernetFpsState={frames:0,last:now,fps:0,raf:0};}var st=window.__undernetFpsState;st.frames=(st.frames||0)+1;var dt=now-(st.last||now);if(dt>=500){st.fps=(st.frames*1000)/dt;st.frames=0;st.last=now;try{var el=document.getElementById(id);if(el)el.textContent='FPS: '+Math.round(st.fps)+' (page)';}catch(_){}}if(!st.raf){var tick=function(){try{var st2=window.__undernetFpsState; if(!st2||!document.getElementById('__undernet_fps_overlay')){ if(st2) st2.raf=0; return; } st2.frames=(st2.frames||0)+1; var n=(performance&&performance.now)?performance.now():Date.now(); var d=n-(st2.last||n); if(d>=500){ st2.fps=(st2.frames*1000)/d; st2.frames=0; st2.last=n; try{var el=document.getElementById('__undernet_fps_overlay'); if(el) el.textContent='FPS: '+Math.round(st2.fps)+' (page)';}catch(_){}} st2.raf=requestAnimationFrame(tick);}catch(_){ try{if(window.__undernetFpsState) window.__undernetFpsState.raf=0;}catch(__){} }}; st.raf=requestAnimationFrame(tick);} }catch(_){}})();";
+                _gpuCompositionCapture.ExecuteScript(script);
+            }
+            catch { }
+        }
+
+        private void RemovePageFpsOverlayScript()
+        {
+            try
+            {
+                if (_gpuCompositionCapture == null) return;
+                const string script = "(function(){try{var st=window.__undernetFpsState; if(st&&st.raf){try{cancelAnimationFrame(st.raf);}catch(_){}} try{delete window.__undernetFpsState;}catch(_){window.__undernetFpsState=null;} var el=document.getElementById('__undernet_fps_overlay'); if(el&&el.parentNode){el.parentNode.removeChild(el);} }catch(_){}})();";
+                _gpuCompositionCapture.ExecuteScript(script);
+            }
+            catch { }
         }
 
         private void ReleaseAllGameKeys(string reason)
