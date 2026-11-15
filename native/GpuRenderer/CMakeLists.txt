@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # WebView2 native package (for CompositionController hosting mode)
-set(WEBVIEW2_NUGET_ROOT "C:/Users/Administrator/.nuget/packages/microsoft.web.webview2/1.0.2903.40/build/native" CACHE PATH "Path to Microsoft.Web.WebView2 native build folder")
+set(WEBVIEW2_NUGET_ROOT "C:/Users/Administrator/.nuget/packages/microsoft.web.webview2/1.0.4314.35/build/native" CACHE PATH "Path to Microsoft.Web.WebView2 native build folder")
 
 add_library(UnderNetGpuRenderer SHARED
     src/UnderNetGpuRenderer.cpp

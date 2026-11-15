@@ -92,7 +92,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Managed WebView2 Core wrapper (Evergreen distribution; runtime is system-installed). Updated from 1.0.2903.40. -->
+    <!-- Managed WebView2 Core wrapper (Evergreen distribution; runtime is system-installed). Updated to 1.0.4314.35. -->
     <Reference Include="Microsoft.Web.WebView2.Core">
       <HintPath>Redist\WebView2\lib\Microsoft.Web.WebView2.Core.dll</HintPath>
       <Private>True</Private>
