@@ -21,7 +21,7 @@ namespace Firesky.UnderNetBrowser
         protected override string AppTitle => "UnderNet";
 
         private Sprite? _icon;
-        protected override Sprite? Icon => _icon ??= LoadOrCreateIcon();
+        protected override Sprite Icon => _icon ??= LoadOrCreateIcon();
 
         private RawImage? _videoDisplay;
         private RectTransform? _videoRT;
@@ -165,7 +165,7 @@ namespace Firesky.UnderNetBrowser
                         var activeDup = _activeInstance;
                         if (activeDup != null)
                         {
-                            try { activeDup.ShutdownBrowserRuntime(reason); } catch { }
+                            try { activeDup.ShutdownBrowserRuntime(reason ?? "unknown"); } catch { }
                         }
                         else
                         {
@@ -185,7 +185,7 @@ namespace Firesky.UnderNetBrowser
                 var active = _activeInstance;
                 if (active != null)
                 {
-                    active.ShutdownBrowserRuntime(reason);
+                    active.ShutdownBrowserRuntime(reason ?? "unknown");
                 }
                 else
                 {
@@ -200,7 +200,7 @@ namespace Firesky.UnderNetBrowser
             }
         }
 
-        private void ShutdownBrowserRuntime(string reason)
+        private void ShutdownBrowserRuntime(string? reason)
         {
             try
             {
@@ -2305,7 +2305,7 @@ namespace Firesky.UnderNetBrowser
                         try { _gpuCompositionCapture.SendKey(WM_KEYDOWN, 0x1B, 0); _gpuCompositionCapture.SendKey(WM_KEYUP, 0x1B, 0); } catch { }
                         try
                         {
-                            _gpuCompositionCapture.ExecuteScript(
+                            _gpuCompositionCapture?.ExecuteScript(
                                 "(function(){try{var d=document; var fs=d.fullscreenElement||d.webkitFullscreenElement||d.mozFullScreenElement||d.msFullscreenElement; if(fs){try{(d.exitFullscreen||d.webkitExitFullscreen||d.mozCancelFullScreen||d.msExitFullscreen||function(){}).call(d);}catch(_){} try{if(fs.exitFullscreen)fs.exitFullscreen();}catch(_){} }" +
                                 "var e=d.activeElement||d.body; var k={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true,composed:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{window.dispatchEvent(new KeyboardEvent('keydown',k)); window.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} " +
                                 "try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
@@ -2342,7 +2342,7 @@ namespace Firesky.UnderNetBrowser
                                 {
                                     try { _gpuCompositionCapture.RequestFocus(); } catch { }
                                 }
-                                const uint wmKd = 0x0100, wmKu = 0x0101, wmCh = 0x0102;
+
                                 if (spaceDown)
                                 {
                                     try { SendSpacePlayPauseScriptFallback(); } catch { }
@@ -2427,7 +2427,7 @@ namespace Firesky.UnderNetBrowser
                     }
                     if (textBatch != null && textBatch.Length > 0)
                     {
-                        try { _gpuCompositionCapture.SendText(textBatch.ToString()); MarkWebTextEntryActivity("textBatchFlush"); } catch { }
+                        try { _gpuCompositionCapture?.SendText(textBatch.ToString()); MarkWebTextEntryActivity("textBatchFlush"); } catch { }
                     }
                     if (sentChars > 0 || sentCtrl > 0)
                         LogCompositionTypingDiag($"inputString len={s.Length} chars={sentChars} ctrl={sentCtrl} (textInject+keys) urlFocused={urlFocused} webFocused={webFocused} ptr={ptrOver}");
@@ -2435,9 +2435,11 @@ namespace Firesky.UnderNetBrowser
 
                 void SendVk(ulong vk, bool asChar = false, char ch = '\0')
                 {
-                    _gpuCompositionCapture.SendKey(WM_KD, vk, MakeKeyLParam((int)vk, false));
-                    if (asChar && ch != '\0') _gpuCompositionCapture.SendKey(WM_CH, ch, 0);
-                    _gpuCompositionCapture.SendKey(WM_KU, vk, MakeKeyLParam((int)vk, true));
+                    var cap = _gpuCompositionCapture;
+                    if (cap == null) return;
+                    cap.SendKey(WM_KD, vk, MakeKeyLParam((int)vk, false));
+                    if (asChar && ch != '\0') cap.SendKey(WM_CH, ch, 0);
+                    cap.SendKey(WM_KU, vk, MakeKeyLParam((int)vk, true));
                     sentVks++;
                 }
 
@@ -2448,7 +2450,7 @@ namespace Firesky.UnderNetBrowser
                     try
                     {
                         // Fallback for composition key delivery: mutate focused editable element and emit events.
-                        _gpuCompositionCapture.ExecuteScript(
+                        _gpuCompositionCapture?.ExecuteScript(
                             "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Backspace',code:'Backspace',keyCode:8,which:8,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
                             "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} " +
                             "else if(e.isContentEditable){try{document.execCommand('deleteBackward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
@@ -2465,7 +2467,7 @@ namespace Firesky.UnderNetBrowser
                     {
                         // Fallback for composition key delivery: dispatch Enter and attempt form submission/search submit.
                         // Includes site-specific fallbacks (e.g. YouTube search button) since synthetic key events may be ignored.
-                        _gpuCompositionCapture.ExecuteScript(
+                        _gpuCompositionCapture?.ExecuteScript(
                             "(function(){try{var e=document.activeElement||document.body; function fireK(t,el){try{el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true,composed:true}));}catch(_){}} fireK('keydown',e); fireK('keypress',e); fireK('keyup',e);" +
                             "var el=e; try{var yts=document.querySelector('button#search-icon-legacy, ytd-searchbox button#search-icon-legacy, ytd-masthead #search-icon-legacy'); if(yts){yts.click();}}catch(_){} " +
                             "var f=el&&el.form?el.form:(el&&el.closest?el.closest('form'):null); if(f){try{if(f.requestSubmit)f.requestSubmit(); else f.submit();}catch(_){}} " +
@@ -2493,7 +2495,7 @@ namespace Firesky.UnderNetBrowser
                         SendVk(0x1B);
                         try
                         {
-                            _gpuCompositionCapture.ExecuteScript(
+                            _gpuCompositionCapture?.ExecuteScript(
                                 "(function(){try{var d=document; var fs=d.fullscreenElement||d.webkitFullscreenElement||d.mozFullScreenElement||d.msFullscreenElement; if(fs){try{(d.exitFullscreen||d.webkitExitFullscreen||d.mozCancelFullScreen||d.msExitFullscreen||function(){}).call(d);}catch(_){} try{if(fs.exitFullscreen)fs.exitFullscreen();}catch(_){} }" +
                                 "var e=d.activeElement||d.body; var k={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true,composed:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{window.dispatchEvent(new KeyboardEvent('keydown',k)); window.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} " +
                                 "try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
@@ -2529,7 +2531,7 @@ namespace Firesky.UnderNetBrowser
                 if (Input.GetKeyDown(KeyCode.Delete)) { SendVk(0x2E); MarkWebTextEntryActivity("deleteKey");
                     try
                     {
-                        _gpuCompositionCapture.ExecuteScript(
+                        _gpuCompositionCapture?.ExecuteScript(
                             "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Delete',code:'Delete',keyCode:46,which:46,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
                             "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} " +
                             "else if(e.isContentEditable){try{document.execCommand('deleteForward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
@@ -2951,22 +2953,25 @@ namespace Firesky.UnderNetBrowser
                             var text = clip.Replace("\r", "").Replace("\n", " ").Replace("\t", " ").Trim();
                             const int maxUrlPasteChars = 2048;
                             if (text.Length > maxUrlPasteChars) text = text.Substring(0, maxUrlPasteChars);
-                            _urlInput.text = text;
-                            _compositionWebFocused = false;
-                            try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(_urlInput.gameObject); } catch { }
-                            try { _urlInput.ActivateInputField(); } catch { }
-                            try { _urlInput.Select(); } catch { }
-                            try
+                            if (_urlInput != null)
                             {
-                                int end = (_urlInput.text ?? "").Length;
-                                _urlInput.caretPosition = end;
-                                _urlInput.selectionAnchorPosition = end;
-                                _urlInput.selectionFocusPosition = end;
+                                _urlInput.text = text;
+                                _compositionWebFocused = false;
+                                try { UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(_urlInput.gameObject); } catch { }
+                                try { _urlInput.ActivateInputField(); } catch { }
+                                try { _urlInput.Select(); } catch { }
+                                try
+                                {
+                                    int end = (_urlInput.text ?? "").Length;
+                                    _urlInput.caretPosition = end;
+                                    _urlInput.selectionAnchorPosition = end;
+                                    _urlInput.selectionFocusPosition = end;
+                                }
+                                catch { }
+                                try { if (_urlInput.textComponent != null) _urlInput.textComponent.text = _urlInput.text; } catch { }
+                                try { _urlInput.ForceLabelUpdate(); } catch { }
+                                try { SetUrlDisplayText(_urlInput.text ?? ""); } catch { }
                             }
-                            catch { }
-                            try { if (_urlInput.textComponent != null) _urlInput.textComponent.text = _urlInput.text; } catch { }
-                            try { _urlInput.ForceLabelUpdate(); } catch { }
-                            try { SetUrlDisplayText(_urlInput.text ?? ""); } catch { }
                             // Keep URL bar as the active target after paste (prevent web/game focus stealing on repeated Ctrl+V).
                             _compositionWebFocused = false;
                         }
@@ -2981,13 +2986,13 @@ namespace Firesky.UnderNetBrowser
             }
 
             // Non-composition fallback web-focused paste guard (rare): avoid hijacking into address bar.
-            if (ctrl && Input.GetKeyDown(KeyCode.V) && _compositionWebFocused && !_urlInput.isFocused)
+            if (ctrl && Input.GetKeyDown(KeyCode.V) && _compositionWebFocused && _urlInput != null && !_urlInput.isFocused)
             {
                 LogCompositionTypingDiag($"Ctrl+V ignored for address bar while webFocused (non-composition path)");
                 return;
             }
 
-            if (_urlInput.isFocused && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
+            if (_urlInput != null && _urlInput.isFocused && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
             {
                 try { UnderNetBrowserInputHooks.SuppressEnterForGameBriefly(0.2f); } catch { }
                 var text = _urlInput.text?.Trim();
@@ -3212,7 +3217,8 @@ namespace Firesky.UnderNetBrowser
                         try { types = asm.GetTypes(); } catch { continue; }
                         foreach (var t in types)
                         {
-                            var tn = t?.FullName ?? t?.Name ?? "";
+                            if (t == null) continue;
+                            var tn = t.FullName ?? t.Name ?? "";
                             // Common Steamworks.NET / Facepunch / Il2Cpp wrappers
                             if (tn.EndsWith(".SteamFriends", StringComparison.Ordinal) || tn.EndsWith(".SteamUser", StringComparison.Ordinal) || tn == "SteamFriends" || tn == "SteamUser")
                             {
@@ -3492,7 +3498,8 @@ namespace Firesky.UnderNetBrowser
                 {
                     try
                     {
-                        var id = Path.GetFileName(dir?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        if (string.IsNullOrWhiteSpace(dir)) continue;
+                        var id = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                         if (!IsSafeAppId(id)) continue;
                         var index = Path.Combine(dir, "index.html");
                         if (!File.Exists(index)) continue;
@@ -3583,7 +3590,7 @@ namespace Firesky.UnderNetBrowser
                 if (!force && string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal)) return;
                 _lastHomepageInstalledAppsPayload = payload;
                 var script = "(function(){try{if(window.__underNetSetInstalledApps)window.__underNetSetInstalledApps(" + payload + ");}catch(e){}})();";
-                try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+                try { app._gpuCompositionCapture?.ExecuteScript(script); } catch { }
             }
             catch { }
         }
@@ -3644,7 +3651,7 @@ namespace Firesky.UnderNetBrowser
                 // Force reinjection when navigating/reloading homepage (browser restart, hard reset, or leaving/returning)
                 if (!string.Equals(cur, _lastHomepageGameTimeUrl, StringComparison.Ordinal))
                 {
-                    _lastHomepageGameTimeUrl = cur;
+                    _lastHomepageGameTimeUrl = cur ?? string.Empty;
                     _lastHomepageGameTimePayload = string.Empty;
                 }
 
@@ -7748,8 +7755,8 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 string[] memberNames = { "CanChangeEquippedItem", "canChangeEquippedItem", "EquippingEnabled", "equippingEnabled", "HotbarEnabled", "hotbarEnabled", "ScrollEnabled", "scrollEnabled" };
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                assembliesTotal = assemblies?.Length ?? 0;
+                var assemblies = AppDomain.CurrentDomain.GetAssemblies() ?? Array.Empty<System.Reflection.Assembly>();
+                assembliesTotal = assemblies.Length;
 
                 foreach (var asm in assemblies)
                 {
@@ -8858,7 +8865,7 @@ namespace Firesky.UnderNetBrowser
             try { return Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch { return null!; }
         }
 
-        private Sprite? LoadOrCreateIcon()
+        private Sprite LoadOrCreateIcon()
         {
             try
             {
@@ -8906,7 +8913,7 @@ namespace Firesky.UnderNetBrowser
                 var asmPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
                 var asmDir = string.IsNullOrEmpty(asmPath) ? "" : System.IO.Path.GetDirectoryName(asmPath);
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? "";
-                string[] candidates = new[]
+                string?[] candidates = new[]
                 {
                     string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "UnderNetIcon.png"),
                     string.IsNullOrEmpty(asmDir) ? null : System.IO.Path.Combine(asmDir, "UnderNetBrowser", "UnderNetIcon.png"),
@@ -8937,7 +8944,7 @@ namespace Firesky.UnderNetBrowser
             return CreateDefaultIcon();
         }
 
-        private Sprite? CreateDefaultIcon()
+        private Sprite CreateDefaultIcon()
         {
             try
             {
@@ -8998,7 +9005,11 @@ namespace Firesky.UnderNetBrowser
                 try { sprite.name = "FireskyUnderNetBrowser_Icon"; } catch { }
                 return sprite;
             }
-            catch { return null; }
+            catch
+            {
+                var tex = Texture2D.whiteTexture;
+                return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+            }
         }
 
         private void OnDestroy()

@@ -74,7 +74,7 @@ namespace Firesky.UnderNetBrowser
             catch { }
         }
 
-        private static System.Reflection.Assembly? OnAssemblyResolve(object sender, ResolveEventArgs args)
+        private static System.Reflection.Assembly? OnAssemblyResolve(object? sender, ResolveEventArgs args)
         {
             try
             {
