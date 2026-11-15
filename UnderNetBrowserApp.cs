@@ -1022,6 +1022,10 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
+                // Fast path: avoid repeated filesystem scans/writes and deploy logs during in-app ticks/calls.
+                // (A new mod/session load resets this flag; managed homepage version upgrades still run on first ensure.)
+                if (_webAppsFoundationEnsured) return;
+
                 Directory.CreateDirectory(GetHomepageDir());
                 Directory.CreateDirectory(GetAppsRootDir());
 
@@ -1371,15 +1375,16 @@ namespace Firesky.UnderNetBrowser
                     }
 
                     // Last-resort minimal fallback (source files should ship with mod). Mark as managed so future updates can auto-replace.
+                    string marker = "<!-- " + ManagedHomepageMarkerPrefix + ManagedHomepageVersion + " -->";
                     string fallback = fileName.Equals("index.html", StringComparison.OrdinalIgnoreCase)
-                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>"
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + marker + "<title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>"
                         : fileName.Equals("games.html", StringComparison.OrdinalIgnoreCase)
-                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + marker + "<title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
                         : fileName.Equals("settings.html", StringComparison.OrdinalIgnoreCase)
-                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + marker + "<title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
                         : fileName.Equals("notepad.html", StringComparison.OrdinalIgnoreCase)
-                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Notepad</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Notepad</h1><p>Notepad page source file missing. Reinstall mod files or restore <code>Homepage/notepad.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
-                        : "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Page</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet</h1><p>Page source file missing.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>";
+                        ? "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + marker + "<title>UnderNet Notepad</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Notepad</h1><p>Notepad page source file missing. Reinstall mod files or restore <code>Homepage/notepad.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>"
+                        : "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + marker + "<title>UnderNet Page</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet</h1><p>Page source file missing.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>";
                     try { File.WriteAllText(targetPath, fallback); } catch { }
                     return;
                 }
@@ -1455,11 +1460,11 @@ namespace Firesky.UnderNetBrowser
             }
         }
 
-        private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>");
+        private static string BuildDefaultHomepageHtml() => ReadBundledHomepageHtmlOrFallback("index.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- " + ManagedHomepageMarkerPrefix + ManagedHomepageVersion + " --><title>UnderNet Home</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>UnderNet Home</h1><p>Homepage source file missing. Reinstall mod files or restore <code>Homepage/index.html</code>.</p><p><a href=\"https://www.google.com/ai\" style=\"color:#7cff6b\">AI</a> | <a href=\"games.html\" style=\"color:#7cff6b\">Games</a> | <a href=\"settings.html\" style=\"color:#7cff6b\">Settings</a> | <a href=\"notepad.html\" style=\"color:#7cff6b\">Notepad</a></p></body></html>");
 
-        private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
+        private static string BuildGamesPageHtml() => ReadBundledHomepageHtmlOrFallback("games.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- " + ManagedHomepageMarkerPrefix + ManagedHomepageVersion + " --><title>UnderNet Games</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Games</h1><p>Games page source file missing. Reinstall mod files or restore <code>Homepage/games.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
 
-        private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- UnderNetBrowser:managed-homepage version=5 --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
+        private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- " + ManagedHomepageMarkerPrefix + ManagedHomepageVersion + " --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
 
         private static string BuildExampleAppHtml()
         {
@@ -3620,7 +3625,7 @@ namespace Firesky.UnderNetBrowser
                 if (now >= _nextHomepageGameTimeTickDiagRealtime)
                 {
                     _nextHomepageGameTimeTickDiagRealtime = now + 10f;
-                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync tick: entered open={app.IsOpen} active={( _activeInstance != null)}"); } catch { }
+                    try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage game-time sync tick: entered open={app.IsOpen} active={( _activeInstance != null)}"); } catch { }
                 }
 
                 var cur = "";
@@ -9049,12 +9054,52 @@ namespace Firesky.UnderNetBrowser
             float targetAspect = 16f / 9f;
             try
             {
-                var vrt = _videoDisplay != null ? _videoDisplay.rectTransform : null;
-                if (vrt != null)
+                // Compute aspect from the intended content viewport (chrome visible vs hidden/app fullscreen)
+                // so composition render resolution tracks the actual available area and preserves full pixel coverage.
+                bool showChrome = !(_isPageFullscreen || _appFullscreen);
+                float containerW = 0f, containerH = 0f;
+                try
                 {
-                    var r = vrt.rect;
-                    if (r.height > 1f && r.width > 1f)
-                        targetAspect = Mathf.Clamp(r.width / r.height, 0.5f, 4f);
+                    var parentRt = _videoRT != null ? _videoRT.parent as RectTransform : null;
+                    if (parentRt != null)
+                    {
+                        containerW = parentRt.rect.width;
+                        containerH = parentRt.rect.height;
+                    }
+                    if (containerW <= 10f || containerH <= 10f)
+                    {
+                        var vrt = _videoDisplay != null ? _videoDisplay.rectTransform : null;
+                        if (vrt != null)
+                        {
+                            containerW = vrt.rect.width;
+                            containerH = vrt.rect.height;
+                            showChrome = false; // fallback: treat video rect as content area
+                        }
+                    }
+                }
+                catch { }
+
+                if (containerW > 10f && containerH > 10f)
+                {
+                    float contentW = containerW;
+                    float contentH = containerH;
+                    if (showChrome)
+                    {
+                        // Mirror ApplyChromeLayout fixed compact chrome sizing.
+                        float chromePx = Mathf.Clamp(Mathf.Round(containerH * 0.07f), 24f, 28f);
+                        contentH = Mathf.Max(1f, containerH - chromePx);
+                    }
+                    targetAspect = Mathf.Clamp(contentW / Mathf.Max(1f, contentH), 0.5f, 4f);
+                }
+                else
+                {
+                    var vrt = _videoDisplay != null ? _videoDisplay.rectTransform : null;
+                    if (vrt != null)
+                    {
+                        var r = vrt.rect;
+                        if (r.height > 1f && r.width > 1f)
+                            targetAspect = Mathf.Clamp(r.width / r.height, 0.5f, 4f);
+                    }
                 }
             }
             catch { targetAspect = 16f / 9f; }
