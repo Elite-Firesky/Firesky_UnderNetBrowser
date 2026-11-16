@@ -9097,7 +9097,11 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 float nowRt = Time.realtimeSinceStartup;
-                // Healthy-state fast path: throttle checks to reduce per-update overhead.
+                // Throttle checks to reduce per-update overhead/log spam on degenerate upstream transforms.
+                // OnOpened should run immediately so initial UI state can be repaired promptly.
+                if (!string.Equals(label, "OnOpened", StringComparison.Ordinal) && nowRt < _repairNextAllowedRealtime)
+                    return;
+                // Default healthy-state throttle; bad-state paths below may extend this.
                 _repairNextAllowedRealtime = nowRt + (_repairBackoffActive ? 5f : 1f);
 
                 if (from == null) return;
