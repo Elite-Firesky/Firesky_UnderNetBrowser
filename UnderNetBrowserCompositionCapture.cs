@@ -59,7 +59,7 @@ namespace Firesky.UnderNetBrowser
                 }
                 if (_renderEventFunc == IntPtr.Zero)
                 {
-                    MelonLogger.Warning("[Firesky UnderNet Browser] [GPU-Comp] Native render event function not available.");
+                    UnderNetBrowserConfig.LogWarning("[UnderNetBrowser][GPU-Comp] Native render event function not available.");
                     return false;
                 }
 
@@ -72,22 +72,22 @@ namespace Firesky.UnderNetBrowser
                     var browserArgs = UnderNetBrowserConfig.BuildWebView2AdditionalBrowserArguments();
                     UnderNetBrowserGpuNative.CompSetAdditionalBrowserArguments(string.IsNullOrWhiteSpace(browserArgs) ? null : browserArgs);
                     if (!string.IsNullOrWhiteSpace(browserArgs))
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Additional browser arguments configured: '{browserArgs}'");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU-Comp] Additional browser arguments configured: '{browserArgs}'");
                 }
                 catch { }
                 try { UnderNetBrowserGpuNative.CompSetParams(_lastUrl, _width, _height, userDataFolder); } catch { }
                 _startRequested = true;
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Requested composition browser start url='{_lastUrl}' target={_width}x{_height} userData='{userDataFolder ?? ""}'");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU-Comp] Requested composition browser start url='{_lastUrl}' target={_width}x{_height} userData='{userDataFolder ?? ""}'");
                 return true;
             }
             catch (DllNotFoundException)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] UnderNetGpuRenderer.dll not found/unloadable. LoadedPath='{UnderNetBrowserGpuNative.LoadedPath}'.");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] UnderNetGpuRenderer.dll not found/unloadable. LoadedPath='{UnderNetBrowserGpuNative.LoadedPath}'.");
                 return false;
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] Start failed: {ex.GetType().Name}: {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] Start failed: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }
@@ -115,9 +115,10 @@ namespace Firesky.UnderNetBrowser
             {
                 UnderNetBrowserGpuNative.CompSendKey(msg, wParam, lParam);
                 _compSendKeySuccessCount++;
-                if (_compSendKeySuccessCount <= 10 || _compSendKeySuccessCount % 50 == 0)
+                if ((UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true)
+                    && (_compSendKeySuccessCount <= 10 || _compSendKeySuccessCount % 50 == 0))
                 {
-                    try { MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] SendKey->native ok #{_compSendKeySuccessCount} msg=0x{msg:X} wParam=0x{wParam:X}"); } catch { }
+                    try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU-Comp] SendKey->native ok #{_compSendKeySuccessCount} msg=0x{msg:X} wParam=0x{wParam:X}"); } catch { }
                 }
             }
             catch (Exception ex)
@@ -125,7 +126,7 @@ namespace Firesky.UnderNetBrowser
                 if (!_compSendKeyErrorLogged)
                 {
                     _compSendKeyErrorLogged = true;
-                    try { MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] SendKey P/Invoke failed: {ex.GetType().Name}: {ex.Message}"); } catch { }
+                    try { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] SendKey P/Invoke failed: {ex.GetType().Name}: {ex.Message}"); } catch { }
                 }
             }
         }
@@ -142,12 +143,12 @@ namespace Firesky.UnderNetBrowser
         public void SetZoomFactor(double zoomFactor)
         {
             try { UnderNetBrowserGpuNative.CompSetZoomFactor(zoomFactor); }
-            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) MelonLogger.Warning($"[UnderNetBrowser] CompSetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); }
+            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][GPU-Comp] CompSetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); }
         }
         public double GetZoomFactor()
         {
             try { return UnderNetBrowserGpuNative.CompGetZoomFactor(); }
-            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) MelonLogger.Warning($"[UnderNetBrowser] CompGetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); return 1.0; }
+            catch (Exception ex) { if (UnderNetBrowserConfig.DebugLogging?.Value == true) UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][GPU-Comp] CompGetZoomFactor failed (native rebuild/restart required?): {ex.Message}"); return 1.0; }
         }
         public string CurrentUrl { get { try { return UnderNetBrowserGpuNative.GetCompCurrentUrlString(); } catch { return ""; } } }
         public bool IsFullscreen { get { try { return _createIssued && UnderNetBrowserGpuNative.CompIsFullscreen() == 1; } catch { return false; } } }
@@ -172,7 +173,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] TryResize failed: {ex.Message}"); } catch { }
+                try { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] TryResize failed: {ex.Message}"); } catch { }
                 return false;
             }
         }
@@ -215,22 +216,28 @@ namespace Firesky.UnderNetBrowser
                     var err = UnderNetBrowserGpuNative.GetLastErrorString();
                     var diag = "";
                     try { diag = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
-                    string msg = $"[GPU-Comp] status={status} targetReady={targetReady} deviceReady={devReady} comp={compStatus} gfx={SystemInfo.graphicsDeviceType} err='{err}' diag='{diag}'";
+                    string msg = $"[UnderNetBrowser][GPU-Comp] status={status} targetReady={targetReady} deviceReady={devReady} comp={compStatus} gfx={SystemInfo.graphicsDeviceType} err='{err}' diag='{diag}'";
                     bool isNoFrameYet = diag.IndexOf("no frame yet", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool canLogNoFrame = !isNoFrameYet || changed || (Time.realtimeSinceStartup - _lastNoFrameLogTime >= 5f);
                     if (isNoFrameYet && canLogNoFrame) _lastNoFrameLogTime = Time.realtimeSinceStartup;
 
-                    if (changed || compStatus < 0 || (compStatus == 2 && canLogNoFrame))
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] {msg}");
-                    else if (!(compStatus == 2 && isNoFrameYet))
-                        UnderNetBrowserConfig.Log(msg);
+                    bool diagnosticsOn = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
+                    if (diagnosticsOn)
+                    {
+                        // Avoid steady-state heartbeat spam while diagnostics are enabled; log changes, errors, and rate-limited startup states.
+                        bool shouldLogStatus = changed || important;
+                        if (compStatus == 2 && isNoFrameYet)
+                            shouldLogStatus = changed || canLogNoFrame;
+                        if (shouldLogStatus)
+                            UnderNetBrowserConfig.LogDiagnostic(msg);
+                    }
 
                     if (compStatus < 0)
                     {
                         string compErr = "";
                         try { compErr = UnderNetBrowserGpuNative.GetLastErrorString(); } catch { }
                         try { if (string.IsNullOrWhiteSpace(compErr)) compErr = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
-                        MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] startup/runtime error='{compErr}'");
+                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] startup/runtime error='{compErr}'");
                     }
                 }
             }
@@ -239,7 +246,7 @@ namespace Firesky.UnderNetBrowser
                 if (Time.realtimeSinceStartup - _lastLog > 5f)
                 {
                     _lastLog = Time.realtimeSinceStartup;
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] Tick failed: {ex.GetType().Name}: {ex.Message}");
+                    UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] Tick failed: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
@@ -265,14 +272,14 @@ namespace Firesky.UnderNetBrowser
                 IntPtr nativePtr = _unityTexture.GetNativeTexturePtr();
                 if (nativePtr == IntPtr.Zero)
                 {
-                    MelonLogger.Warning("[Firesky UnderNet Browser] [GPU-Comp] GetNativeTexturePtr returned null.");
+                    UnderNetBrowserConfig.LogWarning("[UnderNetBrowser][GPU-Comp] GetNativeTexturePtr returned null.");
                     return false;
                 }
 
                 _width = width; _height = height;
                 int setOk = UnderNetBrowserGpuNative.SetTargetTexture(nativePtr, _width, _height);
                 if (log)
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Comp] Unity-owned target texture ready ({_width}x{_height}) nativePtr=0x{nativePtr.ToInt64():X} setTarget={setOk} gfx={SystemInfo.graphicsDeviceType}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU-Comp] Unity-owned target texture ready ({_width}x{_height}) nativePtr=0x{nativePtr.ToInt64():X} setTarget={setOk} gfx={SystemInfo.graphicsDeviceType}");
 
                 if (issueInitEvent && _renderEventFunc != IntPtr.Zero)
                     GL.IssuePluginEvent(_renderEventFunc, UnderNetBrowserGpuNative.EventTargetInitUpdate);
@@ -281,7 +288,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Comp] CreateOrResizeTargetTexture failed: {ex.GetType().Name}: {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] CreateOrResizeTargetTexture failed: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }

@@ -126,7 +126,6 @@ BrowserExtensions/**/build/
 BrowserExtensions/**/dist/
 BrowserExtensions/**/generated/
 BrowserExtensions/**/node_modules/
-BrowserExtensions/uBlockOriginLite/log.txt
 
 # Local machine-specific / secrets
 *.local

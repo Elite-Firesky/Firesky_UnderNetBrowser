@@ -39,16 +39,16 @@ namespace Firesky.UnderNetBrowser
 #endif
                         _loaded = true;
                         _loadedPath = path;
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] [GPU-Test] Loaded native DLL: {path}");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU] Loaded native DLL: {path}");
                         return true;
                     }
                     catch (Exception ex)
                     {
-                        MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Test] Failed loading '{path}': {ex.GetType().Name}: {ex.Message}");
+                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU] Failed loading '{path}': {ex.GetType().Name}: {ex.Message}");
                     }
                 }
 
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [GPU-Test] Native DLL not found. Probed: {string.Join(" | ", candidates)}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU] Native DLL not found. Probed: {string.Join(" | ", candidates)}");
                 return false;
             }
         }

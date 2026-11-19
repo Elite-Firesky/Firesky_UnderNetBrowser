@@ -103,15 +103,18 @@ namespace Firesky.UnderNetBrowser
                     ok += TryHookGameplayActionHandlers(); // WASD/movement/jump/crouch/sprint/interact suppression while TV active
                     ok += TryHookUnityInputEnter() ? 1 : 0; // best-effort: prevent game chat/mod hotkeys consuming Enter used by browser UI/web inputs
                     _installed = ok > 0;
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] Init complete. installed={_installed} hooks={_hookedMethods.Count} failures={_hookFailures.Count} optionalUnavailable={_hookNotes.Count}");
-                    foreach (var h in _hookedMethods) MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] Hooked: {h}");
-                    foreach (var n in _hookNotes) MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] Optional/unavailable: {n}");
-                    foreach (var f in _hookFailures) MelonLogger.Warning($"[Firesky UnderNet Browser] [InputHooks] Hook failed: {f}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][InputHooks] Init complete. installed={_installed} hooks={_hookedMethods.Count} failures={_hookFailures.Count} optionalUnavailable={_hookNotes.Count}");
+                    if (UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true)
+                    {
+                        foreach (var h in _hookedMethods) UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][InputHooks] Hooked: {h}");
+                        foreach (var n in _hookNotes) UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][InputHooks] Optional/unavailable: {n}");
+                    }
+                    foreach (var f in _hookFailures) UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][InputHooks] Hook failed: {f}");
                 }
                 catch (Exception ex)
                 {
                     _hookFailures.Add($"EnsureInstalled exception: {ex.Message}");
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [InputHooks] EnsureInstalled exception: {ex}");
+                    UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][InputHooks] EnsureInstalled exception: {ex}");
                 }
             }
         }
@@ -131,11 +134,11 @@ namespace Firesky.UnderNetBrowser
                     _initAttempted = false;
                     _harmony = null;
                 }
-                MelonLogger.Msg("[Firesky UnderNet Browser] [InputHooks] Shutdown/unpatched.");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser][InputHooks] Shutdown/unpatched.");
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [InputHooks] Shutdown exception: {ex.Message}");
+                UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][InputHooks] Shutdown exception: {ex.Message}");
             }
         }
 
@@ -143,11 +146,11 @@ namespace Firesky.UnderNetBrowser
         {
             try
             {
-                if (UnderNetBrowserConfig.DebugLogging?.Value != true) return;
+                if (UnderNetBrowserConfig.DebugLogging?.Value != true && UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value != true) return;
                 long now = DateTime.UtcNow.Ticks;
-                if (!force && (now - System.Threading.Interlocked.Read(ref _lastDiagLogTick)) < TimeSpan.FromSeconds(5).Ticks) return;
+                if (!force && (now - System.Threading.Interlocked.Read(ref _lastDiagLogTick)) < TimeSpan.FromSeconds(15).Ticks) return;
                 System.Threading.Interlocked.Exchange(ref _lastDiagLogTick, now);
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] diag hooks={_hookedMethods.Count} installed={_installed} ownership={_ownershipActive} blockSelect={_blockHotbarSelection} suppressMove={_suppressGameplayMovement} open={_appOpen} url={_urlBarFocused} web={_webFocused} ptr={_pointerOverBrowser} wheelBlocked={System.Threading.Interlocked.Read(ref _wheelBlocked)} numBlocked={System.Threading.Interlocked.Read(ref _numberBlocked)} selBlocked={System.Threading.Interlocked.Read(ref _selectionBlocked)} equipSlot={_lastObservedEquipSlot} equipChanges={System.Threading.Interlocked.Read(ref _equipSlotObservedChanges)} transitions={_ownershipTransitions} methods='{HookedMethodsSummary}' notes={_hookNotes.Count}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][InputHooks] diag hooks={_hookedMethods.Count} installed={_installed} ownership={_ownershipActive} blockSelect={_blockHotbarSelection} suppressMove={_suppressGameplayMovement} open={_appOpen} url={_urlBarFocused} web={_webFocused} ptr={_pointerOverBrowser} wheelBlocked={System.Threading.Interlocked.Read(ref _wheelBlocked)} numBlocked={System.Threading.Interlocked.Read(ref _numberBlocked)} selBlocked={System.Threading.Interlocked.Read(ref _selectionBlocked)} equipSlot={_lastObservedEquipSlot} equipChanges={System.Threading.Interlocked.Read(ref _equipSlotObservedChanges)} transitions={_ownershipTransitions} methods='{HookedMethodsSummary}' notes={_hookNotes.Count}");
             }
             catch { }
         }
@@ -520,7 +523,7 @@ namespace Firesky.UnderNetBrowser
                 long prev = System.Threading.Interlocked.Read(ref _lastBlockedSelLogTick);
                 if ((now - prev) < TimeSpan.FromSeconds(2).Ticks) return;
                 System.Threading.Interlocked.Exchange(ref _lastBlockedSelLogTick, now);
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [InputHooks] blocked hotbar selection change target={slot} owner={instance?.GetType().FullName} ownership={_ownershipActive} appOpen={_appOpen} url={_urlBarFocused} web={_webFocused}");
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser][InputHooks] blocked hotbar selection change target={slot} owner={instance?.GetType().FullName} ownership={_ownershipActive} appOpen={_appOpen} url={_urlBarFocused} web={_webFocused}");
             }
             catch { }
         }

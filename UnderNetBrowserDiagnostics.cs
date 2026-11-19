@@ -101,7 +101,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] InitializeIfEnabled failed: {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][Diagnostics] InitializeIfEnabled failed: {ex.Message}");
             }
         }
 
@@ -139,13 +139,13 @@ namespace Firesky.UnderNetBrowser
 
                     MarkEventInternal("session_start", reason);
                     MarkPhaseInternal(Phase.A_GameplayBaseline, "session_start");
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [Diagnostics] Started. Log='{_logPath}' interval={_sampleInterval:0.###}s");
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][Diagnostics] Started. Log='{_logPath}' interval={_sampleInterval:0.###}s");
                 }
                 catch (Exception ex)
                 {
                     _enabled = false;
                     SafeCloseWriter();
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] StartSession failed: {ex.Message}");
+                    UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][Diagnostics] StartSession failed: {ex.Message}");
                 }
             }
         }
@@ -156,10 +156,10 @@ namespace Firesky.UnderNetBrowser
             {
                 if (!_enabled) return;
                 try { MarkEventInternal("session_stop", reason); } catch { }
-                try { WriteSummary(); } catch (Exception ex) { MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] WriteSummary failed: {ex.Message}"); }
+                try { WriteSummary(); } catch (Exception ex) { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][Diagnostics] WriteSummary failed: {ex.Message}"); }
                 _enabled = false;
                 SafeCloseWriter();
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [Diagnostics] Stopped ({reason}). Summary='{_summaryPath}'");
+                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][Diagnostics] Stopped ({reason}). Summary='{_summaryPath}'");
             }
         }
 
@@ -454,29 +454,29 @@ namespace Firesky.UnderNetBrowser
                 if (!inWarmupWindow)
                 {
                     if (sustainedLowFps)
-                        WarnOnce($"low_fps_{_currentPhase}", $"[Diagnostics][WARN] Sustained low FPS in {_currentPhase}: avg={s.FpsAvg:0.##} 1%low={s.Fps1Low:0.##} p99={s.FrameMsP99:0.##}ms min~={minFpsInWindow:0.##}fps");
+                        WarnOnce($"low_fps_{_currentPhase}", $"[UnderNetBrowser][Diagnostics][WARN] Sustained low FPS in {_currentPhase}: avg={s.FpsAvg:0.##} 1%low={s.Fps1Low:0.##} p99={s.FrameMsP99:0.##}ms min~={minFpsInWindow:0.##}fps");
 
                     if (spikePressure)
-                        WarnOnce($"spike_p99_{_currentPhase}_{(int)(s.SessionSec/10)}", $"[Diagnostics][WARN] Frame-time spike pressure in {_currentPhase}: p99={s.FrameMsP99:0.##}ms max={s.FrameMsMax:0.##}ms min~={minFpsInWindow:0.##}fps");
+                        WarnOnce($"spike_p99_{_currentPhase}_{(int)(s.SessionSec/10)}", $"[UnderNetBrowser][Diagnostics][WARN] Frame-time spike pressure in {_currentPhase}: p99={s.FrameMsP99:0.##}ms max={s.FrameMsMax:0.##}ms min~={minFpsInWindow:0.##}fps");
                 }
 
                 if (_phaseSamples.TryGetValue(Phase.A_GameplayBaseline, out var a) && a.Count >= 2)
                 {
                     double basePriv = a.Average(x => (double)x.PrivateBytes);
                     if (basePriv > 0 && s.PrivateBytes > basePriv * 1.35 + 100 * 1024 * 1024)
-                        WarnOnce($"mem_growth_{_currentPhase}", $"[Diagnostics][WARN] Process private bytes elevated vs baseline in {_currentPhase}: now={s.PrivateBytes / (1024 * 1024)}MB baseline~={basePriv / (1024 * 1024):0}MB");
+                        WarnOnce($"mem_growth_{_currentPhase}", $"[UnderNetBrowser][Diagnostics][WARN] Process private bytes elevated vs baseline in {_currentPhase}: now={s.PrivateBytes / (1024 * 1024)}MB baseline~={basePriv / (1024 * 1024):0}MB");
                 }
                 if ((_currentPhase == Phase.E_GameplayResumed || _currentPhase == Phase.F_Recovery) && s.WebView2Count > 0)
                 {
                     // Detached/warm browser sessions intentionally keep WebView2 alive; do not treat as lifecycle leak in that state.
                     if (!_browserIntentionallyAlive && phaseSampleCount >= 5 && phaseAgeSec >= 12f)
-                        WarnOnce($"webview2_linger_{_currentPhase}", $"[Diagnostics][WARN] WebView2 processes still present in {_currentPhase}: count={s.WebView2Count} ws={s.WebView2WorkingSet / (1024 * 1024)}MB (verify expected lifecycle/caching)");
+                        WarnOnce($"webview2_linger_{_currentPhase}", $"[UnderNetBrowser][Diagnostics][WARN] WebView2 processes still present in {_currentPhase}: count={s.WebView2Count} ws={s.WebView2WorkingSet / (1024 * 1024)}MB (verify expected lifecycle/caching)");
                 }
             }
             catch { }
         }
 
-        private static void WarnOnce(string key, string msg) { if (_warned.Add(key)) MelonLogger.Warning($"[Firesky UnderNet Browser] {msg}"); }
+        private static void WarnOnce(string key, string msg) { if (_warned.Add(key)) UnderNetBrowserConfig.LogWarning(msg); }
 
         private static void WriteSummary()
         {
@@ -524,7 +524,7 @@ namespace Firesky.UnderNetBrowser
                 sw.WriteLine("Events (last 200):");
                 foreach (var e in _events.TakeLast(200)) sw.WriteLine($"  [{e.t:0.000}s] {e.evt} :: {e.detail}");
             }
-            catch (Exception ex) { MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] Failed to write summary: {ex.Message}"); }
+            catch (Exception ex) { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][Diagnostics] Failed to write summary: {ex.Message}"); }
         }
 
         private static double AvgMB(List<SampleSnapshot> list, Func<SampleSnapshot, long> sel) => list.Average(x => sel(x) / (1024.0 * 1024.0));

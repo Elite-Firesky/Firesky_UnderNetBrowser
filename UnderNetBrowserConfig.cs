@@ -243,26 +243,113 @@ namespace Firesky.UnderNetBrowser
         private static string NormalizeLogMessage(string message)
         {
             if (string.IsNullOrEmpty(message)) return message ?? string.Empty;
-            // Avoid duplicate prefixes when callers/log sinks already include module/mod tags.
-            if (message.StartsWith("[Firesky UnderNet Browser]", StringComparison.Ordinal)) return message;
-            if (message.StartsWith("[UnderNetBrowser]", StringComparison.Ordinal)) return message;
-            return $"[UnderNetBrowser] {message}";
+
+            string msg = message;
+
+            // Strip manual mod-name prefixes and our own canonical tag to avoid duplicates.
+            // MelonLoader/MelonInfo provides the single [UnderNetBrowser] log prefix.
+            for (int i = 0; i < 8; i++)
+            {
+                bool changed = false;
+                string trimmed = msg.TrimStart();
+                if (!string.Equals(trimmed, msg, StringComparison.Ordinal)) { msg = trimmed; changed = true; }
+
+                if (msg.StartsWith("[Firesky UnderNet Browser]", StringComparison.Ordinal))
+                {
+                    msg = msg.Substring("[Firesky UnderNet Browser]".Length).TrimStart();
+                    changed = true;
+                }
+                else if (msg.StartsWith("[Firesky_UnderNet_Browser]", StringComparison.Ordinal))
+                {
+                    msg = msg.Substring("[Firesky_UnderNet_Browser]".Length).TrimStart();
+                    changed = true;
+                }
+                else if (msg.StartsWith("[UnderNetBrowser]", StringComparison.Ordinal))
+                {
+                    msg = msg.Substring("[UnderNetBrowser]".Length).TrimStart();
+                    changed = true;
+                }
+
+                if (!changed) break;
+            }
+
+            // Preserve subcomponent tags as message context without duplicating the mod tag.
+            // Example: "[GPU-Comp] status=..." -> "GPU-Comp: status=..."
+            if (msg.StartsWith("[", StringComparison.Ordinal))
+            {
+                int close = msg.IndexOf(']');
+                if (close > 0)
+                {
+                    string sub = msg.Substring(1, close - 1).Trim();
+                    string rest = msg.Substring(close + 1).TrimStart();
+
+                    if (string.IsNullOrWhiteSpace(sub) ||
+                        string.Equals(sub, "UnderNetBrowser", StringComparison.Ordinal) ||
+                        string.Equals(sub, "Firesky UnderNet Browser", StringComparison.Ordinal) ||
+                        string.Equals(sub, "Firesky_UnderNet_Browser", StringComparison.Ordinal))
+                    {
+                        return rest;
+                    }
+
+                    return rest.Length > 0 ? $"{sub}: {rest}" : $"{sub}:";
+                }
+            }
+
+            return msg;
         }
 
         public static void LogAlways(string message)
         {
-            MelonLogger.Msg(NormalizeLogMessage(message));
+            var msg = NormalizeLogMessage(message);
+            var lg = UnderNetBrowserMod.ModLogger;
+            if (lg != null) lg.Msg(msg); else MelonLogger.Msg(msg);
         }
 
+        /// <summary>Verbose debug logging (Advanced: Verbose Debug Logging).</summary>
         public static void Log(string message)
         {
             if (DebugLogging?.Value == true)
-                MelonLogger.Msg(NormalizeLogMessage(message));
+            {
+                var msg = NormalizeLogMessage(message);
+                var lg = UnderNetBrowserMod.ModLogger;
+                if (lg != null) lg.Msg(msg); else MelonLogger.Msg(msg);
+            }
+        }
+
+        /// <summary>Key diagnostics logging (Advanced: Key Diagnostics Logging or Verbose Debug Logging).</summary>
+        public static void LogDiagnostic(string message)
+        {
+            if (DebugLogging?.Value == true || AlwaysLogDiagnostics?.Value == true)
+            {
+                var msg = NormalizeLogMessage(message);
+                var lg = UnderNetBrowserMod.ModLogger;
+                if (lg != null) lg.Msg(msg); else MelonLogger.Msg(msg);
+            }
+        }
+
+        public static void LogWarning(string message)
+        {
+            var msg = NormalizeLogMessage(message);
+            var lg = UnderNetBrowserMod.ModLogger;
+            if (lg != null) lg.Warning(msg); else MelonLogger.Warning(msg);
+        }
+
+        /// <summary>Warning-level diagnostics (shown only when diagnostics/debug logging is enabled).</summary>
+        public static void LogDiagnosticWarning(string message)
+        {
+            if (DebugLogging?.Value == true || AlwaysLogDiagnostics?.Value == true)
+            {
+                var msg = NormalizeLogMessage(message);
+                var lg = UnderNetBrowserMod.ModLogger;
+                if (lg != null) lg.Warning(msg); else MelonLogger.Warning(msg);
+            }
         }
 
         public static void LogError(string message)
         {
-            MelonLogger.Error(NormalizeLogMessage(message));
+            var msg = NormalizeLogMessage(message);
+            var lg = UnderNetBrowserMod.ModLogger;
+            if (lg != null) lg.Error(msg); else MelonLogger.Error(msg);
         }
 
         public static UnityEngine.KeyCode GetKey(UnityEngine.KeyCode fallback, MelonPreferences_Entry<string>? entry)

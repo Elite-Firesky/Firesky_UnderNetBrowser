@@ -19,6 +19,7 @@ namespace Firesky.UnderNetBrowser
     {
         private static HarmonyLib.Harmony? _tvHarmony;
         private static bool _depsResolved;
+        internal static MelonLogger.Instance? ModLogger;
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
@@ -117,9 +118,11 @@ namespace Firesky.UnderNetBrowser
 
         public override void OnInitializeMelon()
         {
+            ModLogger = LoggerInstance;
             EnsureDependencyResolution();
             UnderNetBrowserConfig.Initialize();
-            MelonLogger.Msg("[Firesky UnderNet Browser] Mod initialized. TV app 'UnderNet' registered via S1API.");
+            LogInstalledWebView2RuntimeVersion();
+            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Mod initialized (TV app 'UnderNet' registered via S1API).");
 
             try
             {
@@ -128,11 +131,46 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] TVApp close patch init failed (non-fatal): {ex.Message}");
+                UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser] TVApp close patch init failed (non-fatal): {ex.Message}");
             }
 
             // Performance diagnostics (opt-in). Starts baseline session if enabled in config.
-            try { UnderNetBrowserDiagnostics.InitializeIfEnabled(); } catch (Exception ex) { MelonLogger.Warning($"[Firesky UnderNet Browser] [Diagnostics] init failed (non-fatal): {ex.Message}"); }
+            try { UnderNetBrowserDiagnostics.InitializeIfEnabled(); } catch (Exception ex) { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][Diagnostics] init failed (non-fatal): {ex.Message}"); }
+        }
+
+        private static bool _webView2RuntimeVersionLogged;
+
+        private static void LogInstalledWebView2RuntimeVersion()
+        {
+            if (_webView2RuntimeVersionLogged) return;
+            _webView2RuntimeVersionLogged = true;
+            try
+            {
+                // null = use installed/default WebView2 runtime discovery (Evergreen/fixed channels as available)
+                string? version = null;
+                try
+                {
+                    version = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString(null);
+                }
+                catch
+                {
+                    // Some loader/runtime states may throw; treat as unavailable below.
+                    version = null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(version))
+                {
+                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][WebView2] Installed runtime version: {version}");
+                }
+                else
+                {
+                    UnderNetBrowserConfig.LogWarning("[UnderNetBrowser][WebView2] Installed runtime version: not found/unavailable (Evergreen WebView2 Runtime may be missing or not discoverable).");
+                }
+            }
+            catch (Exception ex)
+            {
+                UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][WebView2] Failed to query installed runtime version (non-fatal): {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         private static void TryPatchTvAppCloseMethods()
@@ -153,12 +191,12 @@ namespace Firesky.UnderNetBrowser
                         if (prefix != null)
                         {
                             _tvHarmony.Patch(mi, prefix: new HarmonyMethod(prefix));
-                            MelonLogger.Msg($"[Firesky UnderNet Browser] Patched S1API.TVApp.TVApp.{name} (detach-close guard).");
+                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Patched S1API.TVApp.TVApp.{name} (detach-close guard).");
                         }
                     }
                     catch (Exception ex)
                     {
-                        MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch TVApp.{name}: {ex.Message}");
+                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Failed to patch TVApp.{name}: {ex.Message}");
                     }
                 }
 
@@ -179,22 +217,22 @@ namespace Firesky.UnderNetBrowser
                         if (prefix != null)
                         {
                             _tvHarmony.Patch(handleExit, prefix: new HarmonyMethod(prefix));
-                            MelonLogger.Msg("[Firesky UnderNet Browser] Patched S1API.TVApp.TVApp.HandleExit (detached exit passthrough).");
+                            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Patched S1API.TVApp.TVApp.HandleExit (detached exit passthrough).");
                         }
                     }
                     else
                     {
-                        MelonLogger.Warning("[Firesky UnderNet Browser] Could not find S1API.TVApp.TVApp.HandleExit to patch (non-fatal).");
+                        UnderNetBrowserConfig.LogDiagnosticWarning("[UnderNetBrowser] Could not find S1API.TVApp.TVApp.HandleExit to patch (non-fatal).");
                     }
                 }
                 catch (Exception ex)
                 {
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch TVApp.HandleExit: {ex.Message}");
+                    UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Failed to patch TVApp.HandleExit: {ex.Message}");
                 }
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] TryPatchTvAppCloseMethods failed: {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] TryPatchTvAppCloseMethods failed: {ex.Message}");
             }
         }
 
@@ -202,14 +240,14 @@ namespace Firesky.UnderNetBrowser
         {
             // S1API discovers TVApp subclasses after all mods are initialized.
             // By OnLateInitializeMelon, the TVApp registry should be populated.
-            MelonLogger.Msg("[Firesky UnderNet Browser] Late initialization complete.");
+            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Late initialization complete.");
         }
 
         private bool _graphicsApiLogged;
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
-            MelonLogger.Msg($"[Firesky UnderNet Browser] Scene loaded: {sceneName} (build index {buildIndex})");
+            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Scene loaded: {sceneName} (build index {buildIndex})");
 
             // Ensure browser/composition/WebView2 processes and audio are stopped when returning to menu/world unload.
             try
@@ -222,7 +260,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] Scene unload cleanup failed (non-fatal): {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Scene unload cleanup failed (non-fatal): {ex.Message}");
             }
 
             if (!_graphicsApiLogged)
@@ -230,11 +268,11 @@ namespace Firesky.UnderNetBrowser
                 _graphicsApiLogged = true;
                 try
                 {
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [Probe] Graphics API: {SystemInfo.graphicsDeviceType}, device='{SystemInfo.graphicsDeviceName}', version='{SystemInfo.graphicsDeviceVersion}'");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][Probe] Graphics API: {SystemInfo.graphicsDeviceType}, device='{SystemInfo.graphicsDeviceName}', version='{SystemInfo.graphicsDeviceVersion}'");
                 }
                 catch (Exception ex)
                 {
-                    MelonLogger.Warning($"[Firesky UnderNet Browser] [Probe] Failed to query graphics API: {ex.Message}");
+                    UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][Probe] Failed to query graphics API: {ex.Message}");
                 }
             }
         }
@@ -291,7 +329,7 @@ namespace Firesky.UnderNetBrowser
                 if (chatUiType == null)
                 {
                     // SimpleChat may load later; harmless if absent.
-                    // MelonLogger.Msg("[Firesky UnderNet Browser] SimpleChat.ChatUI not found (Enter-guard patch skipped).");
+                    // UnderNetBrowserConfig.Log("[UnderNetBrowser] SimpleChat.ChatUI not found (Enter-guard patch skipped).");
                     return;
                 }
 
@@ -305,17 +343,17 @@ namespace Firesky.UnderNetBrowser
                         var mi = chatUiType.GetMethod(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
                         if (mi == null) continue;
                         _tvHarmony.Patch(mi, prefix: new HarmonyMethod(prefix));
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] Patched SimpleChat.ChatUI.{name} (browser Enter/chat guard, best-effort).");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Patched SimpleChat.ChatUI.{name} (browser Enter/chat guard, best-effort).");
                     }
                     catch (Exception ex)
                     {
-                        MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch SimpleChat.ChatUI.{name}: {ex.Message}");
+                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Failed to patch SimpleChat.ChatUI.{name}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[Firesky UnderNet Browser] SimpleChat patch failed (non-fatal): {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] SimpleChat patch failed (non-fatal): {ex.Message}");
             }
         }
 
@@ -410,21 +448,21 @@ namespace Firesky.UnderNetBrowser
                         if (mi == null) continue;
                         _tvHarmony.Patch(mi, postfix: new HarmonyMethod(postfix));
                         patched++;
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] Patched ModManagerPhoneApp.ModSettingsAppCreator.{methodName} (preferences order, best-effort).");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Patched ModManagerPhoneApp.ModSettingsAppCreator.{methodName} (preferences order, best-effort).");
                     }
                     catch (Exception ex)
                     {
-                        MelonLogger.Warning($"[Firesky UnderNet Browser] Failed to patch ModManagerPhoneApp.ModSettingsAppCreator.{methodName}: {ex.Message}");
+                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Failed to patch ModManagerPhoneApp.ModSettingsAppCreator.{methodName}: {ex.Message}");
                     }
                 }
 
                 if (patched == 0)
-                    MelonLogger.Warning("[Firesky UnderNet Browser] Mod Manager detected but no settings population methods were patched.");
+                    UnderNetBrowserConfig.LogDiagnosticWarning("[UnderNetBrowser] Mod Manager detected but no settings population methods were patched.");
             }
             catch (Exception ex)
             {
                 _modManagerOrderPatchAttempted = true; // avoid repeated noisy failures
-                MelonLogger.Warning($"[Firesky UnderNet Browser] Mod Manager order patch failed (non-fatal): {ex.Message}");
+                UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Mod Manager order patch failed (non-fatal): {ex.Message}");
             }
         }
 
@@ -434,7 +472,7 @@ namespace Firesky.UnderNetBrowser
             {
                 if (__instance == null)
                 {
-                    MelonLogger.Msg("[Firesky UnderNet Browser] [ModManagerOrder] Postfix called with null instance.");
+                    UnderNetBrowserConfig.Log("[UnderNetBrowser][ModManagerOrder] Postfix called with null instance.");
                     return;
                 }
                 var type = __instance.GetType();
@@ -445,7 +483,7 @@ namespace Firesky.UnderNetBrowser
             }
             catch (Exception ex)
             {
-                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [ModManagerOrder] Postfix exception: {ex.Message}"); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][ModManagerOrder] Postfix exception: {ex.Message}"); } catch { }
             }
         }
 
@@ -456,13 +494,13 @@ namespace Firesky.UnderNetBrowser
                 var f = instanceType.GetField(contentFieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (f == null)
                 {
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: field not found on {instanceType.FullName}");
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser][ModManagerOrder] {contentFieldName}: field not found on {instanceType.FullName}");
                     return;
                 }
                 var contentObj = f.GetValue(instance);
                 if (contentObj == null)
                 {
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: null");
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser][ModManagerOrder] {contentFieldName}: null");
                     return;
                 }
 
@@ -501,7 +539,7 @@ namespace Firesky.UnderNetBrowser
                 if (contentTransform == null)
                 {
                     // Last resort: if type name indicates Transform, proceed with reflection-based access below? No, just log.
-                    try { MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: not a Transform ({contentObj.GetType().FullName})"); } catch { }
+                    try { UnderNetBrowserConfig.Log($"[UnderNetBrowser][ModManagerOrder] {contentFieldName}: not a Transform ({contentObj.GetType().FullName})"); } catch { }
                     return;
                 }
 
@@ -509,7 +547,7 @@ namespace Firesky.UnderNetBrowser
                 try { childCount = contentTransform.childCount; } catch { childCount = 0; }
                 if (childCount <= 0)
                 {
-                    MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: childCount=0");
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser][ModManagerOrder] {contentFieldName}: childCount=0");
                     return;
                 }
 
@@ -639,14 +677,14 @@ namespace Firesky.UnderNetBrowser
                 {
                     try
                     {
-                        MelonLogger.Msg($"[Firesky UnderNet Browser] [ModManagerOrder] {contentFieldName}: headers={headerCount} blocks={blocks} entries={totalEntries} matched={totalMatched} moved={totalMoved}");
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser][ModManagerOrder] {contentFieldName}: headers={headerCount} blocks={blocks} entries={totalEntries} matched={totalMatched} moved={totalMoved}");
                     }
                     catch { }
                 }
             }
             catch (Exception ex)
             {
-                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [ModManagerOrder] Failed for {contentFieldName}: {ex.Message}"); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser][ModManagerOrder] Failed for {contentFieldName}: {ex.Message}"); } catch { }
             }
         }
 
@@ -660,7 +698,7 @@ namespace Firesky.UnderNetBrowser
         {
             try { UnderNetBrowserDiagnostics.StopSession("deinitialize"); } catch { }
             try { UnderNetBrowserApp.ShutdownForWorldUnload("deinitialize"); } catch { }
-            MelonLogger.Msg("[Firesky UnderNet Browser] Mod deinitialized.");
+            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Mod deinitialized.");
         }
     }
 }

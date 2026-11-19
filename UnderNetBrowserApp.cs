@@ -193,7 +193,7 @@ namespace Firesky.UnderNetBrowser
                     // No active app instance reference, but native composition/WebView2 may still be alive.
                     try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
                 }
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] World-unload browser cleanup executed ({reason}).");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] World-unload browser cleanup executed ({reason}).");
             }
             catch (Exception ex)
             {
@@ -227,7 +227,7 @@ namespace Firesky.UnderNetBrowser
                 try { StopExternalWindowMirror("shutdown:" + reason); } catch { }
                 bool hadCapture = _gpuCompositionCapture != null || _externalMirrorMode;
                 if (hadCapture)
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Shutting down browser/composition ({reason}).");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Shutting down browser/composition ({reason}).");
 
                 // Best-effort: restore distance-attenuated WebView2 process volume before teardown.
                 try { UnderNetBrowserGpuNative.CompSetDistanceAudioVolume(0, 1f); } catch { }
@@ -333,7 +333,7 @@ namespace Firesky.UnderNetBrowser
                     var f = GetUIFont();
                     var ugo = _urlInput?.gameObject;
                     var ur = _urlInput?.GetComponent<RectTransform>()?.rect;
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] UrlBarDiag(open): input={(ugo!=null)} active={ugo?.activeInHierarchy} text='{_urlInput?.text}' disp='{_urlDisplayText?.text}' dispActive={_urlDisplayText?.gameObject?.activeInHierarchy} rect={(ur.HasValue ? $"{ur.Value.width:0.#}x{ur.Value.height:0.#}" : "null")} font={(f!=null ? f.name : "null")}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] UrlBarDiag(open): input={(ugo!=null)} active={ugo?.activeInHierarchy} text='{_urlInput?.text}' disp='{_urlDisplayText?.text}' dispActive={_urlDisplayText?.gameObject?.activeInHierarchy} rect={(ur.HasValue ? $"{ur.Value.width:0.#}x{ur.Value.height:0.#}" : "null")} font={(f!=null ? f.name : "null")}");
                 }
                 catch { }
 
@@ -355,7 +355,7 @@ namespace Firesky.UnderNetBrowser
                             if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; }
                             _compositionWebFocused = true;
                             reused = true;
-                            UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Reused warm composition browser session (fast reopen).");
+                            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Reused warm composition browser session (fast reopen).");
                         }
                     }
                 }
@@ -409,7 +409,7 @@ namespace Firesky.UnderNetBrowser
             // Note: if framework still invokes Close, we avoid tearing down resources and restore gameplay input.
             if (_detachRequested && (Time.realtimeSinceStartup - _detachRequestedTime) < 2.0f)
             {
-                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] OnClosed during detach request: preserving app/browser state (detach keeps app open).");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] OnClosed during detach request: preserving app/browser state (detach keeps app open).");
                 try { base.OnClosed(); } catch { }
                 try { UnderNetBrowserInputHooks.UpdateOwnership(false, false, false, false); } catch { }
                 try { TryRestoreGameInput(); } catch { }
@@ -453,7 +453,7 @@ namespace Firesky.UnderNetBrowser
                 try { captureToDispose?.Dispose(); } catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] X close dispose failed (non-fatal): {ex.Message}"); } catch { } }
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
                 try { UnderNetBrowserGpuNative.ClearTargetTexture(); } catch { }
-                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Browser runtime fully shut down (X close).");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Browser runtime fully shut down (X close).");
             }
             else
             {
@@ -1054,7 +1054,7 @@ namespace Firesky.UnderNetBrowser
                     try
                     {
                         File.Copy(legacyPath, homepagePath, false);
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Migrated legacy homepage to root/Homepage/index.html.");
+                        UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Migrated legacy homepage to root/Homepage/index.html.");
                     }
                     catch (Exception ex)
                     {
@@ -1084,7 +1084,7 @@ namespace Firesky.UnderNetBrowser
                     if (!File.Exists(exampleIndex))
                     {
                         File.WriteAllText(exampleIndex, BuildExampleAppHtml());
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Created example app at root/Apps/example/index.html.");
+                        UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Created example app at root/Apps/example/index.html.");
                     }
                 }
                 catch { }
@@ -1413,7 +1413,7 @@ namespace Firesky.UnderNetBrowser
                     if (existingVersion >= 0 && existingVersion < ManagedHomepageVersion && !string.IsNullOrWhiteSpace(bundled))
                     {
                         File.WriteAllText(targetPath, bundled);
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Updated managed homepage file '{fileName}' ({existingVersion} -> {ManagedHomepageVersion})."); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Updated managed homepage file '{fileName}' ({existingVersion} -> {ManagedHomepageVersion})."); } catch { }
                     }
                 }
                 catch { }
@@ -1465,7 +1465,7 @@ namespace Firesky.UnderNetBrowser
                         if (shouldWrite)
                         {
                             File.WriteAllBytes(targetPath, bytes);
-                            try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Deployed homepage asset '{fileName}' to UserData root/Homepage."); } catch { }
+                            try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Deployed homepage asset '{fileName}' to UserData root/Homepage."); } catch { }
                         }
                     }
                 }
@@ -1707,7 +1707,7 @@ namespace Firesky.UnderNetBrowser
                     var value = args.TryGetValue("value", out var v) ? v : "";
                     var ok = TryApplyConfigCommand(key, value, out msg);
                     status = ok ? "ok" : "err";
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Settings cmd set key='{key}' ok={ok} msg='{msg}'");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Settings cmd set key='{key}' ok={ok} msg='{msg}'");
                 }
                 else if (action == "save")
                 {
@@ -1731,7 +1731,7 @@ namespace Firesky.UnderNetBrowser
                     msg = failed == 0
                         ? $"Applied {applied} setting(s) and saved preferences."
                         : $"Applied {applied}, failed {failed}" + (string.IsNullOrWhiteSpace(lastErr) ? "." : (": " + lastErr));
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Settings cmd saveform applied={applied} failed={failed}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Settings cmd saveform applied={applied} failed={failed}");
                 }
                 else if (action == "load" || action == "refresh" || action == "getsettings")
                 {
@@ -1804,7 +1804,7 @@ namespace Firesky.UnderNetBrowser
                 try { ReleaseAllGameKeys("navigate"); } catch { }
                 _gpuCompositionCapture.Navigate(url);
                 SetHint("");
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Navigate (composition): {TruncateUrlForLog(url)}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Navigate (composition): {TruncateUrlForLog(url)}");
             }
             else
             {
@@ -1817,14 +1817,14 @@ namespace Firesky.UnderNetBrowser
         {
             if (_browserUiCriticalActionInProgress)
             {
-                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Hard reset ignored ({reason}): another browser UI action is in progress."); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Hard reset ignored ({reason}): another browser UI action is in progress."); } catch { }
                 return;
             }
             _browserUiCriticalActionInProgress = true;
             try
             {
                 var url = string.IsNullOrWhiteSpace(targetUrl) ? GetResolvedHomeUrl() : targetUrl;
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset navigate ({reason}): {TruncateUrlForLog(url)}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Hard reset navigate ({reason}): {TruncateUrlForLog(url)}");
 
                 // Recovery path: avoid sending script/navigation commands into a potentially hung WebView before teardown,
                 // as they can block on native synchronization and freeze the game. Dispose performs native shutdown/cleanup.
@@ -1838,7 +1838,7 @@ namespace Firesky.UnderNetBrowser
                 _gpuCompositionMode = false;
                 try { oldCapture?.SendMouseUp(0, 0, false); } catch { }
                 try { oldCapture?.SendMouseUp(0, 0, true); } catch { }
-                try { oldCapture?.Dispose(); } catch (Exception ex) { try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset dispose failed: {ex.Message}"); } catch { } }
+                try { oldCapture?.Dispose(); } catch (Exception ex) { try { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Hard reset dispose failed: {ex.Message}"); } catch { } }
 
                 // Best-effort extra shutdown in case dispose could not complete native cleanup cleanly.
                 try { UnderNetBrowserGpuNative.CompShutdown(); } catch { }
@@ -1852,7 +1852,7 @@ namespace Firesky.UnderNetBrowser
                 var newCapture = new UnderNetBrowserCompositionCapture();
                 bool started = false;
                 try { started = newCapture.TryStart(url, compW, compH, compUserData); }
-                catch (Exception ex) { try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] Hard reset TryStart exception: {ex.Message}"); } catch { } started = false; }
+                catch (Exception ex) { try { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] Hard reset TryStart exception: {ex.Message}"); } catch { } started = false; }
 
                 if (started)
                 {
@@ -1874,7 +1874,7 @@ namespace Firesky.UnderNetBrowser
             catch (Exception ex)
             {
                 try { SetHint($"Browser reset failed: {ex.Message}"); } catch { }
-                try { MelonLogger.Warning($"[Firesky UnderNet Browser] [UnderNetBrowser] HardResetCompositionNavigate failed: {ex.Message}"); } catch { }
+                try { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] HardResetCompositionNavigate failed: {ex.Message}"); } catch { }
             }
             finally
             {
@@ -1944,7 +1944,7 @@ namespace Firesky.UnderNetBrowser
                 }
             }
             catch { }
-            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] GameInputMode={( _gameInputMode ? "ON" : "OFF" )} reason={reason}");
+            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] GameInputMode={( _gameInputMode ? "ON" : "OFF" )} reason={reason}");
         }
 
         private void InjectPageFpsOverlayScript()
@@ -2392,7 +2392,7 @@ namespace Firesky.UnderNetBrowser
                                 if (spaceDown)
                                 {
                                     try { SendSpacePlayPauseScriptFallback(); } catch { }
-                                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Space handled by smart script (stale-focus path) ptr={ptrOver}"); } catch { }
+                                    try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Space handled by smart script (stale-focus path) ptr={ptrOver}"); } catch { }
                                     LogCompositionTypingDiag($"space(stale-focus smart script) urlFocused={urlFocused} ptr={ptrOver}");
                                 }
                                 if (arrowHeld || arrowDown)
@@ -2591,7 +2591,7 @@ namespace Firesky.UnderNetBrowser
                     // - editable/search/text fields: insert a space
                     // - otherwise: toggle media playback (video/YouTube)
                     try { SendSpacePlayPauseScriptFallback(); } catch { }
-                    try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Space handled by smart script"); } catch { }
+                    try { UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Space handled by smart script"); } catch { }
                 }
                 if (sentVks > 0)
                     LogCompositionTypingDiag($"navKeys={sentVks} urlFocused={urlFocused} webFocused={webFocused} ptr={ptrOver} fs={_isPageFullscreen}");
@@ -2612,7 +2612,7 @@ namespace Firesky.UnderNetBrowser
                 if (same && Time.realtimeSinceStartup - _lastCompTypingDiagLog < 0.5f) return;
                 _lastCompTypingDiagMsg = msg;
                 _lastCompTypingDiagLog = Time.realtimeSinceStartup;
-                MelonLogger.Msg($"[Firesky UnderNet Browser] [CompInput] {msg}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][CompInput] {msg}");
             }
             catch { }
         }
@@ -2640,12 +2640,12 @@ namespace Firesky.UnderNetBrowser
                 _gpuCompositionCapture.SetZoomFactor(nz);
                 try { _gpuCompositionCapture.RequestFocus(); } catch { }
                 try { TrySuppressHotbarScroll(); } catch { }
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+hotkey{(reset ? ", reset" : dir > 0 ? ", in" : ", out")}, requested)");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+hotkey{(reset ? ", reset" : dir > 0 ? ", in" : ", out")}, requested)");
                 return true;
             }
             catch (Exception ex)
             {
-                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom hotkey failed (restart game after native update?): {ex.Message}"); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom hotkey failed (restart game after native update?): {ex.Message}"); } catch { }
                 return true; // consume key intent when ctrl+zoom combo was pressed
             }
         }
@@ -3088,7 +3088,7 @@ namespace Firesky.UnderNetBrowser
                 try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
                 if (now < _nextHomepageGameTimeReadDiagRealtime) return;
                 _nextHomepageGameTimeReadDiagRealtime = now + 10f;
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time read: {message}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time read: {message}");
             }
             catch { }
         }
@@ -3655,7 +3655,7 @@ namespace Firesky.UnderNetBrowser
                     if (nowState >= _nextHomepageGameTimeTickDiagRealtime)
                     {
                         _nextHomepageGameTimeTickDiagRealtime = nowState + 10f;
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync tick: skipped (app.IsOpen=false, capture=no, compMode={app._gpuCompositionMode}, extMirror={app._externalMirrorMode}, detached={app._detachedToGameplay})"); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time sync tick: skipped (app.IsOpen=false, capture=no, compMode={app._gpuCompositionMode}, extMirror={app._externalMirrorMode}, detached={app._detachedToGameplay})"); } catch { }
                     }
                     return;
                 }
@@ -3663,11 +3663,7 @@ namespace Firesky.UnderNetBrowser
                 if (now < _nextHomepageGameTimeSyncRealtime) return;
                 _nextHomepageGameTimeSyncRealtime = now + 1.0f;
 
-                if (now >= _nextHomepageGameTimeTickDiagRealtime)
-                {
-                    _nextHomepageGameTimeTickDiagRealtime = now + 10f;
-                    try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Homepage game-time sync tick: entered open={app.IsOpen} active={( _activeInstance != null)}"); } catch { }
-                }
+                // Periodic "entered" tick trace removed to reduce verbose debug spam; sync continues below when on homepage.
 
                 var cur = "";
                 try { cur = app._gpuCompositionCapture?.CurrentUrl ?? ""; } catch { cur = ""; }
@@ -3686,7 +3682,7 @@ namespace Firesky.UnderNetBrowser
                 if (looksLikeHomepage && !matchedHomepage && now >= _nextHomepageGameTimeDiagRealtime)
                 {
                     _nextHomepageGameTimeDiagRealtime = now + 10f;
-                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: homepage-like URL did not match expected path (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                    try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time sync: homepage-like URL did not match expected path (url='{TruncateUrlForLog(cur)}')."); } catch { }
                 }
                 if (!matchedHomepage)
                 {
@@ -3706,7 +3702,7 @@ namespace Firesky.UnderNetBrowser
                     if (now >= _nextHomepageGameTimeDiagRealtime)
                     {
                         _nextHomepageGameTimeDiagRealtime = now + 10f;
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: composition capture unavailable on homepage (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time sync: composition capture unavailable on homepage (url='{TruncateUrlForLog(cur)}')."); } catch { }
                     }
                     return;
                 }
@@ -3719,7 +3715,7 @@ namespace Firesky.UnderNetBrowser
                     if (now >= _nextHomepageGameTimeDiagRealtime)
                     {
                         _nextHomepageGameTimeDiagRealtime = now + 10f;
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync: TimeManager unavailable/not readable yet (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time sync: TimeManager unavailable/not readable yet (url='{TruncateUrlForLog(cur)}')."); } catch { }
                     }
                 }
                 var payload = timeText + "|" + dayText;
@@ -3730,7 +3726,7 @@ namespace Firesky.UnderNetBrowser
                 if (gotTime && !_homepageGameTimeSyncLoggedSuccess)
                 {
                     _homepageGameTimeSyncLoggedSuccess = true;
-                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync active: {timeText} | {dayText}"); } catch { }
+                    try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time sync active: {timeText} | {dayText}"); } catch { }
                 }
             }
             catch (Exception ex)
@@ -3739,7 +3735,7 @@ namespace Firesky.UnderNetBrowser
                 if (nowEx >= _nextHomepageGameTimeDiagRealtime)
                 {
                     _nextHomepageGameTimeDiagRealtime = nowEx + 10f;
-                    try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Homepage game-time sync exception: {ex.Message}"); } catch { }
+                    try { UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser] Homepage game-time sync exception: {ex.Message}"); } catch { }
                 }
             }
         }
@@ -4018,7 +4014,7 @@ namespace Firesky.UnderNetBrowser
                         var scrollOutside = Input.mouseScrollDelta.y;
                         bool ctrlOutside = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
                         if (ctrlOutside && Mathf.Abs(scrollOutside) > 0.001f)
-                            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Ctrl+wheel ignored: pointer outside browser content (nx={nx:0.###} ny={ny:0.###})");
+                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Ctrl+wheel ignored: pointer outside browser content (nx={nx:0.###} ny={ny:0.###})");
                     }
                     catch { }
 
@@ -4109,7 +4105,7 @@ namespace Firesky.UnderNetBrowser
                     bool ctrlDown = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
                     if (ctrlDown)
                     {
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Ctrl+wheel detected over browser (scroll={scroll:0.###}, inside=True, webFocused={_compositionWebFocused}, urlFocused={_urlInput != null && _urlInput.isFocused})"); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Ctrl+wheel detected over browser (scroll={scroll:0.###}, inside=True, webFocused={_compositionWebFocused}, urlFocused={_urlInput != null && _urlInput.isFocused})"); } catch { }
                         try
                         {
                             double z = _gpuCompositionCapture.GetZoomFactor();
@@ -4120,9 +4116,9 @@ namespace Firesky.UnderNetBrowser
                             double nz = Mathf.Clamp((float)(z + step), 0.25f, 5.0f);
                             _gpuCompositionCapture.SetZoomFactor(nz);
                             try { _gpuCompositionCapture.RequestFocus(); } catch { }
-                            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, requested)");
+                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, requested)");
                         }
-                        catch (Exception ex) { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Web zoom failed (restart game after native update?): {ex.Message}"); }
+                        catch (Exception ex) { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom failed (restart game after native update?): {ex.Message}"); }
                         // Ctrl+wheel is consumed for zoom; suppress hotbar/game wheel side effects.
                         try { TrySuppressHotbarScroll(); } catch { }
                     }
@@ -4396,7 +4392,7 @@ namespace Firesky.UnderNetBrowser
                     var f = GetUIFont();
                     var ugo = _urlInput?.gameObject;
                     var ur = _urlInput?.GetComponent<RectTransform>()?.rect;
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] UrlBarDiag(build): input={(ugo!=null)} active={ugo?.activeInHierarchy} text='{_urlInput?.text}' disp='{_urlDisplayText?.text}' dispActive={_urlDisplayText?.gameObject?.activeInHierarchy} rect={(ur.HasValue ? $"{ur.Value.width:0.#}x{ur.Value.height:0.#}" : "null")} font={(f!=null ? f.name : "null")}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] UrlBarDiag(build): input={(ugo!=null)} active={ugo?.activeInHierarchy} text='{_urlInput?.text}' disp='{_urlDisplayText?.text}' dispActive={_urlDisplayText?.gameObject?.activeInHierarchy} rect={(ur.HasValue ? $"{ur.Value.width:0.#}x{ur.Value.height:0.#}" : "null")} font={(f!=null ? f.name : "null")}");
                 }
                 catch { }
             }
@@ -4623,7 +4619,7 @@ namespace Firesky.UnderNetBrowser
                 // the extra space correctly. This is done as a single controlled restart preserving current URL to avoid
                 // nonstop flicker from unsafe in-place native resizes; page JS/runtime state may reset.
                 try { ResizeCompositionForCurrentViewportPreserveUrl("app_fullscreen_toggle"); } catch { }
-                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] App fullscreen {(_appFullscreen ? "ON" : "OFF")}"); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] App fullscreen {(_appFullscreen ? "ON" : "OFF")}"); } catch { }
             }
             catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] ToggleAppFullscreen failed: {ex.Message}"); } catch { } }
         }
@@ -4686,7 +4682,7 @@ namespace Firesky.UnderNetBrowser
                         _compositionWebFocused = true;
                         try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { }
                         try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Composition render resized ({reason}): {curW}x{curH} -> {desiredW}x{desiredH} url={TruncateUrlForLog(url)}"); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Composition render resized ({reason}): {curW}x{curH} -> {desiredW}x{desiredH} url={TruncateUrlForLog(url)}"); } catch { }
                     }
                     else
                     {
@@ -4713,14 +4709,14 @@ namespace Firesky.UnderNetBrowser
         {
             if (_browserUiCriticalActionInProgress)
             {
-                try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Close requested (X) ignored: browser UI action in progress."); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Close requested (X) ignored: browser UI action in progress."); } catch { }
                 return;
             }
             bool invokedFrameworkClose = false;
             _browserUiCriticalActionInProgress = true;
             try
             {
-                MelonLogger.Msg("[Firesky UnderNet Browser] [UnderNetBrowser] Close requested (X).");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Close requested (X).");
                 _explicitCloseRequested = true;
                 _warmCloseRequested = false;
                 AnyDetachActive = false;
@@ -4761,14 +4757,14 @@ namespace Firesky.UnderNetBrowser
         {
             if (_browserUiCriticalActionInProgress)
             {
-                try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Warm close requested ({reason}) ignored: browser UI action in progress."); } catch { }
+                try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Warm close requested ({reason}) ignored: browser UI action in progress."); } catch { }
                 return;
             }
             bool invokedFrameworkClose = false;
             _browserUiCriticalActionInProgress = true;
             try
             {
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Warm close requested ({reason}).");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Warm close requested ({reason}).");
                 _warmCloseRequested = true;
                 _explicitCloseRequested = false;
                 _detachRequested = false;
@@ -4827,6 +4823,8 @@ namespace Firesky.UnderNetBrowser
         private int _reattachFocusRetryCount;
         private int _lastLoggedReattachBlockBucket = int.MinValue;
         private int _detachedUnreadableProbeCount;
+        private string _lastReattachProbeLogSignature = "";
+        private float _lastReattachProbeLogRealtime = -999f;
         private float _lastSpeculativeReattachRealtime = -999f;
         private float _lastDetachedCloseBlockedRealtime = -999f;
         private readonly List<(GameObject go, bool wasActive)> _detachedHiddenHomeScreenObjects = new List<(GameObject, bool)>();
@@ -4932,7 +4930,7 @@ namespace Firesky.UnderNetBrowser
                     if (app._detachRequested || (AnyDetachActive && (Time.realtimeSinceStartup - app._detachRequestedTime) < 3.0f))
                     {
                         try { app._lastDetachedCloseBlockedRealtime = Time.realtimeSinceStartup; } catch { }
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose during detach (keeping app open).");
+                        UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Blocked TVApp.Close/ForceClose during detach (keeping app open).");
                         return false; // skip original close
                     }
 
@@ -4953,7 +4951,7 @@ namespace Firesky.UnderNetBrowser
                         try { rmb = Input.GetMouseButtonDown(1) || Input.GetMouseButton(1); } catch { }
                         if (rmb && app.IsOpen && !app.IsPaused)
                         {
-                            UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] TVApp.Close/ForceClose intercepted during RMB: converting to detach.");
+                            UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] TVApp.Close/ForceClose intercepted during RMB: converting to detach.");
                             try { app.TryDetachToGameplayKeepAppOpen(); } catch { }
                             // Ensure detach flags are set even if detach attempt failed mid-way.
                             app._detachRequested = true;
@@ -4985,7 +4983,7 @@ namespace Firesky.UnderNetBrowser
                                     app._gpuCompositionCapture?.ExecuteScript("(function(){try{var d=document; var fs=d.fullscreenElement||d.webkitFullscreenElement||d.mozFullScreenElement||d.msFullscreenElement; if(fs){try{(d.exitFullscreen||d.webkitExitFullscreen||d.mozCancelFullScreen||d.msExitFullscreen||function(){}).call(d);}catch(_){} try{if(fs.exitFullscreen)fs.exitFullscreen();}catch(_){} } var k={key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true,composed:true}; try{(d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keydown',k)); (d.activeElement||d.body).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{window.dispatchEvent(new KeyboardEvent('keydown',k)); window.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} try{var v=d.querySelector('video.html5-main-video, video'); if(v){v.dispatchEvent(new KeyboardEvent('keydown',k)); v.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} try{var c=d.querySelector('canvas'); if(c){c.dispatchEvent(new KeyboardEvent('keydown',k)); c.dispatchEvent(new KeyboardEvent('keyup',k));}}catch(_){} }catch(_){}})();");
                                 }
                                 catch { }
-                                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose on ESC (gameMode=" + app._gameInputMode + ", fs=" + fs + ").");
+                                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Blocked TVApp.Close/ForceClose on ESC (gameMode=" + app._gameInputMode + ", fs=" + fs + ").");
                                 return false;
                             }
                         }
@@ -4994,7 +4992,7 @@ namespace Firesky.UnderNetBrowser
 
                     if (Time.realtimeSinceStartup < _suppressAppCloseUntilRealtime)
                     {
-                        UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Blocked TVApp.Close/ForceClose during fullscreen-escape/app-close suppression.");
+                        UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Blocked TVApp.Close/ForceClose during fullscreen-escape/app-close suppression.");
                         return false;
                     }
                 }
@@ -5045,6 +5043,8 @@ namespace Firesky.UnderNetBrowser
                 _detachedUnreadableProbeCount = 0;
                 _lastSpeculativeReattachRealtime = -999f;
                 _lastDetachedCloseBlockedRealtime = -999f;
+                _lastReattachProbeLogSignature = "";
+                _lastReattachProbeLogRealtime = -999f;
 
                 // Keep rendering active while detached so video playback remains visible on TV (audio already continues).
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
@@ -5054,7 +5054,7 @@ namespace Firesky.UnderNetBrowser
                 try { ReleaseAllGameKeys("detach_to_gameplay"); } catch { }
                 try { UnderNetBrowserDiagnostics.OnDetachRequested(); } catch { }
                 try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(true); } catch { }
-                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Right-click detach: keeping app open and attempting to exit TV mode (gameplay restore).");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Right-click detach: keeping app open and attempting to exit TV mode (gameplay restore).");
 
                 // Release gameplay/UI ownership immediately (similar to paused state) without pausing app rendering.
                 // Pausing the S1API TV app can freeze visual updates while audio continues.
@@ -5259,7 +5259,7 @@ namespace Firesky.UnderNetBrowser
                             try
                             {
                                 mi.Invoke(ifaceObj, new[] { localPlayer });
-                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Invoked {t.FullName ?? t.Name}.RemovePlayer(localPlayer) for detach (argMatch={argOk}).");
+                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Detach: invoked {t.FullName ?? t.Name}.RemovePlayer(localPlayer) (targeted, argMatch={argOk}).");
                                 return true;
                             }
                             catch (Exception ex)
@@ -5297,7 +5297,7 @@ namespace Firesky.UnderNetBrowser
                         if (mi == null) continue;
                         if (mi.DeclaringType != null && !mi.DeclaringType.IsInstanceOfType(ifaceObj)) continue;
                         mi.Invoke(ifaceObj, null);
-                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] Invoked {t.FullName ?? t.Name}.Close() for detach (game interaction exit).");
+                        UnderNetBrowserConfig.Log($"[UnderNetBrowser] Detach: invoked {t.FullName ?? t.Name}.Close() (targeted).");
                         return true;
                     }
                     catch (Exception ex)
@@ -5800,13 +5800,32 @@ namespace Firesky.UnderNetBrowser
                             if (playersKnown || localInPlayers) _detachedLocalPlayerWasInTv = localInPlayers;
 
                             bool verboseReattachDiag = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
-                            if (shouldReattach || verboseReattachDiag)
+                            if (shouldReattach)
                             {
+                                _lastReattachProbeLogSignature = "";
+                                _lastReattachProbeLogRealtime = nowRt;
                                 try
                                 {
-                                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach probe: tvFound=True tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount} baselineOpen={_detachedTvInterfaceWasOpen} baselinePlayer={_detachedLocalPlayerWasInTv} reason='{reattachReason}' unreadableCount={_detachedUnreadableProbeCount}");
+                                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Reattach probe: tvFound=True tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount} baselineOpen={_detachedTvInterfaceWasOpen} baselinePlayer={_detachedLocalPlayerWasInTv} reason='{reattachReason}' unreadableCount={_detachedUnreadableProbeCount}");
                                 }
                                 catch { }
+                            }
+                            else if (verboseReattachDiag)
+                            {
+                                // Throttle noisy steady-state probes while diagnostics are enabled (avoid per-tick log spam/lag while walking around detached).
+                                string probeSig = $"found|{(tvOpenKnown ? tvOpen.ToString() : "unknown")}|{localInPlayers}|{playersKnown}|{playerCount}|{_detachedTvInterfaceWasOpen}|{_detachedLocalPlayerWasInTv}|{reattachReason}";
+                                bool sigChanged = !string.Equals(probeSig, _lastReattachProbeLogSignature, StringComparison.Ordinal);
+                                bool periodic = (nowRt - _lastReattachProbeLogRealtime) >= 10f;
+                                if (sigChanged || periodic)
+                                {
+                                    _lastReattachProbeLogSignature = probeSig;
+                                    _lastReattachProbeLogRealtime = nowRt;
+                                    try
+                                    {
+                                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Reattach probe: tvFound=True tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount} baselineOpen={_detachedTvInterfaceWasOpen} baselinePlayer={_detachedLocalPlayerWasInTv} reason='{reattachReason}' unreadableCount={_detachedUnreadableProbeCount}");
+                                    }
+                                    catch { }
+                                }
                             }
                         }
                         else
@@ -5814,13 +5833,27 @@ namespace Firesky.UnderNetBrowser
                             _detachedUnreadableProbeCount = 0;
                             if (UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true)
                             {
-                                try { UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Reattach probe: TVInterface GO found but TVInterface component/type unresolved."); } catch { }
+                                string unresolvedSig = "unresolved";
+                                bool sigChanged = !string.Equals(unresolvedSig, _lastReattachProbeLogSignature, StringComparison.Ordinal);
+                                bool periodic = (nowRt - _lastReattachProbeLogRealtime) >= 10f;
+                                if (sigChanged || periodic)
+                                {
+                                    _lastReattachProbeLogSignature = unresolvedSig;
+                                    _lastReattachProbeLogRealtime = nowRt;
+                                    try { UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Reattach probe: TVInterface GO found but TVInterface component/type unresolved."); } catch { }
+                                }
                             }
                         }
                     }
                     else
                     {
                         _detachedUnreadableProbeCount = 0;
+                        // Reset probe-log throttle signature when TVInterface is not found so next discovery transition is visible.
+                        if (!string.IsNullOrEmpty(_lastReattachProbeLogSignature))
+                        {
+                            _lastReattachProbeLogSignature = "";
+                            _lastReattachProbeLogRealtime = -999f;
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -5845,7 +5878,7 @@ namespace Firesky.UnderNetBrowser
                 try { if (_gameModeIndicatorRoot != null) _gameModeIndicatorRoot.SetActive(false); } catch { }
                 _nextMediaArrowRepeatLeft = _nextMediaArrowRepeatRight = _nextMediaArrowRepeatUp = _nextMediaArrowRepeatDown = -1f;
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
-                UnderNetBrowserConfig.LogAlways("[UnderNetBrowser] Re-attaching to TV interaction after detached gameplay resume (restoring input ownership).");
+                UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Re-attaching to TV interaction after detached gameplay resume (restoring input ownership).");
 
                 // Do not reactivate hidden TV home/clock objects on reattach; app remains active and restoring them can surface vanilla lock/home UI.
                 try { RestoreDetachedHomeScreenObjects(restoreHiddenObjects: false); } catch { }
@@ -5890,7 +5923,7 @@ namespace Firesky.UnderNetBrowser
                 {
                     bool over = false; int px = -1, py = -1;
                     try { over = IsPointerOverVideoDisplay(out px, out py); } catch { }
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach state: webFocused={_compositionWebFocused} gameInput={_gameInputMode} urlFocused={(_urlInput != null && _urlInput.isFocused)} ptrOver={over} ptrPx={px} ptrPy={py} compTex={(_gpuCompositionCapture?.Texture != null)} suspended={(_gpuCompositionCapture?.RenderingSuspended ?? false)}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Reattach state: webFocused={_compositionWebFocused} gameInput={_gameInputMode} urlFocused={(_urlInput != null && _urlInput.isFocused)} ptrOver={over} ptrPx={px} ptrPy={py} compTex={(_gpuCompositionCapture?.Texture != null)} suspended={(_gpuCompositionCapture?.RenderingSuspended ?? false)}");
                 }
                 catch { }
                 return true;
@@ -6354,7 +6387,7 @@ namespace Firesky.UnderNetBrowser
 
                 if (applied.Count > 0)
                 {
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] TV screen mirror (detached): applied composition texture to {applied.Count} renderer(s): {string.Join(", ", applied)}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] TV screen mirror (detached): applied composition texture to {applied.Count} renderer(s): {string.Join(", ", applied)}");
                 }
                 else
                 {
@@ -6668,16 +6701,15 @@ namespace Firesky.UnderNetBrowser
                     try { if (gr.enabled) enabledCount++; } catch { }
                 }
 
-                bool verbose = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
                 bool changed = raycasters.Length != _lastLoggedRaycasterCount || enabledCount != _lastLoggedRaycasterEnabled;
-                bool periodic = (Time.realtimeSinceStartup - _lastLoggedRaycasterTime) >= 5f;
-                if (verbose || changed || periodic)
+                bool periodic = (Time.realtimeSinceStartup - _lastLoggedRaycasterTime) >= 10f;
+                if (changed || periodic)
                 {
                     _lastLoggedRaycasterCount = raycasters.Length;
                     _lastLoggedRaycasterEnabled = enabledCount;
                     _lastLoggedRaycasterTime = Time.realtimeSinceStartup;
                     string suffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" reason={reason}";
-                    UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Reattach raycasters: count={raycasters.Length} enabled={enabledCount}{suffix}");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Reattach raycasters: count={raycasters.Length} enabled={enabledCount}{suffix}");
                 }
             }
             catch (Exception ex)
@@ -6904,7 +6936,7 @@ namespace Firesky.UnderNetBrowser
                 {
                     try
                     {
-                        UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Detach baseline ({reason}): tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount}");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Detach baseline ({reason}): tvOpen={(tvOpenKnown ? tvOpen.ToString() : "unknown")} localInPlayers={localInPlayers} playersKnown={playersKnown} playerCount={playerCount}");
                     }
                     catch { }
                 }
@@ -8392,9 +8424,9 @@ namespace Firesky.UnderNetBrowser
                 TrySetInstanceBoolOnSingletonLikeType("Il2CppScheduleOne.UI.HUD", "instance", "crosshairVisible", false);
                 // Additional attempts by scanning loaded assemblies for inventory-like types (best-effort, throttled scope avoided here since this runs on open)
                 TryDisableHotbarOnInventoryLikeTypes();
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Input suppression: {_savedInputStates.Count} state(s) captured (best-effort).");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Input suppression: {_savedInputStates.Count} state(s) captured (best-effort).");
             }
-            catch (Exception ex) { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Input suppression failed (non-fatal): {ex.Message}"); }
+            catch (Exception ex) { UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser] Input suppression failed (non-fatal): {ex.Message}"); }
         }
 
         private void TrySetInstanceBoolOnSingletonLikeType(string typeName, string staticMember, string childMember, bool setValue)
@@ -8605,7 +8637,7 @@ namespace Firesky.UnderNetBrowser
 
                     if (!_movementSuppressionDiagLogged)
                     {
-                        try { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Movement suppression target: type={t.FullName} hasEnabled={inst.GetType().GetProperty("enabled") != null} hasCanMove={inst.GetType().GetProperty("CanMove") != null || inst.GetType().GetProperty("canMove") != null}"); } catch { }
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Movement suppression target: type={t.FullName} hasEnabled={inst.GetType().GetProperty("enabled") != null} hasCanMove={inst.GetType().GetProperty("CanMove") != null || inst.GetType().GetProperty("canMove") != null}"); } catch { }
                     }
                 }
 
@@ -8973,7 +9005,7 @@ namespace Firesky.UnderNetBrowser
                         _hiddenHudObjects.Add((go, wasActive));
                         try { if (wasActive) go.SetActive(false); } catch { }
                     }
-                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) hidden via cache.");
+                    UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) hidden via cache.");
                     return;
                 }
 
@@ -9007,7 +9039,7 @@ namespace Firesky.UnderNetBrowser
                             _cachedHudHideCandidates.Add(go);
                             _hiddenHudObjects.Add((go, go.activeSelf));
                             if (go.activeSelf) go.SetActive(false);
-                            UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] Hid HUD object candidate: {cn} (canvas={c.gameObject.name})");
+                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Hid HUD object candidate: {cn} (canvas={c.gameObject.name})");
                         }
                     }
                     catch { }
@@ -9015,9 +9047,9 @@ namespace Firesky.UnderNetBrowser
                 _lastHudCandidateScanRealtime = Time.realtimeSinceStartup;
                 // Skip expensive full-scene GameObject scan on normal paths (canvas-child scan above is sufficient and cheaper).
                 // Full scan caused noticeable hitches on reattach/open in some scenes. Keep only if explicitly needed in future.
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) tracked (scan).");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] HUD hide: {_hiddenHudObjects.Count} object(s) tracked (scan).");
             }
-            catch (Exception ex) { UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] HUD hide failed (non-fatal): {ex.Message}"); }
+            catch (Exception ex) { UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser] HUD hide failed (non-fatal): {ex.Message}"); }
         }
 
         private void TryRestoreGameHud()
@@ -9800,7 +9832,7 @@ namespace Firesky.UnderNetBrowser
                     {
                         string tname = tier.ToString();
                         float arFps = intervalMs > 0 ? (1000f / intervalMs) : 0f;
-                        UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][Adaptive] tier={tname} reason='{_adaptiveLastReason}' intervalMs={intervalMs} fps={(arFps>0?arFps.ToString("0.#"):"full")} standby={standby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
+                        UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][Adaptive] tier={tname} reason='{_adaptiveLastReason}' intervalMs={intervalMs} fps={(arFps>0?arFps.ToString("0.#"):"full")} standby={standby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
                     }
                     catch { }
                 }
@@ -9836,12 +9868,12 @@ namespace Firesky.UnderNetBrowser
 
                 float now = 0f;
                 try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
-                if (!force && now > 0f && (now - _adaptiveLastDiagLogTime) < 5f) return;
+                if (!force && now > 0f && (now - _adaptiveLastDiagLogTime) < 30f) return;
                 _adaptiveLastDiagLogTime = now;
 
                 string tname = _adaptiveCurrentTier.ToString();
                 float arFps = _adaptiveAppliedCaptureIntervalMs > 0 ? (1000f / _adaptiveAppliedCaptureIntervalMs) : 0f;
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser][AdaptiveDiag] tier={tname} reason='{_adaptiveLastReason}' intervalMs={_adaptiveAppliedCaptureIntervalMs} fps={(arFps > 0 ? arFps.ToString("0.#") : "full")} standby={_adaptiveAppliedStandby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][AdaptiveDiag] tier={tname} reason='{_adaptiveLastReason}' intervalMs={_adaptiveAppliedCaptureIntervalMs} fps={(arFps > 0 ? arFps.ToString("0.#") : "full")} standby={_adaptiveAppliedStandby} dist={_adaptiveLastDistance:0.##} tvVisible={_adaptiveLastTvVisible}");
             }
             catch { }
         }
@@ -10205,7 +10237,7 @@ namespace Firesky.UnderNetBrowser
                 catch { }
                 try { SetUrlDisplayText("undernet:discord"); } catch { }
                 try { if (_hintText != null) { _hintBaseMessage = ""; _hintText.enabled = false; } } catch { }
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror started: hwnd=0x{target.Hwnd.ToInt64():X} title='{_externalMirrorLabel}' pid={target.ProcessId}");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] External mirror started: hwnd=0x{target.Hwnd.ToInt64():X} title='{_externalMirrorLabel}' pid={target.ProcessId}");
                 return true;
             }
             catch (Exception ex)
@@ -10227,7 +10259,7 @@ namespace Firesky.UnderNetBrowser
                 _externalMirrorHwnd = IntPtr.Zero;
                 _externalMirrorLabel = "";
                 try { if (_videoDisplay != null) _videoDisplay.texture = null; } catch { }
-                UnderNetBrowserConfig.LogAlways($"[UnderNetBrowser] External mirror stopped ({reason}).");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] External mirror stopped ({reason}).");
             }
             catch { }
         }
