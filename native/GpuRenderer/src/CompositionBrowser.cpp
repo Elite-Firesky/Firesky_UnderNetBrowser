@@ -120,6 +120,9 @@ struct CompositionBrowser::Impl {
     std::atomic<bool> adaptiveVisualStandby{false};
     std::atomic<uint64_t> lastFrameAcceptMs{0};
     std::atomic<uint64_t> lastCopyMs{0};
+    std::atomic<uint64_t> interactionBoostUntilMs{0}; // recent user input: temporarily bypass capture/copy interval for responsiveness
+    std::atomic<bool> basicAdBlockEnabled{true};
+    std::atomic<bool> autoConsentEnabled{false};
 
     // Zoom (applied on browser thread)
     std::atomic<bool> zoomPending{false};
@@ -657,23 +660,17 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                             auto contains = [&](const wchar_t* s) { return lower.find(s) != std::wstring::npos; };
                                             bool blocked = false;
 
-                                            // Conservative third-party ad/tracker/popup domains and generic ad endpoints.
-                                            // Intentionally excludes core YouTube/googlevideo/gstatic/ytimg domains required for playback/UI.
-                                            static const wchar_t* kBlockHints[] = {
-                                                L"doubleclick.net", L"googlesyndication.com", L"googleadservices.com", L"adservice.google",
-                                                L"pagead2.googlesyndication.com", L"tpc.googlesyndication.com", L"securepubads.g.doubleclick.net",
-                                                L"adnxs.com", L"adsrvr.org", L"taboola.com", L"outbrain.com", L"criteo.com", L"betweendigital.com",
-                                                L"popads.net", L"popcash.net", L"propellerads.com", L"adsterra.com", L"imasdk.googleapis.com",
-                                                L"/ads?", L"/adserver", L"/popup", L"/pagead/", L"&ad_type=", L"=adunit", L"/ptracking"
-                                            };
-                                            for (auto* h : kBlockHints) { if (contains(h)) { blocked = true; break; } }
-
-                                            // Safer YouTube ad telemetry/endpoints (best-effort; avoid blocking core playback/media manifests).
-                                            if (!blocked && contains(L"youtube.com")) {
-                                                if (contains(L"/api/stats/ads") || contains(L"/pagead/") || contains(L"/pcs/activeview") ||
-                                                    contains(L"get_midroll_info") || contains(L"ad_break") || contains(L"adformat=") ||
-                                                    contains(L"&oad") || contains(L"/ptracking") || contains(L"/api/stats/qoe?") && contains(L"ad")) {
-                                                    blocked = true;
+                                            if (impl->basicAdBlockEnabled.load(std::memory_order_relaxed)) {
+                                                bool isYouTube = contains(L"youtube.com") || contains(L"youtube-nocookie.com");
+                                                // Conservative third-party tracker/popup blocking. For YouTube, skip request blocking to avoid
+                                                // player/ad-state stalls and long black screens; rely on gentler DOM skip/hide handling instead.
+                                                if (!isYouTube) {
+                                                    static const wchar_t* kBlockHints[] = {
+                                                        L"adnxs.com", L"adsrvr.org", L"taboola.com", L"outbrain.com", L"criteo.com", L"betweendigital.com",
+                                                        L"popads.net", L"popcash.net", L"propellerads.com", L"adsterra.com",
+                                                        L"/popup"
+                                                    };
+                                                    for (auto* h : kBlockHints) { if (contains(h)) { blocked = true; break; } }
                                                 }
                                             }
 
@@ -695,30 +692,57 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                             try {
                                 // Cosmetic hiding + lightweight in-player ad mitigation (best-effort). YouTube ad delivery changes frequently;
                                 // this aims to reduce visible ads/overlays and auto-skip when possible without breaking core playback.
-                                const wchar_t* script = L"(function(){try{if(window.__unCompAdblockInit)return;window.__unCompAdblockInit=true;"
-                                    L"function addCss(){try{if(document.getElementById('un-comp-cosmetic'))return;var st=document.createElement('style');st.id='un-comp-cosmetic';st.textContent='"
+                                const wchar_t* script =
+                                    L"(function(){try{"
+                                    L"if(window.__unCompAdblockInit)return;window.__unCompAdblockInit=true;"
+                                    L"function enabled(){try{return window.__unBasicAdBlockEnabled!==false;}catch(_){return true;}}"
+                                    L"function addCss(){try{if(!enabled())return;if(document.getElementById('un-comp-cosmetic'))return;var st=document.createElement('style');st.id='un-comp-cosmetic';st.textContent='"
                                     L"ytd-consent-bump-v2-lightbox,tp-yt-iron-overlay-backdrop,yt-mealbar-promo-renderer,ytd-enforcement-message-view-model,"
                                     L"#masthead-ad,ytd-ad-slot-renderer,ytd-display-ad-renderer,ytd-promoted-sparkles-web-renderer,ytd-promoted-sparkles-text-search-renderer,"
                                     L"ytd-banner-promo-renderer,ytd-statement-banner-renderer,ytd-in-feed-ad-layout-renderer,ytd-promoted-video-renderer,ytd-compact-promoted-video-renderer,"
-                                    L"ytd-rich-item-renderer:has(ytd-ad-slot-renderer),ytd-video-renderer:has(ytd-ad-slot-renderer),ytd-reel-video-renderer:has(ytd-ad-slot-renderer),"
-                                    L".ytp-ad-module,.ytp-ad-overlay-container,.ytp-ad-image-overlay,.ytp-ad-player-overlay-instream-info,.ytp-ad-message-container,"
-                                    L"ytd-player-legacy-desktop-watch-ads-renderer,ytd-action-companion-ad-renderer,ytd-companion-slot-renderer,#player-ads,#panels ytd-engagement-panel-section-list-renderer[target-id*=\"ad\"]"
-                                    L"{display:none!important}';(document.head||document.documentElement).appendChild(st);}catch(_){}}"
-                                    L"function clickIf(el){try{if(!el)return false;var r=el.getBoundingClientRect(); if(r && r.width===0 && r.height===0){} el.click(); return true;}catch(_){return false;}}"
-                                    L"function trySkipAds(){try{"
-                                    L"var sels=['.ytp-ad-skip-button','.ytp-ad-skip-button-modern','.ytp-skip-ad-button','button.ytp-ad-skip-button-modern','.ytp-ad-overlay-close-button'];"
-                                    L"for(var i=0;i<sels.length;i++){var nodes=document.querySelectorAll(sels[i]); for(var j=0;j<nodes.length;j++){clickIf(nodes[j]);}}"
-                                    L"var btns=document.querySelectorAll('button,[role=\"button\"]'); for(var k=0;k<btns.length;k++){var b=btns[k]; var t=((b.innerText||b.textContent||'')+' '+(b.getAttribute('aria-label')||'')).toLowerCase(); if(!t)continue; if(t.indexOf('skip ad')>=0||t.indexOf('skip ads')>=0||t.indexOf('skip')>=0&&t.indexOf('ad')>=0){clickIf(b);} }"
-                                    L"var player=document.querySelector('.html5-video-player'); var adShowing=player && (player.classList.contains('ad-showing')||player.classList.contains('ad-interrupting'));"
-                                    L"if(adShowing){var v=document.querySelector('video.html5-main-video,video'); if(v){try{if(isFinite(v.duration)&&v.duration>0&&v.currentTime<v.duration-0.25){v.currentTime=Math.max(v.currentTime,v.duration-0.25);} }catch(_){ } try{v.muted=true;}catch(_){ } try{v.playbackRate=16;}catch(_){ } }}"
-                                    L"else{var v2=document.querySelector('video.html5-main-video,video'); if(v2 && v2.playbackRate>2){try{v2.playbackRate=1;}catch(_){}}}"
+                                    L".ytp-ad-module,.ytp-ad-image-overlay,.ytp-ad-player-overlay-instream-info,.ytp-ad-message-container,"
+                                    L"ytd-player-legacy-desktop-watch-ads-renderer,ytd-action-companion-ad-renderer,ytd-companion-slot-renderer,#player-ads,"
+                                    L"#panels ytd-engagement-panel-section-list-renderer[target-id*=\"ad\"]{display:none!important}"
+                                    L".html5-video-player.ad-showing video,.html5-video-player.ad-interrupting video{opacity:0!important;visibility:hidden!important}"
+                                    L".html5-video-player.ad-showing .ytp-ad-player-overlay-layout,.html5-video-player.ad-interrupting .ytp-ad-player-overlay-layout{opacity:0!important}"
+                                    L"';(document.head||document.documentElement).appendChild(st);}catch(_){}}"
+                                    L"function fireClick(el){try{if(!el)return false;var r=el.getBoundingClientRect?el.getBoundingClientRect():null;var x=r?Math.floor(r.left+Math.min(Math.max(r.width,1),10)/2):1;var y=r?Math.floor(r.top+Math.min(Math.max(r.height,1),10)/2):1;"
+                                    L"var opts={bubbles:true,cancelable:true,composed:true,view:window,clientX:x,clientY:y,button:0,buttons:1};"
+                                    L"try{el.dispatchEvent(new PointerEvent('pointerover',opts));}catch(_){ }try{el.dispatchEvent(new MouseEvent('mouseover',opts));}catch(_){ }"
+                                    L"try{el.dispatchEvent(new PointerEvent('pointerdown',opts));}catch(_){ }try{el.dispatchEvent(new MouseEvent('mousedown',opts));}catch(_){ }"
+                                    L"try{el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,composed:true,view:window,clientX:x,clientY:y,button:0,buttons:0}));}catch(_){ }try{el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,composed:true,view:window,clientX:x,clientY:y,button:0,buttons:0}));}catch(_){ }"
+                                    L"try{el.dispatchEvent(new MouseEvent('click',opts));}catch(_){ }try{if(typeof el.click==='function')el.click();}catch(_){ }return true;}catch(_){return false;}}"
+                                    L"function isVisible(el){try{if(!el)return false;var r=el.getBoundingClientRect(); if(!r) return true; return r.width>0&&r.height>0;}catch(_){return true;}}"
+                                    L"function clickSkip(){try{"
+                                    L"var sels=['.ytp-ad-skip-button','.ytp-ad-skip-button-modern','.ytp-skip-ad-button','button.ytp-ad-skip-button-modern','.ytp-ad-skip-button-container button','.ytp-ad-skip-button-slot button','.ytp-ad-skip-button-text','[id^=\"skip-button\"] button','[id^=\"skip-button\"]','ytd-button-renderer#skip-button button','.ytp-ad-overlay-close-button','.ytp-ad-overlay-close-container','.ytp-ad-survey-answer-button'];"
+                                    L"for(var i=0;i<sels.length;i++){var nodes=document.querySelectorAll(sels[i]);for(var j=0;j<nodes.length;j++){if(isVisible(nodes[j]))fireClick(nodes[j]);}}"
+                                    L"var btns=document.querySelectorAll('button,[role=\"button\"],tp-yt-paper-button,yt-button-shape button');"
+                                    L"for(var k=0;k<btns.length;k++){var b=btns[k];var t=((b.innerText||b.textContent||'')+' '+(b.getAttribute('aria-label')||'')+' '+(b.getAttribute('title')||'')).toLowerCase().replace(/\\s+/g,' ').trim();"
+                                    L"if(!t)continue;if(t.indexOf('skip ad')>=0||t.indexOf('skip ads')>=0||(t.indexOf('skip')>=0&&t.indexOf('ad')>=0)||t==='skip'){if(isVisible(b))fireClick(b);try{var p=b.closest?b.closest('button,[role=\"button\"]'):null;if(p&&p!==b&&isVisible(p))fireClick(p);}catch(_){}}}"
+                                    L"try{var p1=document.querySelector('.html5-video-player')||document.getElementById('movie_player'); if(p1){if(typeof p1.skipAd==='function'){try{p1.skipAd();}catch(_){}} if(typeof p1.cancelPlayback==='function'){/* no-op */}}}catch(_){ }"
                                     L"}catch(_){}}"
-                                    L"addCss(); trySkipAds();"
-                                    L"var mo=null; try{mo=new MutationObserver(function(){addCss(); trySkipAds();}); mo.observe(document.documentElement||document,{childList:true,subtree:true,attributes:true});}catch(_){ }"
-                                    L"try{setInterval(function(){addCss(); trySkipAds();}, 1000);}catch(_){ }"
-                                    L"try{document.addEventListener('yt-navigate-finish',function(){addCss(); trySkipAds();},true);}catch(_){ }"
+                                    L"function adShowingNow(){try{var p=document.querySelector('.html5-video-player')||document.getElementById('movie_player'); if(!p) return false; if(p.classList&&(p.classList.contains('ad-showing')||p.classList.contains('ad-interrupting'))) return true; if(document.querySelector('.ytp-ad-skip-ad-slot,.ytp-ad-preview-container,.ytp-ad-player-overlay,.ytp-ad-simple-ad-badge,.ad-showing,.ytp-ad-text')) return true; return false;}catch(_){return false;}}"
+                                    L"function handleAds(){try{if(!enabled())return;addCss();var ad=adShowingNow(); if(ad) clickSkip();"
+                                    L"var v=document.querySelector('video.html5-main-video,video'); var p=document.querySelector('.html5-video-player')||document.getElementById('movie_player');"
+                                    L"if(ad){"
+                                    L"  try{if(p&&typeof p.setPlaybackRate==='function')p.setPlaybackRate(16);}catch(_){ }"
+                                    L"  if(v){try{v.muted=true; v.volume=0;}catch(_){ }try{if(v.playbackRate<16) v.playbackRate=16;}catch(_){ }try{if(v.defaultPlaybackRate!==16) v.defaultPlaybackRate=16;}catch(_){ }try{if(v.paused){var pp=v.play(); if(pp&&pp.catch)pp.catch(function(){});} }catch(_){ }}"
+                                    L"  setTimeout(function(){try{if(adShowingNow()) clickSkip();}catch(_){ }},120);"
+                                    L"} else {"
+                                    L"  if(v){try{if(v.playbackRate&&v.playbackRate>2){v.playbackRate=1; v.defaultPlaybackRate=1;}}catch(_){ }}"
+                                    L"  try{if(p&&typeof p.setPlaybackRate==='function')p.setPlaybackRate(1);}catch(_){ }"
+                                    L"}"
+                                    L"}catch(_){}}"
+                                    L"var scheduled=false,lastRun=0;function schedule(force){try{var now=Date.now(); if(!force && scheduled) return; if(!force && (now-lastRun)<120) return; scheduled=true; var run=function(){scheduled=false; lastRun=Date.now(); handleAds();};"
+                                    L"if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);else setTimeout(run,30);}catch(_){scheduled=false;}}"
+                                    L"handleAds();"
+                                    L"try{var mo=new MutationObserver(function(){schedule(false);});if(document.documentElement)mo.observe(document.documentElement,{childList:true,subtree:true});}catch(_){ }"
+                                    L"try{setInterval(function(){handleAds();},500);}catch(_){ }"
+                                    L"try{document.addEventListener('yt-navigate-finish',function(){schedule(true);},true);}catch(_){ }"
+                                    L"try{document.addEventListener('yt-page-data-updated',function(){schedule(true);},true);}catch(_){ }"
+                                    L"try{window.addEventListener('load',function(){schedule(true);},true);}catch(_){ }"
                                     L"}catch(e){}})();";
-                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);
+                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);
 
                                 // Track HTML fullscreen (e.g. YouTube player fullscreen) so managed UI can hide chrome/expand.
                                 try {
@@ -1010,8 +1034,11 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     int intervalMs = impl->adaptiveCaptureIntervalMs.load(std::memory_order_relaxed);
                                     if (intervalMs > 0) {
                                         uint64_t now = GetTickCount64();
-                                        uint64_t last = impl->lastFrameAcceptMs.load(std::memory_order_relaxed);
-                                        if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) return;
+                                        uint64_t boostUntil = impl->interactionBoostUntilMs.load(std::memory_order_relaxed);
+                                        if (!(boostUntil != 0 && now < boostUntil)) {
+                                            uint64_t last = impl->lastFrameAcceptMs.load(std::memory_order_relaxed);
+                                            if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) return;
+                                        }
                                         impl->lastFrameAcceptMs.store(now, std::memory_order_relaxed);
                                     }
                                     int64_t exp=-1; uint64_t s=impl->startTickMs.load(std::memory_order_relaxed);
@@ -1449,6 +1476,25 @@ bool CompositionBrowser::IsAdaptiveVisualStandby() const {
     return m_impl->adaptiveVisualStandby.load(std::memory_order_relaxed);
 }
 
+void CompositionBrowser::SetBasicAdBlockEnabled(bool enabled) {
+    if (!m_impl) return;
+    m_impl->basicAdBlockEnabled.store(enabled, std::memory_order_relaxed);
+    try { ExecuteScript(enabled ? L"try{window.__unBasicAdBlockEnabled=true;}catch(e){}" : L"try{window.__unBasicAdBlockEnabled=false;}catch(e){}"); } catch (...) {}
+}
+bool CompositionBrowser::GetBasicAdBlockEnabled() const {
+    if (!m_impl) return true;
+    return m_impl->basicAdBlockEnabled.load(std::memory_order_relaxed);
+}
+void CompositionBrowser::SetAutoConsentEnabled(bool enabled) {
+    if (!m_impl) return;
+    m_impl->autoConsentEnabled.store(enabled, std::memory_order_relaxed);
+    try { ExecuteScript(enabled ? L"try{window.__unAutoConsentEnabled=true;}catch(e){}" : L"try{window.__unAutoConsentEnabled=false;}catch(e){}"); } catch (...) {}
+}
+bool CompositionBrowser::GetAutoConsentEnabled() const {
+    if (!m_impl) return false;
+    return m_impl->autoConsentEnabled.load(std::memory_order_relaxed);
+}
+
 void CompositionBrowser::Shutdown(){
     Impl* impl = m_impl;
     if(!impl) { m_running.store(false); m_status.store(0); return; }
@@ -1492,10 +1538,14 @@ bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D*
     int intervalMs = m_impl->adaptiveCaptureIntervalMs.load(std::memory_order_relaxed);
     if (intervalMs > 0) {
         uint64_t now = GetTickCount64();
-        uint64_t last = m_impl->lastCopyMs.load(std::memory_order_relaxed);
-        if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) {
-            outDiag = "throttled";
-            return false;
+        uint64_t boostUntil = m_impl->interactionBoostUntilMs.load(std::memory_order_relaxed);
+        bool boosted = (boostUntil != 0 && now < boostUntil);
+        if (!boosted) {
+            uint64_t last = m_impl->lastCopyMs.load(std::memory_order_relaxed);
+            if (last != 0 && now >= last && (now - last) < (uint64_t)intervalMs) {
+                outDiag = "throttled";
+                return false;
+            }
         }
     }
     ID3D11Texture2D* src=nullptr; UINT cW=0,cH=0,tW=0,tH=0; DXGI_FORMAT fmt=DXGI_FORMAT_UNKNOWN; uint64_t seq=0;
@@ -1684,6 +1734,7 @@ bool CompositionBrowser::IsFullscreen() const {
 
 void CompositionBrowser::SendMouseMove(int x,int y,bool leftButton,bool rightButton){
     if(!m_impl) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
     Impl::MouseEvent e{};
     e.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE;
@@ -1701,6 +1752,7 @@ void CompositionBrowser::SendMouseMove(int x,int y,bool leftButton,bool rightBut
 }
 void CompositionBrowser::SendMouseDown(int x,int y,bool rightButton){
     if(!m_impl) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     // Do not force host/controller focus on every click: repeated SetFocus/MoveFocus(PROGRAMMATIC)
     // can dismiss web popups/menus (e.g. YouTube settings/quality). Managed side requests focus on
     // explicit focus transitions when needed.
@@ -1716,6 +1768,7 @@ void CompositionBrowser::SendMouseDown(int x,int y,bool rightButton){
 }
 void CompositionBrowser::SendMouseUp(int x,int y,bool rightButton){
     if(!m_impl) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
     // Position first, then deliver button-up (button no longer pressed).
     Impl::MouseEvent m{}; m.kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; m.vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE; m.data=0; m.x=x; m.y=y; m_impl->mouseQueue.push_back(m);
@@ -1727,6 +1780,7 @@ void CompositionBrowser::SendMouseUp(int x,int y,bool rightButton){
 }
 void CompositionBrowser::SendMouseWheel(int x,int y,int delta){
     if(!m_impl) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     // Avoid forcing MoveFocus/SetFocus on every wheel event (can disrupt web menus/popups). Managed side
     // requests focus on initial interaction transitions when needed.
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
@@ -1740,6 +1794,7 @@ void CompositionBrowser::SendMouseWheel(int x,int y,int delta){
 
 void CompositionBrowser::SendKey(uint32_t msg, uint64_t wParam, uint64_t lParam){
     if(!m_impl) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     // Do not force focusRequested/MoveFocus on every key event: that can blur the active DOM element while typing.
     // Managed side requests focus on explicit web interactions (click/wheel/focus transitions).
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
@@ -1752,6 +1807,7 @@ void CompositionBrowser::SendKey(uint32_t msg, uint64_t wParam, uint64_t lParam)
 
 void CompositionBrowser::SendText(const std::wstring& text){
     if(!m_impl || text.empty()) return;
+    m_impl->interactionBoostUntilMs.store(GetTickCount64() + 500, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_impl->inputMutex);
     m_impl->textQueue.push_back(text);
     m_impl->diagTextQueued.fetch_add(1, std::memory_order_relaxed);

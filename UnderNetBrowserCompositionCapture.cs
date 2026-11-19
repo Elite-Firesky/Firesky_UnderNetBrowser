@@ -22,10 +22,30 @@ namespace Firesky.UnderNetBrowser
         private int _lastReady = -1;
         private bool _startRequested;
         private string _lastUrl = "about:blank";
+        private float _lastStatusPollRealtime = -999f;
+        private int _cachedGlobalStatus;
+        private int _cachedDeviceReady;
+        private int _cachedTargetReady;
+        private int _cachedCompStatus;
 
         public Texture2D? Texture => _unityTexture;
         // status: 2=starting (async), 1=running, <0 error
         public bool IsRunning => _createIssued && UnderNetBrowserGpuNative.CompGetStatus() != 0;
+
+        private bool _browserFeatureConfigAppliedWhileRunning;
+
+        internal static void ApplyBrowserFeatureConfigFromPreferences()
+        {
+            try
+            {
+                if (!UnderNetBrowserGpuNative.EnsureLoaded()) return;
+                bool adBlock = UnderNetBrowserConfig.BasicAdBlockEnabled?.Value ?? true;
+                bool autoConsent = UnderNetBrowserConfig.AutoConsentEnabled?.Value ?? false;
+                try { UnderNetBrowserGpuNative.CompSetBasicAdBlockEnabled(adBlock ? 1 : 0); } catch { }
+                try { UnderNetBrowserGpuNative.CompSetAutoConsentEnabled(autoConsent ? 1 : 0); } catch { }
+            }
+            catch { }
+        }
 
         private bool _renderingSuspended;
         /// <summary>
@@ -76,6 +96,8 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { }
                 try { UnderNetBrowserGpuNative.CompSetParams(_lastUrl, _width, _height, userDataFolder); } catch { }
+                try { ApplyBrowserFeatureConfigFromPreferences(); } catch { }
+                _browserFeatureConfigAppliedWhileRunning = false;
                 _startRequested = true;
                 UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser][GPU-Comp] Requested composition browser start url='{_lastUrl}' target={_width}x{_height} userData='{userDataFolder ?? ""}'");
                 return true;
@@ -183,16 +205,42 @@ namespace Firesky.UnderNetBrowser
             if (_disposed || !_createIssued || _renderEventFunc == IntPtr.Zero) return;
             try
             {
-                int status = 0, devReady = 0, targetReady = 0, compStatus = 0;
-                try { status = UnderNetBrowserGpuNative.GetStatus(); } catch { }
-                try { devReady = UnderNetBrowserGpuNative.IsUnityDeviceReady(); } catch { }
-                try { targetReady = UnderNetBrowserGpuNative.IsTargetReady(); } catch { }
-                try { compStatus = UnderNetBrowserGpuNative.CompGetStatus(); } catch { }
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+
+                bool diagnosticsOn = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
+                // Poll expensive status fields less often when stable to reduce per-frame P/Invoke overhead.
+                bool needFrequentStatus = _startRequested || _cachedTargetReady == 0 || _cachedCompStatus == 2 || _cachedCompStatus < 0 || diagnosticsOn;
+                float statusPollInterval = needFrequentStatus ? 0f : 0.25f;
+                bool pollStatus = needFrequentStatus || (now - _lastStatusPollRealtime) >= statusPollInterval;
+
+                int status = _cachedGlobalStatus;
+                int devReady = _cachedDeviceReady;
+                int targetReady = _cachedTargetReady;
+                int compStatus = _cachedCompStatus;
+                if (pollStatus)
+                {
+                    _lastStatusPollRealtime = now;
+                    try { status = UnderNetBrowserGpuNative.GetStatus(); } catch { }
+                    try { devReady = UnderNetBrowserGpuNative.IsUnityDeviceReady(); } catch { }
+                    try { targetReady = UnderNetBrowserGpuNative.IsTargetReady(); } catch { }
+                    try { compStatus = UnderNetBrowserGpuNative.CompGetStatus(); } catch { }
+                    _cachedGlobalStatus = status;
+                    _cachedDeviceReady = devReady;
+                    _cachedTargetReady = targetReady;
+                    _cachedCompStatus = compStatus;
+                }
 
                 if (targetReady != 0 && _startRequested)
                 {
                     GL.IssuePluginEvent(_renderEventFunc, UnderNetBrowserGpuNative.EventCompStart);
                     _startRequested = false;
+                }
+
+                if (targetReady != 0 && compStatus == 1 && !_browserFeatureConfigAppliedWhileRunning)
+                {
+                    try { ApplyBrowserFeatureConfigFromPreferences(); } catch { }
+                    _browserFeatureConfigAppliedWhileRunning = true;
                 }
 
                 if (targetReady != 0 && !RenderingSuspended)
@@ -205,52 +253,56 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                bool changed = (compStatus != _lastStatus || targetReady != _lastReady);
-                bool periodic = (Time.realtimeSinceStartup - _lastLog > 5f);
-                bool important = (compStatus == 2 || compStatus < 0);
-                if (changed || periodic || important)
+                // Logging/state tracking only when we have fresh polled status (or forced periodic checks above).
+                if (pollStatus)
                 {
-                    _lastStatus = compStatus;
-                    _lastReady = targetReady;
-                    _lastLog = Time.realtimeSinceStartup;
-                    var err = UnderNetBrowserGpuNative.GetLastErrorString();
-                    var diag = "";
-                    try { diag = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
-                    string msg = $"[UnderNetBrowser][GPU-Comp] status={status} targetReady={targetReady} deviceReady={devReady} comp={compStatus} gfx={SystemInfo.graphicsDeviceType} err='{err}' diag='{diag}'";
-                    bool isNoFrameYet = diag.IndexOf("no frame yet", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool canLogNoFrame = !isNoFrameYet || changed || (Time.realtimeSinceStartup - _lastNoFrameLogTime >= 5f);
-                    if (isNoFrameYet && canLogNoFrame) _lastNoFrameLogTime = Time.realtimeSinceStartup;
-
-                    bool diagnosticsOn = UnderNetBrowserConfig.DebugLogging?.Value == true || UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value == true;
-                    if (diagnosticsOn)
+                    bool changed = (compStatus != _lastStatus || targetReady != _lastReady);
+                    bool periodic = (now - _lastLog > 5f);
+                    bool important = (compStatus == 2 || compStatus < 0);
+                    if (changed || periodic || important)
                     {
-                        // Avoid steady-state heartbeat spam while diagnostics are enabled; log changes, errors, and rate-limited startup states.
-                        bool shouldLogStatus = changed || important;
-                        if (compStatus == 2 && isNoFrameYet)
-                            shouldLogStatus = changed || canLogNoFrame;
-                        if (shouldLogStatus)
-                            UnderNetBrowserConfig.LogDiagnostic(msg);
-                    }
+                        _lastStatus = compStatus;
+                        _lastReady = targetReady;
+                        _lastLog = now;
+                        var err = UnderNetBrowserGpuNative.GetLastErrorString();
+                        var diag = "";
+                        try { diag = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
+                        string msg = $"[UnderNetBrowser][GPU-Comp] status={status} targetReady={targetReady} deviceReady={devReady} comp={compStatus} gfx={SystemInfo.graphicsDeviceType} err='{err}' diag='{diag}'";
+                        bool isNoFrameYet = diag.IndexOf("no frame yet", StringComparison.OrdinalIgnoreCase) >= 0;
+                        bool canLogNoFrame = !isNoFrameYet || changed || (now - _lastNoFrameLogTime >= 5f);
+                        if (isNoFrameYet && canLogNoFrame) _lastNoFrameLogTime = now;
 
-                    if (compStatus < 0)
-                    {
-                        string compErr = "";
-                        try { compErr = UnderNetBrowserGpuNative.GetLastErrorString(); } catch { }
-                        try { if (string.IsNullOrWhiteSpace(compErr)) compErr = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
-                        UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] startup/runtime error='{compErr}'");
+                        if (diagnosticsOn)
+                        {
+                            // Avoid steady-state heartbeat spam while diagnostics are enabled; log changes, errors, and rate-limited startup states.
+                            bool shouldLogStatus = changed || important;
+                            if (compStatus == 2 && isNoFrameYet)
+                                shouldLogStatus = changed || canLogNoFrame;
+                            if (shouldLogStatus)
+                                UnderNetBrowserConfig.LogDiagnostic(msg);
+                        }
+
+                        if (compStatus < 0)
+                        {
+                            string compErr = "";
+                            try { compErr = UnderNetBrowserGpuNative.GetLastErrorString(); } catch { }
+                            try { if (string.IsNullOrWhiteSpace(compErr)) compErr = UnderNetBrowserGpuNative.GetCompDiagString(); } catch { }
+                            UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] startup/runtime error='{compErr}'");
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                if (Time.realtimeSinceStartup - _lastLog > 5f)
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now - _lastLog > 5f)
                 {
-                    _lastLog = Time.realtimeSinceStartup;
+                    _lastLog = now;
                     UnderNetBrowserConfig.LogWarning($"[UnderNetBrowser][GPU-Comp] Tick failed: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
-
         private bool CreateOrResizeTargetTexture(int width, int height, bool issueInitEvent, bool log)
         {
             try

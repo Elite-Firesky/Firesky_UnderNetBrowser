@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -277,6 +277,8 @@ namespace Firesky.UnderNetBrowser
             }
         }
 
+        private float _nextBrowserSyncDispatchRealtime = -999f;
+
         public override void OnUpdate()
         {
             // Performance diagnostics: lightweight periodic sampling + frame-time accumulation (enabled sessions only).
@@ -284,10 +286,14 @@ namespace Firesky.UnderNetBrowser
 
             // Push Schedule I in-game time/day, installed apps, and settings state to built-in homepage pages
             // only while a browser instance/composition context is active (avoids unnecessary work/log spam in menus).
+            // Throttle dispatch: sync methods have their own 1-2s cadences, so per-frame checks are unnecessary overhead.
             try
             {
-                if (UnderNetBrowserApp.HasActiveBrowserSyncContext())
+                float now = 0f;
+                try { now = UnityEngine.Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now >= _nextBrowserSyncDispatchRealtime && UnderNetBrowserApp.HasActiveBrowserSyncContext())
                 {
+                    _nextBrowserSyncDispatchRealtime = now + 0.25f;
                     try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
                     try { UnderNetBrowserApp.TryUpdateHomepageInstalledApps(); } catch { }
                     try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }

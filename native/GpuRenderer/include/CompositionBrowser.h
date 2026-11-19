@@ -35,6 +35,12 @@ public:
     int GetAdaptiveCaptureIntervalMs() const;
     bool IsAdaptiveVisualStandby() const;
 
+    // Basic built-in blocking/cleanup behavior (request blocking + cosmetic/ad-mitigation script). Runtime-toggleable.
+    void SetBasicAdBlockEnabled(bool enabled);
+    bool GetBasicAdBlockEnabled() const;
+    void SetAutoConsentEnabled(bool enabled);
+    bool GetAutoConsentEnabled() const;
+
     // Render thread: copy latest captured frame into target texture. Returns true if a new frame was copied.
     bool CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D* target, std::string& outDiag);
 

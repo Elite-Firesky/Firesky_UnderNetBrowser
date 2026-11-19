@@ -189,9 +189,9 @@ namespace Firesky.UnderNetBrowser
                 "At far distance tiers, pause expensive visual capture/frame updates and show the last frame while keeping WebView2, page state, and audio running.");
 
             AdaptiveResolutionScalingEnabled = _category.CreateEntry(
-                "AdaptiveResolutionScalingEnabled", false,
-                "Adaptive Rendering: Resolution Scaling (Experimental)",
-                "Allow lower composition/render resolution in reduced tiers. Disabled by default for safety/compatibility; applied conservatively to avoid session churn.");
+                "AdaptiveResolutionScalingEnabled", true,
+                "Adaptive Rendering: Resolution Scaling",
+                "Allow lower composition/render resolution in reduced tiers. Applied conservatively to avoid session churn.");
 
             AdaptiveFullDistance = _category.CreateEntry(
                 "AdaptiveFullDistance", 7.0f,

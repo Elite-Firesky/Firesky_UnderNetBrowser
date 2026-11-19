@@ -82,6 +82,7 @@ namespace Firesky.UnderNetBrowser
         private int _lastSentPointerX = -1;
         private int _lastSentPointerY = -1;
         private float _lastPointerMoveSendTime;
+        private float _lastBrowserInteractionRealtime = -999f;
         private bool _gameMouseCaptured;
         private float _gameVirtualMouseX;
         private float _gameVirtualMouseY;
@@ -93,6 +94,23 @@ namespace Firesky.UnderNetBrowser
         private float _lastDistanceVolumeUpdateTime = -999f;
         private float _lastDistanceVolumeApplied = 1f;
         private bool _distanceVolumeWasEnabled;
+
+        // Cached scene references / shared spatial context (performance: avoid repeated GameObject.Find/reflection/scans)
+        private GameObject? _cachedTvInterfaceGameObject;
+        private float _cachedTvInterfaceResolveRealtime = -999f;
+        private UnityEngine.Object? _cachedTvInterfaceComponentObj;
+        private Type? _cachedTvInterfaceComponentType;
+        private GameObject? _cachedAppRootGameObject;
+        private float _cachedAppRootResolveRealtime = -999f;
+        private float _tvSpatialLastUpdateRealtime = -999f;
+        private bool _tvSpatialHasListener;
+        private Vector3 _tvSpatialListenerPos;
+        private bool _tvSpatialHasTv;
+        private Vector3 _tvSpatialTvPos;
+        private float _tvSpatialDistance = -1f;
+        private bool _tvSpatialTvVisible = true;
+        private Renderer? _tvSpatialVisibilityRenderer;
+        private Transform? _tvSpatialVisibilityRendererTvTransform;
 
         // Adaptive Rendering (visual-only quality/performance; independent of audio)
         private enum AdaptiveVisualTier { Full = 0, Reduced = 1, Low = 2, VisualStandby = 3 }
@@ -235,6 +253,7 @@ namespace Firesky.UnderNetBrowser
                 _lastDistanceVolumeApplied = 1f;
                 _distanceVolumeTvTransform = null;
                 try { ResetAdaptiveRenderingState("shutdown:" + reason); } catch { }
+                try { InvalidatePerformanceCaches(); } catch { }
 
                 // Best-effort teardown. Avoid script/navigation into a potentially hung WebView before dispose,
                 // as these can block on native synchronization during unload/recovery shutdowns.
@@ -908,7 +927,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 10;
+        private const int ManagedHomepageVersion = 11;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1585,10 +1604,10 @@ namespace Firesky.UnderNetBrowser
                         if (UnderNetBrowserConfig.HomeUrl != null) { UnderNetBrowserConfig.HomeUrl.Value = string.IsNullOrWhiteSpace(trimmed) ? "undernet:home" : trimmed; Save(); message = "Home URL updated."; return true; }
                         break;
                     case "BasicAdBlockEnabled":
-                        if (UnderNetBrowserConfig.BasicAdBlockEnabled != null && ParseBool(raw, out var bAd)) { UnderNetBrowserConfig.BasicAdBlockEnabled.Value = bAd; Save(); message = "Basic ad/tracker blocking updated."; return true; }
+                        if (UnderNetBrowserConfig.BasicAdBlockEnabled != null && ParseBool(raw, out var bAd)) { UnderNetBrowserConfig.BasicAdBlockEnabled.Value = bAd; Save(); try { UnderNetBrowserCompositionCapture.ApplyBrowserFeatureConfigFromPreferences(); } catch { } message = "Basic ad/tracker blocking updated."; return true; }
                         break;
                     case "AutoConsentEnabled":
-                        if (UnderNetBrowserConfig.AutoConsentEnabled != null && ParseBool(raw, out var bConsent)) { UnderNetBrowserConfig.AutoConsentEnabled.Value = bConsent; Save(); message = "Auto-consent setting updated."; return true; }
+                        if (UnderNetBrowserConfig.AutoConsentEnabled != null && ParseBool(raw, out var bConsent)) { UnderNetBrowserConfig.AutoConsentEnabled.Value = bConsent; Save(); try { UnderNetBrowserCompositionCapture.ApplyBrowserFeatureConfigFromPreferences(); } catch { } message = "Auto-consent setting updated."; return true; }
                         break;
                     case "DistanceVolumeEnabled":
                         if (UnderNetBrowserConfig.DistanceVolumeEnabled != null && ParseBool(raw, out var bDist)) { UnderNetBrowserConfig.DistanceVolumeEnabled.Value = bDist; Save(); message = "Distance volume setting updated."; return true; }
@@ -2288,6 +2307,24 @@ namespace Firesky.UnderNetBrowser
             }
         }
 
+        private void MarkBrowserInteraction(string reason = "")
+        {
+            try
+            {
+                if (!IsOpen || _detachedToGameplay || _gpuCompositionCapture == null) return;
+                _lastBrowserInteractionRealtime = Time.realtimeSinceStartup;
+                // Keep adaptive state responsive without spamming native apply/log calls on every mouse-move frame.
+                try { _adaptivePendingTier = AdaptiveVisualTier.Full; _adaptivePendingTierSince = _lastBrowserInteractionRealtime; } catch { }
+                bool needsFullApply = _adaptiveAppliedStandby || _adaptiveAppliedCaptureIntervalMs > 0 || _adaptiveCurrentTier != AdaptiveVisualTier.Full;
+                if (needsFullApply)
+                {
+                    try { ApplyAdaptiveTier(AdaptiveVisualTier.Full, "user-interaction", forceApply: false); } catch { }
+                }
+                _ = reason;
+            }
+            catch { }
+        }
+
         private void HandleCompositionKeyboardInput()
         {
             try
@@ -2297,6 +2334,10 @@ namespace Firesky.UnderNetBrowser
                 bool urlFocused = _urlInput != null && _urlInput.isFocused;
                 bool webFocused = _compositionWebFocused && !urlFocused;
                 bool ptrOver = IsPointerOverVideoDisplay(out _, out _);
+                if (webFocused && !urlFocused && (Input.anyKeyDown || !string.IsNullOrEmpty(Input.inputString)))
+                {
+                    try { MarkBrowserInteraction("web-key"); } catch { }
+                }
 
                 // URL bar typing must remain separate from game input.
                 if (urlFocused)
@@ -2818,6 +2859,7 @@ namespace Firesky.UnderNetBrowser
                 if (_urlInput != null && _urlInput.isFocused) return;
                 if (!_compositionWebFocused) return;
                 _lastWebTextEntryActivityRealtime = Time.realtimeSinceStartup;
+                try { MarkBrowserInteraction("web-text"); } catch { }
                 try { UnderNetBrowserInputHooks.SetWebTextEntryActive(true); } catch { }
                 _ = reason;
             }
@@ -3439,7 +3481,7 @@ namespace Firesky.UnderNetBrowser
                     + "AdaptiveRenderingEnabled:" + b(UnderNetBrowserConfig.AdaptiveRenderingEnabled?.Value ?? true) + ","
                     + "AdaptiveDistanceQualityScaling:" + b(UnderNetBrowserConfig.AdaptiveDistanceQualityScaling?.Value ?? true) + ","
                     + "AdaptiveVisualStandbyEnabled:" + b(UnderNetBrowserConfig.AdaptiveVisualStandbyEnabled?.Value ?? true) + ","
-                    + "AdaptiveResolutionScalingEnabled:" + b(UnderNetBrowserConfig.AdaptiveResolutionScalingEnabled?.Value ?? false) + ","
+                    + "AdaptiveResolutionScalingEnabled:" + b(UnderNetBrowserConfig.AdaptiveResolutionScalingEnabled?.Value ?? true) + ","
                     + "AdaptiveFullDistance:" + f(UnderNetBrowserConfig.AdaptiveFullDistance?.Value ?? 7.0f) + ","
                     + "AdaptiveReducedDistance:" + f(UnderNetBrowserConfig.AdaptiveReducedDistance?.Value ?? 14.0f) + ","
                     + "AdaptiveLowDistance:" + f(UnderNetBrowserConfig.AdaptiveLowDistance?.Value ?? 22.0f) + ","
@@ -3528,17 +3570,27 @@ namespace Firesky.UnderNetBrowser
             return sb.ToString();
         }
 
-        private static string BuildInstalledAppsPayloadJson()
+        private static string BuildInstalledAppsPayloadJson(bool forceRebuild = false)
         {
             try
             {
+                float nowRt = 0f;
+                try { nowRt = Time.realtimeSinceStartup; } catch { nowRt = 0f; }
+                if (!forceRebuild && nowRt > 0f && (nowRt - _cachedInstalledAppsPayloadRealtime) < 20f && !string.IsNullOrEmpty(_cachedInstalledAppsPayloadJson))
+                    return _cachedInstalledAppsPayloadJson;
+
                 EnsureWebAppsFoundation();
                 var appsRoot = GetAppsRootDir();
-                if (!Directory.Exists(appsRoot)) return "[]";
+                if (!Directory.Exists(appsRoot))
+                {
+                    _cachedInstalledAppsPayloadJson = "[]";
+                    _cachedInstalledAppsPayloadRealtime = nowRt;
+                    return "[]";
+                }
 
                 var items = new System.Collections.Generic.List<string>();
                 string[] dirs;
-                try { dirs = Directory.GetDirectories(appsRoot); } catch { return "[]"; }
+                try { dirs = Directory.GetDirectories(appsRoot); } catch { dirs = Array.Empty<string>(); }
                 Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
                 foreach (var dir in dirs)
                 {
@@ -3602,14 +3654,27 @@ namespace Firesky.UnderNetBrowser
                     }
                     catch { }
                 }
-                return "[" + string.Join(",", items) + "]";
-            }
-            catch { return "[]"; }
-        }
 
+                var result = "[" + string.Join(",", items) + "]";
+                _cachedInstalledAppsPayloadJson = result;
+                _cachedInstalledAppsPayloadRealtime = nowRt;
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(_cachedInstalledAppsPayloadJson)) _cachedInstalledAppsPayloadJson = "[]";
+                }
+                catch { }
+                return string.IsNullOrEmpty(_cachedInstalledAppsPayloadJson) ? "[]" : _cachedInstalledAppsPayloadJson;
+            }
+        }
         private static float _nextHomepageInstalledAppsSyncRealtime = -999f;
         private static string _lastHomepageInstalledAppsPayload = string.Empty;
         private static string _lastHomepageInstalledAppsUrl = string.Empty;
+        private static string _cachedInstalledAppsPayloadJson = "[]";
+        private static float _cachedInstalledAppsPayloadRealtime = -999f;
 
         internal static void TryUpdateHomepageInstalledApps(bool force = false)
         {
@@ -3632,7 +3697,7 @@ namespace Firesky.UnderNetBrowser
                     _lastHomepageInstalledAppsPayload = string.Empty;
                 }
 
-                var payload = BuildInstalledAppsPayloadJson();
+                var payload = BuildInstalledAppsPayloadJson(forceRebuild: force);
                 if (!force && string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal)) return;
                 _lastHomepageInstalledAppsPayload = payload;
                 var script = "(function(){try{var p=" + payload + ";function go(){try{if(window.__underNetSetInstalledApps){window.__underNetSetInstalledApps(p);return true;}}catch(e){}return false;}if(!go()){var n=0,t=setInterval(function(){n++;if(go()||n>20)clearInterval(t);},250);}}catch(e){}})();";
@@ -3914,7 +3979,7 @@ namespace Firesky.UnderNetBrowser
                         if (mouseHeld || rHeld)
                         {
                             _lastSentPointerX = edgeX; _lastSentPointerY = edgeY; _lastPointerMoveSendTime = Time.unscaledTime;
-                            try { _gpuCompositionCapture.SendMouseMove(edgeX, edgeY, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
+                            try { _gpuCompositionCapture.SendMouseMove(edgeX, edgeY, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); MarkBrowserInteraction("ptr-edge-move"); } catch { }
                         }
                         if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, false); } catch { } _browserPointerDown = false; }
                         if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(edgeX, edgeY, true); } catch { } _browserPointerRightDown = false; }
@@ -4003,7 +4068,7 @@ namespace Firesky.UnderNetBrowser
                     if (_browserPointerDown || _browserPointerRightDown)
                     {
                         _lastSentPointerX = px; _lastSentPointerY = py; _lastPointerMoveSendTime = Time.unscaledTime;
-                        try { _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); } catch { }
+                        try { _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, _browserPointerRightDown && rHeld); MarkBrowserInteraction("ptr-outside-move"); } catch { }
                         if (_browserPointerDown && (mouseUp || !mouseHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, false); } catch { } _browserPointerDown = false; }
                         if (_browserPointerRightDown && (rUp || !rHeld)) { try { _gpuCompositionCapture.SendMouseUp(px, py, true); } catch { } _browserPointerRightDown = false; }
                         return;
@@ -4045,16 +4110,24 @@ namespace Firesky.UnderNetBrowser
                     // Request native web focus on click when transitioning, and also periodically if focus may be stale.
                     try { _gpuCompositionCapture.RequestFocus(); } catch { }
                     // In game mode, help focus the actual game canvas/element so keyboard events reach it.
+                    // Throttle JS focus nudge to avoid unnecessary script execution on rapid/repeated clicks.
                     if (_gameInputMode)
                     {
-                        try
+                        float nowFocusNudge = 0f;
+                        try { nowFocusNudge = Time.realtimeSinceStartup; } catch { nowFocusNudge = 0f; }
+                        if ((nowFocusNudge - _lastGameModeFocusNudge) >= 1.0f)
                         {
+                            _lastGameModeFocusNudge = nowFocusNudge;
+                            try
+                            {
                             _gpuCompositionCapture.ExecuteScript("(function(){try{var d=document,c=d.querySelector('canvas'); if(c){try{if(c.tabIndex==null||c.tabIndex<0)c.tabIndex=0;}catch(_){} try{if(typeof c.focus==='function') c.focus();}catch(_){}} try{window&&window.focus&&window.focus();}catch(_){} try{d.body&&d.body.focus&&d.body.focus();}catch(_){} }catch(_){}})();");
+                            }
+                            catch { }
                         }
-                        catch { }
                     }
                     _gpuCompositionCapture.SendMouseMove(px, py, false, _browserPointerRightDown && rHeld);
                     _gpuCompositionCapture.SendMouseDown(px, py, false);
+                    try { MarkBrowserInteraction("ptr-down"); } catch { }
                 }
                 else if (rDown && allowRightClickToWeb)
                 {
@@ -4074,6 +4147,7 @@ namespace Firesky.UnderNetBrowser
                     if (!wasWebFocused) { try { _gpuCompositionCapture.RequestFocus(); } catch { } }
                     _gpuCompositionCapture.SendMouseMove(px, py, _browserPointerDown && mouseHeld, false);
                     _gpuCompositionCapture.SendMouseDown(px, py, true);
+                    try { MarkBrowserInteraction("ptr-rdown"); } catch { }
                 }
                 else
                 {
@@ -4115,6 +4189,7 @@ namespace Firesky.UnderNetBrowser
                             if (Mathf.Abs(scroll) >= 2f) step *= 1.5;
                             double nz = Mathf.Clamp((float)(z + step), 0.25f, 5.0f);
                             _gpuCompositionCapture.SetZoomFactor(nz);
+                            try { MarkBrowserInteraction("ctrl-zoom"); } catch { }
                             try { _gpuCompositionCapture.RequestFocus(); } catch { }
                             UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, requested)");
                         }
@@ -4127,6 +4202,7 @@ namespace Firesky.UnderNetBrowser
                         int delta = Mathf.RoundToInt(scroll * 120f);
                         try { _gpuCompositionCapture.RequestFocus(); } catch { }
                         _gpuCompositionCapture.SendMouseWheel(px, py, delta);
+                        try { MarkBrowserInteraction("ptr-wheel"); } catch { }
                         // Wheel is forwarded to webpage; hotbar switching is blocked by InputHooks when ownership active.
                         if (!UnderNetBrowserInputHooks.Installed)
                         {
@@ -4827,6 +4903,10 @@ namespace Firesky.UnderNetBrowser
         private float _lastReattachProbeLogRealtime = -999f;
         private float _lastSpeculativeReattachRealtime = -999f;
         private float _lastDetachedCloseBlockedRealtime = -999f;
+        private float _detachedReattachProbeInterval = 0.20f;
+        private string _detachedReattachProbeStateKey = "";
+        private float _tvScreenMirrorNoCandidateRetryRealtime = -999f;
+        private bool _detachedVisualLayoutApplied;
         private readonly List<(GameObject go, bool wasActive)> _detachedHiddenHomeScreenObjects = new List<(GameObject, bool)>();
         private readonly List<(Renderer renderer, bool wasEnabled)> _detachedHiddenClockRenderers = new List<(Renderer, bool)>();
         private readonly List<(Renderer renderer, Material? materialInstance, Texture? originalMainTexture, string? originalShaderName)> _tvScreenMirrorStates = new List<(Renderer, Material?, Texture?, string?)>();
@@ -5045,6 +5125,10 @@ namespace Firesky.UnderNetBrowser
                 _lastDetachedCloseBlockedRealtime = -999f;
                 _lastReattachProbeLogSignature = "";
                 _lastReattachProbeLogRealtime = -999f;
+                _detachedReattachProbeInterval = 0.20f;
+                _detachedReattachProbeStateKey = "";
+                _detachedVisualLayoutApplied = false;
+                _tvScreenMirrorNoCandidateRetryRealtime = -999f;
 
                 // Keep rendering active while detached so video playback remains visible on TV (audio already continues).
                 try { if (_gpuCompositionCapture != null) _gpuCompositionCapture.RenderingSuspended = false; } catch { }
@@ -5705,7 +5789,8 @@ namespace Firesky.UnderNetBrowser
                     }
                     return false;
                 }
-                if (nowRt - _lastDetachedReattachCheckRealtime < 0.20f) return false;
+                float probeInterval = Mathf.Clamp(_detachedReattachProbeInterval <= 0f ? 0.20f : _detachedReattachProbeInterval, 0.20f, 1.0f);
+                if (nowRt - _lastDetachedReattachCheckRealtime < probeInterval) return false;
                 _lastDetachedReattachCheckRealtime = nowRt;
 
                 // Detect game TV interaction resumed.
@@ -5713,28 +5798,29 @@ namespace Firesky.UnderNetBrowser
                 try { UnderNetBrowserDiagnostics.SetBrowserIntentionalAlive(false); } catch { }
                 bool shouldReattach = false;
                 string reattachReason = "none";
+                string probeStateKey = "missing";
                 try
                 {
-                    var go = GameObject.Find("TVInterface");
-                    if (go != null)
-                    {
-                        var (ifaceObj, ifaceType) = TryGetIl2CppComponentByTypeNames(go, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
-                        if (ifaceObj == null || ifaceType == null)
-                        {
-                            // fallback: try resolved instance on components
-                            Component[]? comps = null;
-                            try { comps = go.GetComponents<Component>(); } catch { comps = null; }
-                            if (comps != null)
-                            {
-                                foreach (var c in comps)
-                                {
-                                    if (c == null) continue;
-                                    var casted = TryCastIl2CppObject(c, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
-                                    if (casted.obj != null && casted.type != null) { ifaceObj = casted.obj; ifaceType = casted.type; break; }
-                                }
-                            }
-                        }
+                    bool appFocusedForUnreadable = false;
+                    try { appFocusedForUnreadable = Application.isFocused; } catch { appFocusedForUnreadable = true; }
+                    bool closeBlockedRecently = (nowRt - _lastDetachedCloseBlockedRealtime) <= 4.0f;
 
+                    bool tvGoFound = false;
+                    bool gotIface = TryGetTvInterfaceComponentCached(out var ifaceObj, out var ifaceType, force: false);
+                    if (ifaceObj != null && ifaceType != null)
+                        tvGoFound = true;
+                    else
+                    {
+                        try { tvGoFound = TryGetTvInterfaceGameObjectCached(out var tvGoCached, force: false, minIntervalSeconds: 1.0f) && tvGoCached != null; } catch { tvGoFound = false; }
+                        if (tvGoFound)
+                        {
+                            // One best-effort uncached resolve attempt (component cache may be stale/unresolved). Avoid full scan every probe.
+                            try { gotIface = TryGetTvInterfaceComponentCached(out ifaceObj, out ifaceType, force: true); } catch { gotIface = false; }
+                        }
+                    }
+
+                    if (tvGoFound)
+                    {
                         if (ifaceObj != null && ifaceType != null)
                         {
                             bool tvOpen = TryGetTvInterfaceIsOpen(ifaceType, ifaceObj, out var tvOpenKnown);
@@ -5779,19 +5865,70 @@ namespace Firesky.UnderNetBrowser
                             if (!shouldReattach && !tvOpenKnown && !playersKnown && !localInPlayers)
                             {
                                 _detachedUnreadableProbeCount++;
-                                bool appFocused = false;
-                                try { appFocused = Application.isFocused; } catch { appFocused = true; }
-                                bool closeBlockedRecently = (nowRt - _lastDetachedCloseBlockedRealtime) <= 4.0f;
-                                float unreadableDelay = 1.25f;
-                                if (closeBlockedRecently && (nowRt - _detachRequestedTime) >= unreadableDelay && appFocused && (nowRt - _lastSpeculativeReattachRealtime) >= 3.0f && _detachedUnreadableProbeCount >= 4)
+
+                                // If unreadable persists, periodically refresh cached TV GO/component in case the cached instance became stale
+                                // or the game recreated TV state after the last cached resolve. This keeps probing cheap while recovering correctness.
+                                if ((_detachedUnreadableProbeCount % 4) == 0)
+                                {
+                                    try
+                                    {
+                                        _cachedTvInterfaceComponentObj = null;
+                                        _cachedTvInterfaceComponentType = null;
+                                        _cachedTvInterfaceGameObject = null;
+                                        _cachedTvInterfaceResolveRealtime = -999f;
+                                        if (TryGetTvInterfaceComponentCached(out var iface2, out var ifaceType2, force: true) && iface2 != null && ifaceType2 != null)
+                                        {
+                                            ifaceObj = iface2;
+                                            ifaceType = ifaceType2;
+                                            tvOpen = TryGetTvInterfaceIsOpen(ifaceType, ifaceObj, out tvOpenKnown);
+                                            localInPlayers = IsLocalPlayerInTvInterface(ifaceType, ifaceObj, out playersKnown, out playerCount);
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                if (!shouldReattach && !tvOpenKnown && !playersKnown && !localInPlayers)
+                                {
+                                    float unreadableDelay = 1.25f;
+                                    if (closeBlockedRecently && (nowRt - _detachRequestedTime) >= unreadableDelay && appFocusedForUnreadable && (nowRt - _lastSpeculativeReattachRealtime) >= 3.0f && _detachedUnreadableProbeCount >= 4)
+                                    {
+                                        shouldReattach = true;
+                                        reattachReason = "tvStateUnreadableCloseBlockedFallback";
+                                        _lastSpeculativeReattachRealtime = nowRt;
+                                        _detachedUnreadableProbeCount = 0;
+                                    }
+                                }
+                                else if (localInPlayers)
                                 {
                                     shouldReattach = true;
-                                    reattachReason = "tvStateUnreadableCloseBlockedFallback";
-                                    _lastSpeculativeReattachRealtime = nowRt;
-                                    _detachedUnreadableProbeCount = 0;
+                                    reattachReason = "localPlayerInTv";
+                                }
+                                else if (tvOpenKnown && tvOpen)
+                                {
+                                    if (!_detachedTvInterfaceWasOpen)
+                                    {
+                                        shouldReattach = true;
+                                        reattachReason = "tvOpenTransition";
+                                    }
+                                    else if (!_detachedLocalPlayerWasInTv)
+                                    {
+                                        shouldReattach = true;
+                                        reattachReason = "tvOpenNoBaselinePlayer";
+                                    }
+                                    else if (playersKnown && playerCount > 0)
+                                    {
+                                        shouldReattach = true;
+                                        reattachReason = "tvOpenPlayersPresent";
+                                    }
+                                    else if ((nowRt - _detachRequestedTime) >= 0.75f)
+                                    {
+                                        shouldReattach = true;
+                                        reattachReason = "tvOpenFallback";
+                                    }
                                 }
                             }
-                            else
+
+                            if (shouldReattach || tvOpenKnown || playersKnown || localInPlayers)
                             {
                                 _detachedUnreadableProbeCount = 0;
                             }
@@ -5827,6 +5964,8 @@ namespace Firesky.UnderNetBrowser
                                     catch { }
                                 }
                             }
+
+                            probeStateKey = $"ok|{(tvOpenKnown ? tvOpen.ToString() : "u")}|{localInPlayers}|{(playersKnown ? playerCount.ToString() : "u")}|{_detachedTvInterfaceWasOpen}|{_detachedLocalPlayerWasInTv}|{(closeBlockedRecently ? 1 : 0)}|{Mathf.Clamp(_detachedUnreadableProbeCount, 0, 8)}";
                         }
                         else
                         {
@@ -5843,6 +5982,7 @@ namespace Firesky.UnderNetBrowser
                                     try { UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Reattach probe: TVInterface GO found but TVInterface component/type unresolved."); } catch { }
                                 }
                             }
+                            probeStateKey = $"unresolved|{(closeBlockedRecently ? 1 : 0)}";
                         }
                     }
                     else
@@ -5854,14 +5994,40 @@ namespace Firesky.UnderNetBrowser
                             _lastReattachProbeLogSignature = "";
                             _lastReattachProbeLogRealtime = -999f;
                         }
+                        probeStateKey = $"missing|{(closeBlockedRecently ? 1 : 0)}";
+                    }
+
+                    // Back off probe frequency while detached state is stable (reduces CPU/hitching while walking around).
+                    if (shouldReattach)
+                    {
+                        _detachedReattachProbeInterval = 0.20f;
+                        _detachedReattachProbeStateKey = "";
+                    }
+                    else
+                    {
+                        if (!string.Equals(probeStateKey, _detachedReattachProbeStateKey, StringComparison.Ordinal))
+                        {
+                            _detachedReattachProbeStateKey = probeStateKey;
+                            _detachedReattachProbeInterval = 0.20f;
+                        }
+                        else
+                        {
+                            float next = _detachedReattachProbeInterval;
+                            if (next < 0.35f) next = 0.35f;
+                            else if (next < 0.50f) next = 0.50f;
+                            else if (next < 0.75f) next = 0.75f;
+                            else next = 1.00f;
+                            _detachedReattachProbeInterval = Mathf.Clamp(next, 0.20f, 1.00f);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
                     _detachedUnreadableProbeCount = 0;
                     try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Reattach probe failed (non-fatal): {ex.Message}"); } catch { }
+                    _detachedReattachProbeInterval = 0.20f;
+                    _detachedReattachProbeStateKey = "";
                 }
-
                 if (!shouldReattach) return false;
 
                 // Re-acquire browser/TV input ownership while keeping app/browser state running.
@@ -5870,6 +6036,10 @@ namespace Firesky.UnderNetBrowser
                 AnyDetachActive = false;
                 _detachedUnreadableProbeCount = 0;
                 _lastDetachedCloseBlockedRealtime = -999f;
+                _detachedReattachProbeInterval = 0.20f;
+                _detachedReattachProbeStateKey = "";
+                _detachedVisualLayoutApplied = false;
+                _tvScreenMirrorNoCandidateRetryRealtime = -999f;
                 _compositionFocusPrimed = false;
                 _compositionWebFocused = true; // default back to web interaction after reattach
                 if (_gameInputMode && UnderNetBrowserConfig.DebugLogging?.Value == true)
@@ -5940,31 +6110,36 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (!_detachedToGameplay) return;
-                if (!force && Time.realtimeSinceStartup - _lastDetachedVisualMaintainRealtime < 0.25f) return;
-                _lastDetachedVisualMaintainRealtime = Time.realtimeSinceStartup;
+                float now = Time.realtimeSinceStartup;
+                float interval = 0.35f;
+                bool mirrorStable = (_tvScreenMirrorStates.Count > 0) || (now < _tvScreenMirrorNoCandidateRetryRealtime);
+                if (_detachedVisualTargetsScanned && mirrorStable && _detachedVisualLayoutApplied)
+                    interval = 0.75f;
+                if (!force && now - _lastDetachedVisualMaintainRealtime < interval) return;
+                _lastDetachedVisualMaintainRealtime = now;
 
                 // Keep our app canvas/UI visible on the TV while player is in gameplay (TVInterface.Close() may show home/lock screen).
                 GameObject? appGo = null;
                 try
                 {
-                    if (_videoDisplay != null)
+                    if (!TryGetAppRootGameObjectCached(out appGo, force: false, minIntervalSeconds: 1f) || appGo == null)
                     {
-                        var t = _videoDisplay.transform;
-                        // Walk up to find app root container if present.
-                        for (int i = 0; i < 8 && t != null; i++)
+                        // Fallback: derive from video display hierarchy quickly.
+                        if (_videoDisplay != null)
                         {
-                            if (t.name == "UnderNetBrowser_TVApp" || t.name.IndexOf("UnderNetBrowser", StringComparison.OrdinalIgnoreCase) >= 0)
-                            { appGo = t.gameObject; break; }
-                            t = t.parent;
+                            var t = _videoDisplay.transform;
+                            for (int i = 0; i < 8 && t != null; i++)
+                            {
+                                if (t.name == "UnderNetBrowser_TVApp" || (t.name ?? "").IndexOf("UnderNetBrowser", StringComparison.OrdinalIgnoreCase) >= 0)
+                                { appGo = t.gameObject; break; }
+                                t = t.parent;
+                            }
+                            if (appGo == null) appGo = _videoDisplay.gameObject;
+                            try { _cachedAppRootGameObject = appGo; _cachedAppRootResolveRealtime = now; } catch { }
                         }
-                        if (appGo == null) appGo = _videoDisplay.gameObject;
                     }
                 }
-                catch { }
-                if (appGo == null)
-                {
-                    try { appGo = GameObject.Find("UnderNetBrowser_TVApp"); } catch { appGo = null; }
-                }
+                catch { appGo = null; }
 
                 if (appGo != null)
                 {
@@ -5977,7 +6152,9 @@ namespace Firesky.UnderNetBrowser
                         {
                             try { if (!cur.gameObject.activeSelf) cur.gameObject.SetActive(true); } catch { }
                             // Stop climbing too far above TV interface container area.
-                            if (cur.name == "TVInterface" || cur.name == "Container") break;
+                            string n = "";
+                            try { n = cur.name ?? ""; } catch { n = ""; }
+                            if (n == "TVInterface" || n == "Container") break;
                             cur = cur.parent;
                         }
                     }
@@ -6009,6 +6186,11 @@ namespace Firesky.UnderNetBrowser
                     catch { }
 
                     try { appGo.transform.SetAsLastSibling(); } catch { }
+                    _detachedVisualLayoutApplied = true;
+                }
+                else
+                {
+                    _detachedVisualLayoutApplied = false;
                 }
 
                 // Best-effort: mirror composition texture onto TV physical screen surface while detached
@@ -6024,7 +6206,8 @@ namespace Firesky.UnderNetBrowser
 
                     if (!_detachedVisualTargetsScanned)
                     {
-                        var tvIfaceGo = GameObject.Find("TVInterface");
+                        GameObject? tvIfaceGo = null;
+                        try { TryGetTvInterfaceGameObjectCached(out tvIfaceGo, force: false, minIntervalSeconds: 1f); } catch { tvIfaceGo = null; }
                         if (tvIfaceGo != null)
                         {
                             var transforms = tvIfaceGo.GetComponentsInChildren<Transform>(true);
@@ -6124,7 +6307,6 @@ namespace Firesky.UnderNetBrowser
             }
             catch { }
         }
-
         private void RestoreDetachedHomeScreenObjects(bool restoreHiddenObjects = true)
         {
             if (restoreHiddenObjects)
@@ -6154,6 +6336,9 @@ namespace Firesky.UnderNetBrowser
 
                 // Reset scan state after a full restore so future detach sessions can rediscover/hide as needed.
                 _detachedVisualTargetsScanned = false;
+                _detachedVisualLayoutApplied = false;
+                _tvScreenMirrorNoCandidateLogged = false;
+                _tvScreenMirrorNoCandidateRetryRealtime = -999f;
             }
             else
             {
@@ -6173,8 +6358,9 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (!_detachedToGameplay) return;
-                if (!force && Time.realtimeSinceStartup - _lastTvScreenMirrorAttemptRealtime < 0.5f) return;
-                _lastTvScreenMirrorAttemptRealtime = Time.realtimeSinceStartup;
+                float now = Time.realtimeSinceStartup;
+                if (!force && now - _lastTvScreenMirrorAttemptRealtime < 0.5f) return;
+                _lastTvScreenMirrorAttemptRealtime = now;
 
                 var tex = _gpuCompositionCapture?.Texture;
                 if (tex == null) return;
@@ -6200,19 +6386,20 @@ namespace Firesky.UnderNetBrowser
                     _tvScreenMirrorStates.Clear();
                 }
 
-                // No candidates found in this detached session; avoid expensive hierarchy rescans.
-                if (_tvScreenMirrorNoCandidateLogged) return;
+                // No candidates found recently; avoid expensive hierarchy rescans while walking around.
+                if (!force && now < _tvScreenMirrorNoCandidateRetryRealtime) return;
 
                 GameObject? tvIfaceGo = null;
-                try { tvIfaceGo = GameObject.Find("TVInterface"); } catch { tvIfaceGo = null; }
+                try { TryGetTvInterfaceGameObjectCached(out tvIfaceGo, force: force, minIntervalSeconds: 2f); } catch { tvIfaceGo = null; }
                 if (tvIfaceGo == null)
                 {
                     try
                     {
-                        string[] roots = { "TV_Built(Clone)/TVInterface", "TVInterface" };
+                        // Compatibility fallback names/paths (cached resolver may miss some scene variants).
+                        string[] roots = { "TV_Built(Clone)/TVInterface", "TVInterface", "TV_Built/TVInterface" };
                         foreach (var path in roots)
                         {
-                            try { var go = GameObject.Find(path); if (go != null) { tvIfaceGo = go; break; } } catch { }
+                            try { var go = GameObject.Find(path); if (go != null) { tvIfaceGo = go; _cachedTvInterfaceGameObject = go; _cachedTvInterfaceResolveRealtime = now; break; } } catch { }
                         }
                     }
                     catch { }
@@ -6222,7 +6409,9 @@ namespace Firesky.UnderNetBrowser
                 Transform? appRoot = null;
                 try
                 {
-                    if (_videoDisplay != null)
+                    if (TryGetAppRootGameObjectCached(out var appGo, force: false, minIntervalSeconds: 1f) && appGo != null)
+                        appRoot = appGo.transform;
+                    else if (_videoDisplay != null)
                     {
                         var t = _videoDisplay.transform;
                         for (int i = 0; i < 10 && t != null; i++)
@@ -6235,7 +6424,7 @@ namespace Firesky.UnderNetBrowser
                 catch { appRoot = null; }
 
                 // Collect renderers from likely TV roots (TVInterface may only contain UI labels; screen mesh can be elsewhere on TV).
-                var rendererList = new List<Renderer>();
+                var rendererList = new List<Renderer>(64);
                 var seen = new HashSet<int>();
                 void AddRenderers(GameObject? root)
                 {
@@ -6277,7 +6466,7 @@ namespace Firesky.UnderNetBrowser
                 catch { }
                 try
                 {
-                    // Extra fallback roots by name.
+                    // Extra fallback roots by name (only during explicit scan attempts; throttled by cooldown below).
                     string[] extraRoots = { "TV_Built(Clone)", "TV_Built", "TV", "Barn Contents Container/TV_Built(Clone)" };
                     foreach (var p in extraRoots) { try { AddRenderers(GameObject.Find(p)); } catch { } }
                 }
@@ -6285,15 +6474,23 @@ namespace Firesky.UnderNetBrowser
 
                 if (rendererList.Count == 0)
                 {
+                    _tvScreenMirrorNoCandidateRetryRealtime = now + 10f;
                     if (UnderNetBrowserConfig.DebugLogging?.Value == true)
-                        UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no Renderer components found under TV hierarchy.");
+                    {
+                        if (!_tvScreenMirrorNoCandidateLogged || (now - _tvScreenMirrorNoCandidateLogRealtime) >= 10f)
+                        {
+                            _tvScreenMirrorNoCandidateLogged = true;
+                            _tvScreenMirrorNoCandidateLogRealtime = now;
+                            UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no Renderer components found under TV hierarchy.");
+                        }
+                    }
                     return;
                 }
-                var renderers = rendererList.ToArray();
 
                 var applied = new List<string>();
-                foreach (var r in renderers)
+                for (int ri = 0; ri < rendererList.Count; ri++)
                 {
+                    var r = rendererList[ri];
                     if (r == null) continue;
                     try
                     {
@@ -6388,17 +6585,19 @@ namespace Firesky.UnderNetBrowser
                 if (applied.Count > 0)
                 {
                     UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] TV screen mirror (detached): applied composition texture to {applied.Count} renderer(s): {string.Join(", ", applied)}");
+                    _tvScreenMirrorNoCandidateLogged = false;
+                    _tvScreenMirrorNoCandidateRetryRealtime = -999f;
                 }
                 else
                 {
+                    _tvScreenMirrorNoCandidateRetryRealtime = now + 10f;
                     // Benign/frequent no-op on some setups; trace only when debug logging is enabled.
                     if (UnderNetBrowserConfig.DebugLogging?.Value == true)
                     {
-                        float nowRt = Time.realtimeSinceStartup;
-                        if (!_tvScreenMirrorNoCandidateLogged || (nowRt - _tvScreenMirrorNoCandidateLogRealtime) >= 10f)
+                        if (!_tvScreenMirrorNoCandidateLogged || (now - _tvScreenMirrorNoCandidateLogRealtime) >= 10f)
                         {
                             _tvScreenMirrorNoCandidateLogged = true;
-                            _tvScreenMirrorNoCandidateLogRealtime = nowRt;
+                            _tvScreenMirrorNoCandidateLogRealtime = now;
                             UnderNetBrowserConfig.Log("[UnderNetBrowser] TV screen mirror: no suitable screen renderer candidates found.");
                         }
                     }
@@ -6409,7 +6608,6 @@ namespace Firesky.UnderNetBrowser
                 UnderNetBrowserConfig.Log($"[UnderNetBrowser] TV screen mirror failed (non-fatal): {ex.Message}");
             }
         }
-
         private void RestoreTvScreenMirror()
         {
             try
@@ -6431,6 +6629,7 @@ namespace Firesky.UnderNetBrowser
             catch { }
             finally { _tvScreenMirrorStates.Clear(); }
             _tvScreenMirrorNoCandidateLogged = false;
+            _tvScreenMirrorNoCandidateRetryRealtime = -999f;
             _tvScreenMirrorNoCandidateLogRealtime = 0f;
             _detachedVisualTargetsScanned = false;
         }
@@ -6507,10 +6706,67 @@ namespace Firesky.UnderNetBrowser
                 }
                 catch { }
 
+                // Best-effort: if another TV app/root is active in the same container (can happen on reattach/resume),
+                // hide sibling app panels so vanilla apps don't render/play behind our canvas.
+                try
+                {
+                    if (appRoot != null && appRoot.transform != null && appRoot.transform.parent != null)
+                    {
+                        var parent = appRoot.transform.parent;
+                        for (int i = 0; i < parent.childCount; i++)
+                        {
+                            Transform? child = null;
+                            try { child = parent.GetChild(i); } catch { child = null; }
+                            if (child == null || child.gameObject == null) continue;
+                            if (child.gameObject == appRoot) continue;
+
+                            string cn = "";
+                            try { cn = child.name ?? ""; } catch { cn = ""; }
+                            // Never touch core TV infrastructure/shared UI containers.
+                            if (string.Equals(cn, "TVInterface", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(cn, "Container", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(cn, "Screen", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(cn, "HomeScreen", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            bool looksLikeOtherApp = cn.IndexOf("TVApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                                     cn.IndexOf("Browser", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                                     cn.IndexOf("App", StringComparison.OrdinalIgnoreCase) >= 0;
+                            if (!looksLikeOtherApp) continue;
+
+                            try
+                            {
+                                var cg = child.GetComponent<CanvasGroup>();
+                                if (cg != null)
+                                {
+                                    cg.alpha = 0f;
+                                    cg.interactable = false;
+                                    cg.blocksRaycasts = false;
+                                }
+                            }
+                            catch { }
+
+                            try
+                            {
+                                var canvas = child.GetComponent<Canvas>();
+                                if (canvas != null) canvas.enabled = false;
+                            }
+                            catch { }
+
+                            try { if (child.gameObject.activeSelf) child.gameObject.SetActive(false); } catch { }
+                        }
+                    }
+                }
+                catch { }
+
                 // Ensure our app stays visually on top in TV hierarchy where possible.
                 try
                 {
-                    if (appRoot != null) appRoot.transform.SetAsLastSibling();
+                    if (appRoot != null)
+                    {
+                        var t = appRoot.transform;
+                        if (t != null) t.SetAsLastSibling();
+                    }
                 }
                 catch { }
             }
@@ -6678,7 +6934,8 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 GameObject? appGo = null;
-                if (_videoDisplay != null)
+                try { TryGetAppRootGameObjectCached(out appGo, force: false, minIntervalSeconds: 1f); } catch { appGo = null; }
+                if (appGo == null && _videoDisplay != null)
                 {
                     var t = _videoDisplay.transform;
                     for (int i = 0; i < 10 && t != null; i++)
@@ -6903,7 +7160,9 @@ namespace Firesky.UnderNetBrowser
                 bool playersKnown = false;
                 int playerCount = -1;
 
-                var go = GameObject.Find("TVInterface");
+                GameObject? go = null;
+                try { TryGetTvInterfaceGameObjectCached(out go, force: false, minIntervalSeconds: 0.25f); } catch { go = null; }
+                if (go == null) { try { go = GameObject.Find("TVInterface"); } catch { go = null; } }
                 if (go != null)
                 {
                     var (ifaceObj, ifaceType) = TryGetIl2CppComponentByTypeNames(go, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
@@ -9550,6 +9809,323 @@ namespace Firesky.UnderNetBrowser
             height = h;
         }
 
+        private void InvalidatePerformanceCaches(bool includeSpatial = true, bool includeAppRoot = true, bool includeTvInterface = true)
+        {
+            try
+            {
+                if (includeTvInterface)
+                {
+                    _cachedTvInterfaceGameObject = null;
+                    _cachedTvInterfaceResolveRealtime = -999f;
+                    _cachedTvInterfaceComponentObj = null;
+                    _cachedTvInterfaceComponentType = null;
+                }
+                if (includeAppRoot)
+                {
+                    _cachedAppRootGameObject = null;
+                    _cachedAppRootResolveRealtime = -999f;
+                }
+                if (includeSpatial)
+                {
+                    _tvSpatialLastUpdateRealtime = -999f;
+                    _tvSpatialHasListener = false;
+                    _tvSpatialHasTv = false;
+                    _tvSpatialDistance = -1f;
+                    _tvSpatialTvVisible = true;
+                    _tvSpatialListenerPos = default;
+                    _tvSpatialTvPos = default;
+                    _tvSpatialVisibilityRenderer = null;
+                    _tvSpatialVisibilityRendererTvTransform = null;
+                }
+            }
+            catch { }
+        }
+
+        private bool TryGetTvInterfaceGameObjectCached(out GameObject? tvGo, bool force = false, float minIntervalSeconds = 2f)
+        {
+            tvGo = null;
+            try
+            {
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+
+                if (!force && _cachedTvInterfaceGameObject != null)
+                {
+                    try
+                    {
+                        if (_cachedTvInterfaceGameObject) // Unity null check
+                        {
+                            tvGo = _cachedTvInterfaceGameObject;
+                            return true;
+                        }
+                    }
+                    catch { }
+                    _cachedTvInterfaceGameObject = null;
+                    _cachedTvInterfaceComponentObj = null;
+                    _cachedTvInterfaceComponentType = null;
+                }
+
+                if (!force && now > 0f && (now - _cachedTvInterfaceResolveRealtime) < Mathf.Max(0.1f, minIntervalSeconds))
+                    return false;
+
+                _cachedTvInterfaceResolveRealtime = now;
+
+                GameObject? found = null;
+                try { found = GameObject.Find("TVInterface"); } catch { found = null; }
+                if (found == null) { try { found = GameObject.Find("TV_Built(Clone)/TVInterface"); } catch { found = null; } }
+                if (found == null) { try { found = GameObject.Find("TV_Built/TVInterface"); } catch { found = null; } }
+                if (found == null) { try { found = GameObject.Find("TV_Built(Clone)"); } catch { found = null; } }
+                if (found == null) { try { found = GameObject.Find("TV_Built"); } catch { found = null; } }
+
+                _cachedTvInterfaceGameObject = found;
+                _cachedTvInterfaceComponentObj = null;
+                _cachedTvInterfaceComponentType = null;
+                if (found != null)
+                {
+                    try { _distanceVolumeTvTransform = found.transform; } catch { }
+                }
+
+                tvGo = found;
+                return tvGo != null;
+            }
+            catch
+            {
+                tvGo = null;
+                return false;
+            }
+        }
+
+        private bool TryGetAppRootGameObjectCached(out GameObject? appGo, bool force = false, float minIntervalSeconds = 1f)
+        {
+            appGo = null;
+            try
+            {
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+
+                if (!force && _cachedAppRootGameObject != null)
+                {
+                    try
+                    {
+                        if (_cachedAppRootGameObject)
+                        {
+                            appGo = _cachedAppRootGameObject;
+                            return true;
+                        }
+                    }
+                    catch { }
+                    _cachedAppRootGameObject = null;
+                }
+
+                // Fast path: derive from video display hierarchy (no global scene search).
+                try
+                {
+                    if (_videoDisplay != null)
+                    {
+                        var t = _videoDisplay.transform;
+                        for (int i = 0; i < 10 && t != null; i++)
+                        {
+                            string n = "";
+                            try { n = t.name ?? ""; } catch { n = ""; }
+                            if (string.Equals(n, "UnderNetBrowser_TVApp", StringComparison.Ordinal) || n.IndexOf("UnderNetBrowser", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                _cachedAppRootGameObject = t.gameObject;
+                                appGo = _cachedAppRootGameObject;
+                                _cachedAppRootResolveRealtime = now;
+                                return true;
+                            }
+                            t = t.parent;
+                        }
+                        // If no explicit app root name found, use nearest ancestor container as fallback root for UI operations.
+                        if (_videoDisplay.gameObject != null)
+                        {
+                            _cachedAppRootGameObject = _videoDisplay.gameObject;
+                            appGo = _cachedAppRootGameObject;
+                            _cachedAppRootResolveRealtime = now;
+                            return true;
+                        }
+                    }
+                }
+                catch { }
+
+                if (!force && now > 0f && (now - _cachedAppRootResolveRealtime) < Mathf.Max(0.1f, minIntervalSeconds))
+                    return false;
+                _cachedAppRootResolveRealtime = now;
+
+                try { appGo = GameObject.Find("UnderNetBrowser_TVApp"); } catch { appGo = null; }
+                _cachedAppRootGameObject = appGo;
+                return appGo != null;
+            }
+            catch
+            {
+                appGo = null;
+                return false;
+            }
+        }
+
+        private bool TryGetTvInterfaceComponentCached(out UnityEngine.Object? ifaceObj, out Type? ifaceType, bool force = false)
+        {
+            ifaceObj = null;
+            ifaceType = null;
+            try
+            {
+                // Reuse cached component if still valid and tied to a live TV interface object.
+                if (!force && _cachedTvInterfaceComponentObj != null && _cachedTvInterfaceComponentType != null)
+                {
+                    try
+                    {
+                        if (_cachedTvInterfaceComponentObj)
+                        {
+                            // Best-effort sanity: component's gameObject should still be valid.
+                            var comp = _cachedTvInterfaceComponentObj as Component;
+                            if (comp == null || comp.gameObject != null)
+                            {
+                                ifaceObj = _cachedTvInterfaceComponentObj;
+                                ifaceType = _cachedTvInterfaceComponentType;
+                                return true;
+                            }
+                        }
+                    }
+                    catch { }
+                    _cachedTvInterfaceComponentObj = null;
+                    _cachedTvInterfaceComponentType = null;
+                }
+
+                if (!TryGetTvInterfaceGameObjectCached(out var go, force: force, minIntervalSeconds: force ? 0.25f : 1f) || go == null)
+                    return false;
+
+                var (obj, t) = TryGetIl2CppComponentByTypeNames(go, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
+                if ((obj == null || t == null))
+                {
+                    // Fallback: scan components once and cache result.
+                    try
+                    {
+                        Component[]? comps = null;
+                        try { comps = go.GetComponents<Component>(); } catch { comps = null; }
+                        if (comps != null)
+                        {
+                            foreach (var c in comps)
+                            {
+                                if (c == null) continue;
+                                var casted = TryCastIl2CppObject(c, "Il2CppScheduleOne.TV.TVInterface", "ScheduleOne.TV.TVInterface");
+                                if (casted.obj != null && casted.type != null) { obj = casted.obj; t = casted.type; break; }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                _cachedTvInterfaceComponentObj = obj;
+                _cachedTvInterfaceComponentType = t;
+                ifaceObj = obj;
+                ifaceType = t;
+                return ifaceObj != null && ifaceType != null;
+            }
+            catch
+            {
+                ifaceObj = null;
+                ifaceType = null;
+                return false;
+            }
+        }
+
+        private void EnsureTvSpatialContext(float now, bool force = false, float minIntervalSeconds = 0.25f)
+        {
+            try
+            {
+                if (!force && now > 0f && (now - _tvSpatialLastUpdateRealtime) < Mathf.Max(0.05f, minIntervalSeconds))
+                    return;
+                _tvSpatialLastUpdateRealtime = now;
+
+                // Listener/camera
+                Camera? cam = null;
+                try { cam = Camera.main; } catch { cam = null; }
+                _tvSpatialHasListener = false;
+                if (cam != null)
+                {
+                    try { _tvSpatialListenerPos = cam.transform.position; _tvSpatialHasListener = true; } catch { _tvSpatialHasListener = false; }
+                }
+
+                // TV transform/position (cached resolver shared with distance-volume/adaptive/reattach-adjacent logic)
+                Transform? tvTransform = _distanceVolumeTvTransform;
+                bool needResolveTv = tvTransform == null;
+                if (!needResolveTv)
+                {
+                    try { if (tvTransform == null || !tvTransform.gameObject) needResolveTv = true; } catch { needResolveTv = true; }
+                }
+                if (needResolveTv || (now - _lastDistanceVolumeTvResolveTime) > 2.0f)
+                {
+                    _lastDistanceVolumeTvResolveTime = now;
+                    if (TryGetTvInterfaceGameObjectCached(out var tvGo, force: needResolveTv, minIntervalSeconds: 1f) && tvGo != null)
+                    {
+                        try { tvTransform = tvGo.transform; } catch { tvTransform = null; }
+                    }
+                    else
+                    {
+                        tvTransform = null;
+                    }
+                    _distanceVolumeTvTransform = tvTransform;
+                    _tvSpatialVisibilityRenderer = null;
+                    _tvSpatialVisibilityRendererTvTransform = null;
+                }
+                if (_tvSpatialVisibilityRendererTvTransform != tvTransform)
+                {
+                    _tvSpatialVisibilityRenderer = null;
+                    _tvSpatialVisibilityRendererTvTransform = null;
+                }
+
+                _tvSpatialHasTv = false;
+                if (tvTransform != null)
+                {
+                    try { _tvSpatialTvPos = tvTransform.position; _tvSpatialHasTv = true; } catch { _tvSpatialHasTv = false; }
+                }
+
+                _tvSpatialDistance = (_tvSpatialHasListener && _tvSpatialHasTv) ? Vector3.Distance(_tvSpatialListenerPos, _tvSpatialTvPos) : -1f;
+
+                // Visibility heuristic (cheap, conservative only when uncertain). Prefer cached TV transform/renderer lookup.
+                bool tvVisible = true;
+                try
+                {
+                    if (cam != null && tvTransform != null)
+                    {
+                        Renderer? rend = _tvSpatialVisibilityRenderer;
+                        bool needRend = rend == null;
+                        if (!needRend)
+                        {
+                            try { if (!rend) needRend = true; } catch { needRend = true; }
+                        }
+                        if (needRend)
+                        {
+                            try { rend = tvTransform.GetComponentInChildren<Renderer>(); } catch { rend = null; }
+                            _tvSpatialVisibilityRenderer = rend;
+                            _tvSpatialVisibilityRendererTvTransform = tvTransform;
+                        }
+                        if (rend != null)
+                        {
+                            try
+                            {
+                                var planes = GeometryUtility.CalculateFrustumPlanes(cam);
+                                tvVisible = GeometryUtility.TestPlanesAABB(planes, rend.bounds);
+                            }
+                            catch { tvVisible = true; }
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var vp = cam.WorldToViewportPoint(_tvSpatialTvPos);
+                                tvVisible = vp.z > 0f && vp.x >= -0.15f && vp.x <= 1.15f && vp.y >= -0.15f && vp.y <= 1.15f;
+                            }
+                            catch { tvVisible = true; }
+                        }
+                    }
+                }
+                catch { tvVisible = true; }
+                _tvSpatialTvVisible = tvVisible;
+            }
+            catch { }
+        }
+
         private void TryUpdateAdaptiveRendering(bool force = false)
         {
             try
@@ -9563,6 +10139,8 @@ namespace Firesky.UnderNetBrowser
                     _adaptiveLastReason = "inactive";
                     _adaptiveAppliedCaptureIntervalMs = 0;
                     _adaptiveAppliedStandby = false;
+                    _adaptiveLastDistance = -1f;
+                    _adaptiveLastTvVisible = true;
                     return;
                 }
 
@@ -9584,90 +10162,11 @@ namespace Firesky.UnderNetBrowser
                     return;
                 _adaptiveLastEvalTime = now;
 
-                // Resolve listener (camera/player view) and TV position (reuse distance-volume TV transform cache when possible)
-                Camera? cam = null;
-                try { cam = Camera.main; } catch { cam = null; }
-                bool hasListener = cam != null;
-                bool hasTv = false;
-                Vector3 listenerPos = default;
-                Vector3 tvPos = default;
-                Transform? tvTransform = null;
-                if (hasListener)
-                {
-                    try { listenerPos = cam!.transform.position; } catch { hasListener = false; }
-                }
-
-                try
-                {
-                    // Reuse cached TV transform from distance-volume logic if available; refresh opportunistically.
-                    tvTransform = _distanceVolumeTvTransform;
-                    bool needResolve = tvTransform == null;
-                    if (!needResolve)
-                    {
-                        try { if (!tvTransform!.gameObject.activeInHierarchy) needResolve = true; } catch { needResolve = true; }
-                    }
-                    if (needResolve || (now - _lastDistanceVolumeTvResolveTime) > 2.0f)
-                    {
-                        // Minimal inline resolve compatible with TryUpdateDistanceBasedVolume.
-                        try
-                        {
-                            _lastDistanceVolumeTvResolveTime = now;
-                            Transform? t = null;
-                            GameObject? go = null;
-                            try { go = GameObject.Find("TVInterface"); } catch { go = null; }
-                            if (go == null) { try { go = GameObject.Find("TV_Built(Clone)/TVInterface"); } catch { go = null; } }
-                            if (go == null) { try { go = GameObject.Find("TV_Built/TVInterface"); } catch { go = null; } }
-                            if (go == null) { try { go = GameObject.Find("TV_Built(Clone)"); } catch { go = null; } }
-                            if (go == null) { try { go = GameObject.Find("TV_Built"); } catch { go = null; } }
-                            if (go != null) t = go.transform;
-                            if (t != null) { _distanceVolumeTvTransform = t; tvTransform = t; }
-                        }
-                        catch { }
-                    }
-                    if (tvTransform != null)
-                    {
-                        try { tvPos = tvTransform.position; hasTv = true; } catch { hasTv = false; }
-                    }
-                }
-                catch { hasTv = false; }
-
-                float dist = -1f;
-                if (hasListener && hasTv)
-                {
-                    try { dist = Vector3.Distance(listenerPos, tvPos); } catch { dist = -1f; }
-                }
+                // Shared spatial context (cached TV/camera resolution + distance/visibility) to avoid duplicate Find/reflection work.
+                EnsureTvSpatialContext(now, force: force, minIntervalSeconds: 0.25f);
+                float dist = _tvSpatialDistance;
+                bool tvVisible = _tvSpatialTvVisible;
                 _adaptiveLastDistance = dist;
-
-                // Cheap visibility check (frustum/approx). Only used conservatively to avoid upgrading and to allow downgrade when clearly not visible.
-                bool tvVisible = true;
-                try
-                {
-                    if (cam != null && tvTransform != null)
-                    {
-                        // Prefer renderer bounds test if available, else viewport-point test.
-                        Renderer? rend = null;
-                        try { rend = tvTransform.GetComponentInChildren<Renderer>(); } catch { rend = null; }
-                        if (rend != null)
-                        {
-                            try
-                            {
-                                var planes = GeometryUtility.CalculateFrustumPlanes(cam);
-                                tvVisible = GeometryUtility.TestPlanesAABB(planes, rend.bounds);
-                            }
-                            catch { tvVisible = true; }
-                        }
-                        else
-                        {
-                            try
-                            {
-                                var vp = cam.WorldToViewportPoint(tvPos);
-                                tvVisible = vp.z > 0f && vp.x >= -0.1f && vp.x <= 1.1f && vp.y >= -0.1f && vp.y <= 1.1f;
-                            }
-                            catch { tvVisible = true; }
-                        }
-                    }
-                }
-                catch { tvVisible = true; }
                 _adaptiveLastTvVisible = tvVisible;
 
                 // Compute desired tier from distance (independent of audio). If distance unknown, stay Full.
@@ -9722,14 +10221,44 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 // Cheap visibility can conservatively bias toward lower visual work (never force higher quality).
-                if (!tvVisible && desired < AdaptiveVisualTier.Reduced)
+                // When not visible and detached/far, prefer deeper tiers (including standby) to reduce capture/compositing cost.
+                if (!tvVisible)
                 {
-                    desired = AdaptiveVisualTier.Reduced;
-                    reason = "not-visible";
-                }
-                else if (!tvVisible && desired == AdaptiveVisualTier.Reduced)
-                {
-                    reason = _adaptiveCurrentTier == desired ? "not-visible-steady" : "not-visible";
+                    AdaptiveVisualTier visTier = AdaptiveVisualTier.Reduced;
+                    string visReason = "not-visible";
+                    if (distanceScaling)
+                    {
+                        if (standbyEnabled && dist >= 0f && dist >= dLow)
+                        {
+                            visTier = AdaptiveVisualTier.VisualStandby;
+                            visReason = "not-visible-standby";
+                        }
+                        else if (standbyEnabled && _detachedToGameplay && dist >= 0f && dist >= dReduced)
+                        {
+                            visTier = AdaptiveVisualTier.VisualStandby;
+                            visReason = "not-visible-detached-standby";
+                        }
+                        else if (dist >= 0f && (dist >= dReduced || _detachedToGameplay))
+                        {
+                            visTier = AdaptiveVisualTier.Low;
+                            visReason = "not-visible-low";
+                        }
+                    }
+                    else if (standbyEnabled && _detachedToGameplay)
+                    {
+                        visTier = AdaptiveVisualTier.Low;
+                        visReason = "not-visible-detached-low";
+                    }
+
+                    if (desired < visTier)
+                    {
+                        desired = visTier;
+                        reason = visReason;
+                    }
+                    else if (desired == visTier)
+                    {
+                        reason = visReason + "-steady";
+                    }
                 }
 
                 // Alt-tab / unfocused game window: only consider when not actively in TV/browser session.
@@ -9763,6 +10292,15 @@ namespace Firesky.UnderNetBrowser
                 {
                     desired = AdaptiveVisualTier.Low;
                     reason = "standby-disabled";
+                }
+
+                // Keep visuals responsive during active browser interaction (hover/click/typing) while the app is open.
+                // This prevents adaptive throttling/standby from making in-page highlights feel laggy behind the Unity cursor.
+                bool recentInteraction = IsOpen && !_detachedToGameplay && (now - _lastBrowserInteractionRealtime) <= 1.25f;
+                if (recentInteraction)
+                {
+                    desired = AdaptiveVisualTier.Full;
+                    reason = "user-interaction";
                 }
 
                 // Hysteresis/dwell: downgrades wait; upgrades apply quickly.
@@ -9907,77 +10445,17 @@ namespace Firesky.UnderNetBrowser
                     return;
                 _lastDistanceVolumeUpdateTime = now;
 
-                // Resolve listener position (camera preferred)
-                Vector3 listenerPos;
-                bool hasListener = false;
-                try
-                {
-                    var cam = Camera.main;
-                    if (cam != null) { listenerPos = cam.transform.position; hasListener = true; }
-                    else
-                    {
-                        listenerPos = default;
-                        hasListener = false;
-                    }
-                }
-                catch { listenerPos = default; hasListener = false; }
+                // Shared spatial context (cached camera/TV resolution + distance) to avoid duplicate Find/reflection work.
+                EnsureTvSpatialContext(now, force: force, minIntervalSeconds: 0.25f);
 
-                if (!hasListener)
+                if (!_tvSpatialHasListener)
                 {
                     try { UnderNetBrowserGpuNative.CompSetDistanceAudioVolume(1, 1f); } catch { }
                     _lastDistanceVolumeApplied = 1f;
                     return;
                 }
 
-                // Resolve/cached TV position
-                Vector3 tvPos = default;
-                bool hasTv = false;
-                try
-                {
-                    bool needResolve = _distanceVolumeTvTransform == null;
-                    if (!needResolve)
-                    {
-                        try { if (!_distanceVolumeTvTransform!.gameObject.activeInHierarchy) needResolve = true; } catch { needResolve = true; }
-                    }
-                    if (needResolve || (now - _lastDistanceVolumeTvResolveTime) > 2.0f)
-                    {
-                        _lastDistanceVolumeTvResolveTime = now;
-                        Transform? t = null;
-                        try
-                        {
-                            GameObject? go = null;
-                            try { go = GameObject.Find("TVInterface"); } catch { go = null; }
-                            if (go == null)
-                            {
-                                try { go = GameObject.Find("TV_Built(Clone)/TVInterface"); } catch { go = null; }
-                            }
-                            if (go == null)
-                            {
-                                try { go = GameObject.Find("TV_Built/TVInterface"); } catch { go = null; }
-                            }
-                            if (go == null)
-                            {
-                                try { go = GameObject.Find("TV_Built(Clone)"); } catch { go = null; }
-                            }
-                            if (go == null)
-                            {
-                                try { go = GameObject.Find("TV_Built"); } catch { go = null; }
-                            }
-                            if (go != null) t = go.transform;
-                        }
-                        catch { t = null; }
-                        if (t != null) _distanceVolumeTvTransform = t;
-                    }
-
-                    if (_distanceVolumeTvTransform != null)
-                    {
-                        tvPos = _distanceVolumeTvTransform.position;
-                        hasTv = true;
-                    }
-                }
-                catch { hasTv = false; }
-
-                if (!hasTv)
+                if (!_tvSpatialHasTv)
                 {
                     try { UnderNetBrowserGpuNative.CompSetDistanceAudioVolume(1, 1f); } catch { }
                     _lastDistanceVolumeApplied = 1f;
@@ -9990,8 +10468,7 @@ namespace Firesky.UnderNetBrowser
                 try { if (UnderNetBrowserConfig.DistanceVolumeSilentDistance != null) silent = Mathf.Max(0.01f, UnderNetBrowserConfig.DistanceVolumeSilentDistance.Value); } catch { }
                 if (silent <= full + 0.01f) silent = full + 0.01f;
 
-                float dist = 0f;
-                try { dist = Vector3.Distance(listenerPos, tvPos); } catch { dist = 0f; }
+                float dist = _tvSpatialDistance >= 0f ? _tvSpatialDistance : 0f;
                 float vol = 1f;
                 if (dist <= full) vol = 1f;
                 else if (dist >= silent) vol = 0f;

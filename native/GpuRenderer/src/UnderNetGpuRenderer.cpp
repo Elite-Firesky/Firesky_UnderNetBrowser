@@ -686,6 +686,26 @@ UN_EXPORT int32_t __stdcall UnGpu_CompIsAdaptiveVisualStandby() {
     try { return g_comp.IsAdaptiveVisualStandby() ? 1 : 0; } catch (...) { return 0; }
 }
 
+UN_EXPORT void __stdcall UnGpu_CompSetBasicAdBlockEnabled(int32_t enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { g_comp.SetBasicAdBlockEnabled(enabled != 0); } catch (...) {}
+}
+
+UN_EXPORT int32_t __stdcall UnGpu_CompGetBasicAdBlockEnabled() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { return g_comp.GetBasicAdBlockEnabled() ? 1 : 0; } catch (...) { return 1; }
+}
+
+UN_EXPORT void __stdcall UnGpu_CompSetAutoConsentEnabled(int32_t enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { g_comp.SetAutoConsentEnabled(enabled != 0); } catch (...) {}
+}
+
+UN_EXPORT int32_t __stdcall UnGpu_CompGetAutoConsentEnabled() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    try { return g_comp.GetAutoConsentEnabled() ? 1 : 0; } catch (...) { return 0; }
+}
+
 UN_EXPORT void __stdcall UnGpu_CompSendKey(uint32_t msg, uint64_t wParam, uint64_t lParam) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_comp.SendKey(msg, wParam, lParam);

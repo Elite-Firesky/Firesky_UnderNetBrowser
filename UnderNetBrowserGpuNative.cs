@@ -203,6 +203,18 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompIsAdaptiveVisualStandby")]
         public static extern int CompIsAdaptiveVisualStandby();
 
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetBasicAdBlockEnabled")]
+        public static extern void CompSetBasicAdBlockEnabled(int enabled);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompGetBasicAdBlockEnabled")]
+        public static extern int CompGetBasicAdBlockEnabled();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetAutoConsentEnabled")]
+        public static extern void CompSetAutoConsentEnabled(int enabled);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompGetAutoConsentEnabled")]
+        public static extern int CompGetAutoConsentEnabled();
+
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSendKey")]
         public static extern void CompSendKey(uint msg, ulong wParam, ulong lParam);
 
