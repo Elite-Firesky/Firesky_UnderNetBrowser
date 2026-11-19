@@ -127,6 +127,9 @@ BrowserExtensions/**/dist/
 BrowserExtensions/**/generated/
 BrowserExtensions/**/node_modules/
 
+# Documentation (markdown)
+*.md
+
 # Local machine-specific / secrets
 *.local
 *.local.*
