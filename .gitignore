@@ -129,6 +129,8 @@ BrowserExtensions/**/node_modules/
 
 # Documentation (markdown)
 *.md
+!CHANGELOG.md
+!changelog.md
 
 # Local machine-specific / secrets
 *.local

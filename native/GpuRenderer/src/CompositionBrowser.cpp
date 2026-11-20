@@ -433,31 +433,46 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                                 return L"";
                                             }
                                         }
-                                        // impl->userDataFolder is ...\UserData\UnderNetBrowser\WebView2Composition (composition profile)
-                                        std::wstring udRoot = trimSlashW(impl->userDataFolder);
-                                        size_t sep = udRoot.find_last_of(L"\\/");
-                                        if (sep == std::wstring::npos) return L"";
-                                        udRoot = udRoot.substr(0, sep); // ...\UserData\UnderNetBrowser
-                                        if (isHome) {
-                                            std::wstring p = udRoot + L"\\root\\Homepage\\index.html";
-                                            if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
-                                            return pathToFileUri(p);
+
+                                        auto tryResolveFromRoot = [&](const std::wstring& root) -> std::wstring {
+                                            try {
+                                                if (root.empty()) return L"";
+                                                if (isHome) {
+                                                    std::wstring p = root + L"\\root\\Homepage\\index.html";
+                                                    if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return pathToFileUri(p);
+                                                    return L"";
+                                                }
+                                                std::wstring id = appId;
+                                                while (!id.empty() && (id.front() == L'/' || id.front() == L'\\')) id.erase(id.begin());
+                                                while (!id.empty() && (id.back() == L'/' || id.back() == L'\\')) id.pop_back();
+                                                size_t q = id.find_first_of(L"?#");
+                                                if (q != std::wstring::npos) id = id.substr(0, q);
+                                                if (!isSafeAppId(id)) return L"";
+                                                std::wstring lowerId = toLowerW(id);
+                                                if (lowerId == L"home" || lowerId == L"homepage") {
+                                                    std::wstring p = root + L"\\root\\Homepage\\index.html";
+                                                    if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return pathToFileUri(p);
+                                                    return L"";
+                                                }
+                                                std::wstring p = root + L"\\root\\Apps\\" + id + L"\\index.html";
+                                                if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return pathToFileUri(p);
+                                            } catch (...) {}
+                                            return L"";
+                                        };
+
+                                        // impl->userDataFolder is typically ...\UserData\UnderNetBrowser\WebView2Composition (composition profile).
+                                        // Try likely roots in order: parent (UnderNetBrowser), then profile folder itself (robustness for path/config differences).
+                                        std::wstring ud = trimSlashW(impl->userDataFolder);
+                                        size_t sep = ud.find_last_of(L"\\/");
+                                        if (sep != std::wstring::npos) {
+                                            std::wstring parent = ud.substr(0, sep);
+                                            std::wstring resolved = tryResolveFromRoot(parent);
+                                            if (!resolved.empty()) return resolved;
                                         }
-                                        // normalize app id
-                                        while (!appId.empty() && (appId.front() == L'/' || appId.front() == L'\\')) appId.erase(appId.begin());
-                                        while (!appId.empty() && (appId.back() == L'/' || appId.back() == L'\\')) appId.pop_back();
-                                        size_t q = appId.find_first_of(L"?#");
-                                        if (q != std::wstring::npos) appId = appId.substr(0, q);
-                                        if (!isSafeAppId(appId)) return L"";
-                                        std::wstring lowerId = toLowerW(appId);
-                                        if (lowerId == L"home" || lowerId == L"homepage") {
-                                            std::wstring p = udRoot + L"\\root\\Homepage\\index.html";
-                                            if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
-                                            return pathToFileUri(p);
+                                        {
+                                            std::wstring resolved = tryResolveFromRoot(ud);
+                                            if (!resolved.empty()) return resolved;
                                         }
-                                        std::wstring p = udRoot + L"\\root\\Apps\\" + appId + L"\\index.html";
-                                        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
-                                        return pathToFileUri(p);
                                     } catch (...) {}
                                     return L"";
                                 };
