@@ -295,6 +295,7 @@ namespace Firesky.UnderNetBrowser
                 {
                     _nextBrowserSyncDispatchRealtime = now + 0.25f;
                     try { UnderNetBrowserApp.TryUpdateHomepageGameTime(); } catch { }
+                    try { UnderNetBrowserApp.TryUpdateHomepageMoney(); } catch { }
                     try { UnderNetBrowserApp.TryUpdateHomepageInstalledApps(); } catch { }
                     try { UnderNetBrowserApp.TryUpdateSettingsPageState(); } catch { }
                 }

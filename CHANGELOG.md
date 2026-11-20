@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.3 - 2026-11-20
+
+- Reworked the homepage desktop layout to separate **Apps** (installed/mod apps) from **Shortcuts** (web/local launch shortcuts) for clearer organization.
+- Added custom website shortcuts on the homepage: `+` to add, with edit/remove controls for user-created shortcuts only (pre-built shortcuts remain protected).
+- Custom shortcuts are persisted in the browser profile (`localStorage`) and support `http/https` URLs (scheme auto-normalized when omitted).
+- Added player/save **Net Worth** display on the homepage (System Status), synced from the game via S1API (`S1API.Money.Money.GetNetWorth()`) with periodic updates similar to in-game time sync.
+- Set default WebView zoom to **90%** for pages without a saved override and remember per-site/page zoom levels when changed by the user (applied automatically on navigation).
+- Bumped managed homepage content to **v13** so the updated layout/features deploy to existing installs.
+
 ## v1.0.2 - 2026-11-20
 
 - Open WebView2 popup/new-window requests in-place instead of dropping them (existing navigation/policy checks still apply).

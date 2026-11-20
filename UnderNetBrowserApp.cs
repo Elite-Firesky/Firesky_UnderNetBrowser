@@ -930,7 +930,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 11;
+        private const int ManagedHomepageVersion = 13;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -2679,12 +2679,13 @@ namespace Firesky.UnderNetBrowser
                 if (dir == 0 && !reset) return false;
 
                 double z = _gpuCompositionCapture.GetZoomFactor();
-                if (!(z > 0.0)) z = 1.0;
-                double nz = reset ? 1.0 : Mathf.Clamp((float)(z + (dir > 0 ? 0.10 : -0.10)), 0.25f, 5.0f);
+                if (!(z > 0.0)) z = UnderNetBrowserConfig.DefaultPageZoomFactor;
+                double nz = reset ? UnderNetBrowserConfig.DefaultPageZoomFactor : Mathf.Clamp((float)(z + (dir > 0 ? 0.10 : -0.10)), 0.25f, 5.0f);
                 _gpuCompositionCapture.SetZoomFactor(nz);
+                try { PersistCurrentPageZoom(nz); } catch { }
                 try { _gpuCompositionCapture.RequestFocus(); } catch { }
                 try { TrySuppressHotbarScroll(); } catch { }
-                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+hotkey{(reset ? ", reset" : dir > 0 ? ", in" : ", out")}, requested)");
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+hotkey{(reset ? ", default" : dir > 0 ? ", in" : ", out")}, saved)");
                 return true;
             }
             catch (Exception ex)
@@ -3119,6 +3120,13 @@ namespace Firesky.UnderNetBrowser
         private static float _nextHomepageGameTimeReadDiagRealtime = -999f;
         private static bool _homepageGameTimeSyncLoggedSuccess;
 
+        private static float _nextHomepageMoneySyncRealtime = -999f;
+        private static string _lastHomepageMoneyPayload = string.Empty;
+        private static string _lastHomepageMoneyUrl = string.Empty;
+        private static float _nextHomepageMoneyDiagRealtime = -999f;
+        private static float _nextHomepageMoneyReadDiagRealtime = -999f;
+        private static bool _homepageMoneySyncLoggedSuccess;
+
         private static string EscapeJsSingleQuoted(string? s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
@@ -3136,6 +3144,54 @@ namespace Firesky.UnderNetBrowser
                 UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage game-time read: {message}");
             }
             catch { }
+        }
+
+        private static void LogHomepageMoneyReadDiag(string message)
+        {
+            try
+            {
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now < _nextHomepageMoneyReadDiagRealtime) return;
+                _nextHomepageMoneyReadDiagRealtime = now + 10f;
+                UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage money read: {message}");
+            }
+            catch { }
+        }
+
+        private static string FormatCurrencyAmount(float amount)
+        {
+            try
+            {
+                if (float.IsNaN(amount) || float.IsInfinity(amount)) return "$0";
+                double v = amount;
+                bool whole = Math.Abs(v - Math.Round(v)) < 0.001;
+                string num = whole
+                    ? v.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)
+                    : v.ToString("N2", System.Globalization.CultureInfo.InvariantCulture);
+                return "$" + num;
+            }
+            catch
+            {
+                try { return "$" + amount.ToString("0", System.Globalization.CultureInfo.InvariantCulture); } catch { return "$0"; }
+            }
+        }
+
+        private static bool TryGetScheduleOneNetWorthDisplay(out string netWorthText)
+        {
+            netWorthText = "--";
+            try
+            {
+                // Prefer S1API abstraction when available (verified against installed S1API.Il2Cpp.MelonLoader.dll).
+                float netWorth = S1API.Money.Money.GetNetWorth();
+                netWorthText = FormatCurrencyAmount(netWorth);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogHomepageMoneyReadDiag($"S1API money read unavailable/failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
         }
 
         private static bool TryGetScheduleOneGameTime(out string timeText, out string dayText)
@@ -3815,6 +3871,84 @@ namespace Firesky.UnderNetBrowser
             }
         }
 
+        internal static void TryUpdateHomepageMoney()
+        {
+            try
+            {
+                var app = _activeInstance;
+                if (app == null) return;
+                if (!app.IsOpen && app._gpuCompositionCapture == null) return;
+
+                float now = 0f;
+                try { now = Time.realtimeSinceStartup; } catch { now = 0f; }
+                if (now < _nextHomepageMoneySyncRealtime) return;
+                _nextHomepageMoneySyncRealtime = now + 1.0f;
+
+                var cur = "";
+                try { cur = app._gpuCompositionCapture?.CurrentUrl ?? ""; } catch { cur = ""; }
+                var curNorm = (cur ?? "").Replace("\\", "/");
+                bool matchedHomepage = curNorm.IndexOf("/UnderNetBrowser/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("/root/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("/Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0
+                    || curNorm.IndexOf("Homepage/index.html", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (!matchedHomepage)
+                {
+                    _lastHomepageMoneyUrl = string.Empty;
+                    return;
+                }
+
+                if (!string.Equals(cur, _lastHomepageMoneyUrl, StringComparison.Ordinal))
+                {
+                    _lastHomepageMoneyUrl = cur ?? string.Empty;
+                    _lastHomepageMoneyPayload = string.Empty;
+                }
+
+                if (app._gpuCompositionCapture == null)
+                {
+                    if (now >= _nextHomepageMoneyDiagRealtime)
+                    {
+                        _nextHomepageMoneyDiagRealtime = now + 10f;
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage money sync: composition capture unavailable on homepage (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                    }
+                    return;
+                }
+
+                bool gotMoney = TryGetScheduleOneNetWorthDisplay(out var netWorthText);
+                if (!gotMoney)
+                {
+                    netWorthText = "--";
+                    if (now >= _nextHomepageMoneyDiagRealtime)
+                    {
+                        _nextHomepageMoneyDiagRealtime = now + 10f;
+                        try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage money sync: net worth unavailable/not readable yet (url='{TruncateUrlForLog(cur)}')."); } catch { }
+                    }
+                }
+
+                var payload = netWorthText ?? "--";
+                if (string.Equals(payload, _lastHomepageMoneyPayload, StringComparison.Ordinal)) return;
+                _lastHomepageMoneyPayload = payload;
+
+                var script = "(function(){try{if(window.__underNetSetNetWorth)window.__underNetSetNetWorth('" + EscapeJsSingleQuoted(payload) + "');}catch(e){}})();";
+                try { app._gpuCompositionCapture.ExecuteScript(script); } catch { }
+
+                if (gotMoney && !_homepageMoneySyncLoggedSuccess)
+                {
+                    _homepageMoneySyncLoggedSuccess = true;
+                    try { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Homepage money sync active: net worth={payload}"); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                float nowEx = 0f; try { nowEx = Time.realtimeSinceStartup; } catch { }
+                if (nowEx >= _nextHomepageMoneyDiagRealtime)
+                {
+                    _nextHomepageMoneyDiagRealtime = nowEx + 10f;
+                    try { UnderNetBrowserConfig.LogDiagnosticWarning($"[UnderNetBrowser] Homepage money sync exception: {ex.Message}"); } catch { }
+                }
+            }
+        }
+
         private static string EscapeJsString(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
@@ -4193,15 +4327,16 @@ namespace Firesky.UnderNetBrowser
                         try
                         {
                             double z = _gpuCompositionCapture.GetZoomFactor();
-                            if (!(z > 0.0)) z = 1.0;
+                            if (!(z > 0.0)) z = UnderNetBrowserConfig.DefaultPageZoomFactor;
                             double step = scroll > 0 ? 0.10 : -0.10;
                             // Slightly larger step for fast wheel gestures.
                             if (Mathf.Abs(scroll) >= 2f) step *= 1.5;
                             double nz = Mathf.Clamp((float)(z + step), 0.25f, 5.0f);
                             _gpuCompositionCapture.SetZoomFactor(nz);
+                            try { PersistCurrentPageZoom(nz); } catch { }
                             try { MarkBrowserInteraction("ctrl-zoom"); } catch { }
                             try { _gpuCompositionCapture.RequestFocus(); } catch { }
-                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, requested)");
+                            UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom -> {nz:0.00} (ctrl+wheel, saved)");
                         }
                         catch (Exception ex) { UnderNetBrowserConfig.LogDiagnostic($"[UnderNetBrowser] Web zoom failed (restart game after native update?): {ex.Message}"); }
                         // Ctrl+wheel is consumed for zoom; suppress hotbar/game wheel side effects.
@@ -7797,6 +7932,8 @@ namespace Firesky.UnderNetBrowser
 
         private float _lastUrlSyncTime;
         private string _lastSyncedUrl = "";
+        private string _lastZoomAppliedKey = "";
+        private float _lastZoomApplyTime;
         private float _lastVisualDiagLog;
 
         private void SetUrlDisplayText(string text)
@@ -7807,6 +7944,106 @@ namespace Firesky.UnderNetBrowser
                 _urlDisplayText.text = text ?? "";
                 _urlDisplayText.enabled = true;
                 if (!_urlDisplayText.gameObject.activeSelf) _urlDisplayText.gameObject.SetActive(true);
+            }
+            catch { }
+        }
+
+        private string GetZoomKeyForUrl(string? rawUrl, string? displayUrl = null)
+        {
+            try
+            {
+                var display = (displayUrl ?? string.Empty).Trim();
+                if (display.Equals("undernet:home", StringComparison.OrdinalIgnoreCase)) return "undernet:home";
+                if (display.Equals("undernet:games", StringComparison.OrdinalIgnoreCase)) return "undernet:games";
+                if (display.Equals("undernet:settings", StringComparison.OrdinalIgnoreCase)) return "undernet:settings";
+                if (display.Equals("undernet:notepad", StringComparison.OrdinalIgnoreCase)) return "undernet:notepad";
+                if (display.Equals("undernet:discord", StringComparison.OrdinalIgnoreCase)) return "undernet:discord";
+                if (display.StartsWith("home:", StringComparison.OrdinalIgnoreCase)) return "app:" + display.Substring(5).Trim().ToLowerInvariant();
+
+                var raw = (rawUrl ?? string.Empty).Trim();
+                if (raw.Length == 0) raw = display;
+                if (raw.Length == 0) return "";
+
+                // If a friendly local route was not resolved but URL is file://, key by file path for stability.
+                if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+                {
+                    if (uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return "host:" + (uri.Host ?? "").Trim().ToLowerInvariant();
+                    }
+                    if (uri.Scheme.Equals(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { return "file:" + Path.GetFullPath(uri.LocalPath).ToLowerInvariant(); } catch { return "file:" + (uri.LocalPath ?? raw).ToLowerInvariant(); }
+                    }
+                    if (uri.Scheme.Equals("about", StringComparison.OrdinalIgnoreCase))
+                        return "about:" + (uri.AbsolutePath ?? uri.OriginalString ?? "blank").Trim().ToLowerInvariant();
+                    if (uri.Scheme.Equals("undernet", StringComparison.OrdinalIgnoreCase))
+                        return "undernet:" + (uri.Host + uri.AbsolutePath).Trim('/').ToLowerInvariant();
+                    return uri.Scheme.ToLowerInvariant() + ":" + (uri.Host ?? "").ToLowerInvariant();
+                }
+
+                var normalized = NormalizeUrl(raw);
+                if (normalized.StartsWith("undernet:", StringComparison.OrdinalIgnoreCase) || normalized.StartsWith("home:", StringComparison.OrdinalIgnoreCase))
+                    return normalized.ToLowerInvariant();
+                return "url:" + normalized.ToLowerInvariant();
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private void ApplyZoomForCurrentUrl(string? rawUrl = null, string? displayUrl = null, bool force = false)
+        {
+            try
+            {
+                if (!_gpuCompositionMode || _gpuCompositionCapture == null || !IsOpen) return;
+
+                var resolvedRaw = rawUrl;
+                if (string.IsNullOrWhiteSpace(resolvedRaw))
+                {
+                    try { resolvedRaw = _gpuCompositionCapture.CurrentUrl; } catch { resolvedRaw = null; }
+                }
+                var resolvedDisplay = displayUrl ?? _lastSyncedUrl ?? "";
+                var key = GetZoomKeyForUrl(resolvedRaw, resolvedDisplay);
+                if (string.IsNullOrWhiteSpace(key)) return;
+
+                // Avoid redundant native calls on frequent sync ticks; allow periodic re-apply in case WebView resets zoom on navigation.
+                bool sameKey = string.Equals(_lastZoomAppliedKey, key, StringComparison.Ordinal);
+                if (!force && sameKey && (Time.unscaledTime - _lastZoomApplyTime) < 1.5f) return;
+
+                double desired = UnderNetBrowserConfig.GetSavedZoomFactorForKey(key);
+                if (!(desired > 0.0)) desired = UnderNetBrowserConfig.DefaultPageZoomFactor;
+
+                double current = 1.0;
+                try { current = _gpuCompositionCapture.GetZoomFactor(); } catch { current = 1.0; }
+                if (!(current > 0.0)) current = 1.0;
+
+                // Apply if different (or forced/same-key periodic safety reapply) to enforce remembered/default zoom.
+                if (force || !sameKey || Math.Abs(current - desired) > 0.01)
+                {
+                    _gpuCompositionCapture.SetZoomFactor(desired);
+                }
+
+                _lastZoomAppliedKey = key;
+                _lastZoomApplyTime = Time.unscaledTime;
+            }
+            catch { }
+        }
+
+        private void PersistCurrentPageZoom(double zoomFactor)
+        {
+            try
+            {
+                if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
+                string? raw = null;
+                try { raw = _gpuCompositionCapture.CurrentUrl; } catch { raw = null; }
+                var key = GetZoomKeyForUrl(raw, _lastSyncedUrl);
+                if (string.IsNullOrWhiteSpace(key)) return;
+                UnderNetBrowserConfig.SetSavedZoomFactorForKey(key, zoomFactor, save: true);
+                _lastZoomAppliedKey = key;
+                _lastZoomApplyTime = Time.unscaledTime;
             }
             catch { }
         }
@@ -7981,6 +8218,7 @@ namespace Firesky.UnderNetBrowser
                     catch { }
                     try { SetUrlDisplayText("undernet:discord"); } catch { }
                     _lastSyncedUrl = "undernet:discord";
+                    try { ApplyZoomForCurrentUrl(null, "undernet:discord", force: false); } catch { }
                     return;
                 }
 
@@ -8176,6 +8414,9 @@ namespace Firesky.UnderNetBrowser
                     try { UpdateInputOwnershipState(); } catch { }
                     try { _gpuCompositionCapture?.RequestFocus(); } catch { }
                 }
+
+                // Apply remembered/default zoom per page/site (default 90% unless user changed it).
+                try { ApplyZoomForCurrentUrl(url, display, force: urlChanged); } catch { }
             }
             catch { }
         }

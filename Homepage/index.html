@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=11 -->
+<!-- UnderNetBrowser:managed-homepage version=13 -->
 <title>UnderNet Home</title>
 <style>
   :root{
@@ -52,7 +52,17 @@
   .search{flex:1;display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03)}
   .search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:inherit;font-size:14px}
   .search input::placeholder{color:#7f968b}
-  .desktop-icons{flex:1;min-height:0;overflow:auto;padding:10px 6px 6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;align-content:start}
+  .content-scroll{flex:1;min-height:0;overflow:auto;padding:2px 2px 6px;display:flex;flex-direction:column;gap:14px}
+  .subsection{display:flex;flex-direction:column;gap:8px}
+  .subsection-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 4px}
+  .subsection-head h3{margin:0;font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:#d9ecdf}
+  .subsection-head .meta{font-size:11px;color:var(--muted2);letter-spacing:.5px;text-transform:uppercase}
+  .subsection-head .head-actions{display:flex;align-items:center;gap:8px}
+  .add-btn{width:28px;height:28px;border-radius:8px;border:1px solid rgba(124,255,107,.35);background:rgba(124,255,107,.10);color:#eaffea;font-size:18px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+  .add-btn:hover{background:rgba(124,255,107,.18);border-color:rgba(124,255,107,.55)}
+  .cards-grid{padding:4px 4px 2px;display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;align-content:start}
+  .cards-grid:empty::before{content:"No items";display:block;padding:10px 8px;color:var(--muted2);font-size:12px}
+  .section-empty{margin:0 6px;padding:10px 12px;border:1px dashed rgba(255,255,255,.10);border-radius:10px;color:var(--muted2);font-size:12px;display:none}
   .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:24px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
   .app:hover{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
   .app.hidden{display:none}
@@ -69,9 +79,14 @@
   .icon.web{background:rgba(255,255,255,.06);color:#eefbf3}
   .icon .favicon{width:100%;height:100%;object-fit:contain;padding:10px;display:block;background:transparent}
   .icon .icon-fallback{width:100%;height:100%;display:none;place-items:center;font-weight:800;font-size:24px}
-  .name{font-size:15px;font-weight:700;line-height:1.2}
-  .desc{font-size:12px;color:var(--muted);line-height:1.35}
+  .name{font-size:15px;font-weight:700;line-height:1.2;word-break:break-word}
+  .desc{font-size:12px;color:var(--muted);line-height:1.35;word-break:break-word}
   .badge{position:absolute;top:7px;right:7px;z-index:2;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#f4fff6;background:rgba(20,38,28,.92);border:1px solid rgba(124,255,107,.40);padding:4px 7px;border-radius:999px;box-shadow:0 4px 10px rgba(0,0,0,.25)}
+  .card-actions{position:absolute;top:6px;left:6px;display:none;gap:4px;z-index:3}
+  .app[data-custom="1"]:hover .card-actions,.app[data-custom="1"]:focus-within .card-actions{display:flex}
+  .icon-btn{width:24px;height:24px;border-radius:7px;border:1px solid rgba(255,255,255,.18);background:rgba(8,14,11,.92);color:#dcecdf;cursor:pointer;padding:0;font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center}
+  .icon-btn:hover{border-color:rgba(124,255,107,.45);color:#fff}
+  .icon-btn.danger:hover{border-color:rgba(255,123,123,.55);color:#ffdede}
   .side{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto;padding-right:2px}
   .widget{padding:13px 14px;border-radius:14px}
   .widget h3{margin:0 0 8px;font-size:13px;letter-spacing:1.1px;text-transform:uppercase;color:#dcecdf}
@@ -83,11 +98,6 @@
   .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warn);box-shadow:0 0 10px rgba(255,214,107,.35);margin-right:6px;vertical-align:middle}
   .status-dot.ok{background:var(--accent);box-shadow:0 0 10px rgba(124,255,107,.35)}
   .status-dot.off{background:#7f8f88;box-shadow:none}
-  .launcher-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-  .tile{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:10px;border-radius:12px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.9), rgba(11,17,14,.95));color:var(--text);text-decoration:none;cursor:pointer;text-align:left}
-  .tile:hover{border-color:rgba(124,255,107,.4);background:linear-gradient(180deg, rgba(22,35,28,.95), rgba(12,18,15,.98))}
-  .tile .t{font-size:13px;font-weight:700}
-  .tile .s{font-size:12px;color:var(--muted)}
   .note-area{width:100%;min-height:96px;resize:vertical;background:rgba(255,255,255,.02);color:var(--text);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px;font:inherit;font-size:13px;line-height:1.45}
   .note-area::placeholder{color:#7f968b}
   .note-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;color:var(--muted2);font-size:12px}
@@ -97,8 +107,19 @@
   .task-left,.task-right{display:flex;align-items:center;gap:10px;min-width:0}
   .start{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:8px;border:1px solid rgba(124,255,107,.25);background:rgba(124,255,107,.08);color:#eaffea;font-weight:700;text-decoration:none}
   .pill{padding:3px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03);white-space:nowrap}
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.45);z-index:50}
+  .modal.open{display:flex}
+  .modal-card{width:min(520px,100%);border:1px solid var(--edge2);border-radius:14px;background:linear-gradient(180deg, rgba(15,24,19,.98), rgba(9,14,11,.99));box-shadow:0 20px 40px rgba(0,0,0,.45);padding:14px}
+  .modal-card h3{margin:0 0 10px;font-size:15px;letter-spacing:1px;text-transform:uppercase;color:#dcecdf}
+  .form-grid{display:grid;gap:10px}
+  .field label{display:block;font-size:12px;color:var(--muted2);margin:0 0 4px;letter-spacing:.4px;text-transform:uppercase}
+  .field input{width:100%;padding:10px 11px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:var(--text);font:inherit;font-size:14px;outline:0}
+  .field input:focus{border-color:rgba(124,255,107,.45);box-shadow:0 0 0 2px rgba(124,255,107,.12)}
+  .field .hint{margin-top:4px;font-size:11px;color:var(--muted2)}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+  .form-error{min-height:16px;margin-top:4px;color:#ffb0b0;font-size:12px}
   @media (max-width:1100px){.topbar{grid-template-columns:1fr}.actions{justify-content:flex-start}}
-  @media (max-width:980px){body{overflow:auto}.workspace{grid-template-columns:1fr}.desktop-icons{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}.side{overflow:visible}}
+  @media (max-width:980px){body{overflow:auto}.workspace{grid-template-columns:1fr}.cards-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}.side{overflow:visible}}
 </style>
 </head>
 <body>
@@ -115,17 +136,17 @@
         <div class="clock">
           <div class="label">System Time</div>
           <div class="time" id="sysTime">--:--</div>
-          <div class="sub" id="sysDate">Loading…</div>
+          <div class="sub" id="sysDate">Loading.</div>
         </div>
         <div class="clock">
           <div class="label">In-Game Time</div>
           <div class="time" id="igTime">--:--</div>
-          <div class="sub" id="igDay"><span class="status-dot" id="igDot"></span><span id="igDayText">Waiting for game sync…</span></div>
+          <div class="sub" id="igDay"><span class="status-dot" id="igDot"></span><span id="igDayText">Waiting for game sync.</span></div>
         </div>
       </div>
       <div class="actions">
         <a class="btn" href="settings.html">⚙ Settings</a>
-        <a class="btn secondary" href="games.html">🎮 Games</a>
+        <a class="btn secondary" href="games.html">🗂 Games</a>
       </div>
     </header>
 
@@ -136,17 +157,38 @@
           <div class="search">🔎 <input id="appFilter" type="text" placeholder="Filter apps and shortcuts…" autocomplete="off" spellcheck="false" /></div>
           <button class="chip-btn secondary" id="clearFilter" type="button">Clear</button>
         </div>
-        <div class="desktop-icons" id="appGrid">
-                    <a class="app" data-name="youtube videos music streams" href="https://www.youtube.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.youtube.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">Y</span></div><div class="name">YouTube</div><div class="desc">Videos, music & streams</div></a>
-          <a class="app" data-name="twitch live streams gaming chat" href="https://www.twitch.tv"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.twitch.tv" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">T</span></div><div class="name">Twitch</div><div class="desc">Live streams & chat</div></a>
-          <a class="app" data-name="google search web" href="https://www.google.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">G</span></div><div class="name">Google</div><div class="desc">Search the web</div></a>
-          <a class="app" data-name="ai assistant chat undernet built-in google ai" href="https://www.google.com/ai"><span class="badge">AI</span><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">AI</span></div><div class="name">AI</div><div class="desc">UnderNet AI assistant</div></a>
-          <a class="app" data-name="games folder library browser" href="games.html"><span class="badge">Folder</span><div class="icon folder">🗂</div><div class="name">Games</div><div class="desc">Categorized browser library</div></a>
-          <a class="app" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://schedule1.tools" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">S1</span></div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools & utilities</div></a>
-          <a class="app" data-name="nexus mods schedule 1 schedule1 mod downloads community" href="https://www.nexusmods.com/games/schedule1"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.nexusmods.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">N</span></div><div class="name">Nexus Mods</div><div class="desc">Schedule 1 mods on Nexus</div></a>
-          <a class="app" data-name="notepad notes write save local" href="notepad.html"><span class="badge">App</span><div class="icon note">📝</div><div class="name">Notepad</div><div class="desc">Write and save local notes</div></a>
-          <a class="app" data-name="discord chat mirror app window" href="https://undernet.route/discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window (no web redirect)</div></a>
-          <a class="app" data-name="settings shortcuts controls config" href="settings.html"><div class="icon set">⚙</div><div class="name">Settings</div><div class="desc">Shortcuts & browser settings</div></a>
+
+        <div class="content-scroll" id="desktopContent">
+          <section class="subsection" id="appsSection">
+            <div class="subsection-head">
+              <h3>Apps</h3>
+              <div class="head-actions"><span class="meta" id="appsSectionMeta">Installed</span></div>
+            </div>
+            <div class="cards-grid" id="installedAppsGrid"></div>
+            <div class="section-empty" id="installedAppsEmpty">No installed/mod apps yet. Apps placed in <code>UserData/UnderNetBrowser/root/Apps/&lt;id&gt;/</code> will appear here.</div>
+          </section>
+
+          <section class="subsection" id="shortcutsSection">
+            <div class="subsection-head">
+              <h3>Shortcuts</h3>
+              <div class="head-actions">
+                <span class="meta" id="shortcutsSectionMeta">Web &amp; custom</span>
+                <button class="add-btn" id="addShortcutBtn" type="button" title="Add custom shortcut" aria-label="Add custom shortcut">+</button>
+              </div>
+            </div>
+            <div class="cards-grid" id="shortcutsGrid">
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="youtube videos music streams" href="https://www.youtube.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.youtube.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">Y</span></div><div class="name">YouTube</div><div class="desc">Videos, music &amp; streams</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="twitch live streams gaming chat" href="https://www.twitch.tv"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.twitch.tv" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">T</span></div><div class="name">Twitch</div><div class="desc">Live streams &amp; chat</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="google search web" href="https://www.google.com"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">G</span></div><div class="name">Google</div><div class="desc">Search the web</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="ai assistant chat undernet built-in google ai" href="https://www.google.com/ai"><span class="badge">AI</span><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.google.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">AI</span></div><div class="name">AI</div><div class="desc">UnderNet AI assistant</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="games folder library browser" href="games.html"><span class="badge">App</span><div class="icon folder">🗂</div><div class="name">Games</div><div class="desc">Categorized browser library</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="schedule1 tools schedule 1 tools calculator planner wiki utilities" href="https://schedule1.tools/"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://schedule1.tools" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">S1</span></div><div class="name">Schedule 1 Tools</div><div class="desc">Community tools &amp; utilities</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="nexus mods schedule 1 schedule1 mod downloads community" href="https://www.nexusmods.com/games/schedule1"><div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.nexusmods.com" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';"><span class="icon-fallback">N</span></div><div class="name">Nexus Mods</div><div class="desc">Schedule 1 mods on Nexus</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="notepad notes write save local" href="notepad.html"><span class="badge">App</span><div class="icon note">📝</div><div class="name">Notepad</div><div class="desc">Write and save local notes</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="discord chat mirror app window" href="https://undernet.route/discord"><div class="icon dc">D</div><div class="name">Discord</div><div class="desc">Mirror Discord window</div></a>
+              <a class="app" data-builtin="1" data-kind="shortcut" data-name="settings shortcuts controls config" href="settings.html"><span class="badge">App</span><div class="icon set">⚙</div><div class="name">Settings</div><div class="desc">Browser settings &amp; controls</div></a>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -157,6 +199,7 @@
             <div class="row"><span class="k">Home Route</span><span class="v">undernet:home</span></div>
             <div class="row"><span class="k">System</span><span class="v" id="sessionSys">--:--:--</span></div>
             <div class="row"><span class="k">In-Game</span><span class="v" id="sessionIg">Waiting for sync…</span></div>
+            <div class="row"><span class="k">Net Worth</span><span class="v" id="netWorthValue">--</span></div>
             <div class="row"><span class="k">Sync</span><span class="v"><span class="status-dot off" id="syncDot"></span><span id="syncLabel">No data</span></span></div>
           </div>
         </div>
@@ -178,13 +221,38 @@
   </div>
 
   <div class="taskbar">
-    <div class="task-left"><a class="start" href="index.html">◉ UnderNet</a><span class="pill">Desktop</span><span class="pill" id="taskbarApps">7 apps</span></div>
+    <div class="task-left"><a class="start" href="index.html">◉ UnderNet</a><span class="pill">Desktop</span><span class="pill" id="taskbarApps">0 items</span></div>
     <div class="task-right"><span id="taskbarDate">--</span><span id="footerClock">--:--:--</span></div>
+  </div>
+
+  <div class="modal" id="shortcutModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="shortcutModalTitle">
+      <h3 id="shortcutModalTitle">Add Shortcut</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="shortcutName">Name</label>
+          <input id="shortcutName" type="text" maxlength="48" placeholder="My Website" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="shortcutUrl">URL</label>
+          <input id="shortcutUrl" type="text" maxlength="500" placeholder="https://example.com" autocomplete="off" spellcheck="false" />
+          <div class="hint">Websites only (http/https). Pre-built shortcuts cannot be edited or removed.</div>
+        </div>
+      </div>
+      <div class="form-error" id="shortcutFormError"></div>
+      <div class="modal-actions">
+        <button class="mini-btn" id="shortcutCancelBtn" type="button">Cancel</button>
+        <button class="mini-btn" id="shortcutSaveBtn" type="button">Save</button>
+      </div>
+    </div>
   </div>
 
 <script>
 (function(){
   var notesKey = 'undernet_home_scratchpad_v1';
+  var customShortcutsKey = 'undernet_home_custom_shortcuts_v1';
+  var editingShortcutId = null;
+
   function pad(n){return (n<10?'0':'')+n}
   function tick(){
     var d=new Date();
@@ -199,9 +267,17 @@
     var tb=document.getElementById('taskbarDate'); if(tb) tb.textContent=dateStr;
     var ss=document.getElementById('sessionSys'); if(ss) ss.textContent=ts;
   }
+
+  function escText(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+  function escAttr(s){ return escText(s).replace(/`/g,'&#96;'); }
+
+  function getAllCards(){
+    return document.querySelectorAll('#installedAppsGrid .app, #shortcutsGrid .app');
+  }
+
   function applyFilter(){
     var q=(document.getElementById('appFilter').value||'').toLowerCase().trim();
-    var cards=document.querySelectorAll('#appGrid .app');
+    var cards=getAllCards();
     var visible=0;
     for(var i=0;i<cards.length;i++){
       var text=((cards[i].getAttribute('data-name')||'')+' '+cards[i].textContent).toLowerCase();
@@ -210,8 +286,18 @@
       if(show) visible++;
     }
     var count=document.getElementById('appCount'); if(count) count.textContent=visible+' visible';
-    var tb=document.getElementById('taskbarApps'); if(tb) tb.textContent=visible+' / '+cards.length+' apps';
+    var tb=document.getElementById('taskbarApps'); if(tb) tb.textContent=visible+' / '+cards.length+' items';
+
+    var appsCards=document.querySelectorAll('#installedAppsGrid .app');
+    var appsVisible=0; for(var a=0;a<appsCards.length;a++){ if(!appsCards[a].classList.contains('hidden')) appsVisible++; }
+    var appsMeta=document.getElementById('appsSectionMeta'); if(appsMeta) appsMeta.textContent = appsCards.length ? (appsVisible+' / '+appsCards.length+' installed') : 'Installed';
+    var appsEmpty=document.getElementById('installedAppsEmpty'); if(appsEmpty) appsEmpty.style.display = appsCards.length ? 'none' : 'block';
+
+    var scCards=document.querySelectorAll('#shortcutsGrid .app');
+    var scVisible=0; for(var s=0;s<scCards.length;s++){ if(!scCards[s].classList.contains('hidden')) scVisible++; }
+    var scMeta=document.getElementById('shortcutsSectionMeta'); if(scMeta) scMeta.textContent = scVisible+' / '+scCards.length+' shortcuts';
   }
+
   function setNotesStatus(msg){ var el=document.getElementById('notesStatus'); if(el) el.textContent=msg; }
   function loadNotes(){
     try{
@@ -234,12 +320,127 @@
       setNotesStatus('Cleared');
     }catch(_){ setNotesStatus('Clear failed'); }
   }
-  function escText(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+
+  function normalizeShortcutUrl(raw){
+    var u=String(raw||'').trim();
+    if(!u) return '';
+    if(!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) u='https://'+u;
+    if(!/^https?:\/\//i.test(u)) return '';
+    return u;
+  }
+  function hostnameFromUrl(u){
+    try { return new URL(u).hostname || u; } catch(_) { return u; }
+  }
+  function loadCustomShortcuts(){
+    try{
+      var raw=localStorage.getItem(customShortcutsKey);
+      if(!raw) return [];
+      var arr=JSON.parse(raw);
+      if(!arr || !arr.length) return [];
+      var out=[];
+      for(var i=0;i<arr.length;i++){
+        var it=arr[i]||{};
+        var id=String(it.id||'').trim();
+        var name=String(it.name||'').trim();
+        var url=normalizeShortcutUrl(String(it.url||''));
+        if(!id || !name || !url) continue;
+        out.push({id:id,name:name,url:url});
+      }
+      return out;
+    }catch(_){ return []; }
+  }
+  function saveCustomShortcuts(list){
+    try { localStorage.setItem(customShortcutsKey, JSON.stringify(list||[])); return true; } catch(_) { return false; }
+  }
+  function makeShortcutId(){
+    return 'sc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7);
+  }
+  function renderCustomShortcuts(){
+    try{
+      var grid=document.getElementById('shortcutsGrid'); if(!grid) return;
+      var old=grid.querySelectorAll('[data-custom="1"]');
+      for(var i=0;i<old.length;i++){ try{ old[i].parentNode.removeChild(old[i]); }catch(_){} }
+      var list=loadCustomShortcuts();
+      for(var j=0;j<list.length;j++){
+        var sc=list[j];
+        var host=hostnameFromUrl(sc.url);
+        var fallback=(sc.name||host||'?').charAt(0).toUpperCase();
+        var a=document.createElement('a');
+        a.className='app';
+        a.setAttribute('href', sc.url);
+        a.setAttribute('data-custom','1');
+        a.setAttribute('data-kind','shortcut');
+        a.setAttribute('data-shortcut-id', sc.id);
+        a.setAttribute('data-name', (sc.name+' '+sc.url+' '+host+' custom shortcut').toLowerCase());
+        a.innerHTML =
+          '<span class="badge">Custom</span>' +
+          '<div class="card-actions">' +
+            '<button class="icon-btn edit-shortcut" type="button" title="Edit shortcut" aria-label="Edit shortcut">✎</button>' +
+            '<button class="icon-btn danger remove-shortcut" type="button" title="Remove shortcut" aria-label="Remove shortcut">✕</button>' +
+          '</div>' +
+          '<div class="icon web"><img class="favicon" src="https://www.google.com/s2/favicons?sz=64&domain_url='+escAttr(sc.url)+'" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'grid\';"><span class="icon-fallback">'+escText(fallback)+'</span></div>' +
+          '<div class="name">'+escText(sc.name)+'</div>' +
+          '<div class="desc">'+escText(host)+'</div>';
+        grid.appendChild(a);
+      }
+      applyFilter();
+    }catch(_){ try{ applyFilter(); }catch(__){} }
+  }
+
+  function openShortcutModal(editId){
+    editingShortcutId = editId || null;
+    var modal=document.getElementById('shortcutModal');
+    var title=document.getElementById('shortcutModalTitle');
+    var name=document.getElementById('shortcutName');
+    var url=document.getElementById('shortcutUrl');
+    var err=document.getElementById('shortcutFormError');
+    if(err) err.textContent='';
+    if(editingShortcutId){
+      var list=loadCustomShortcuts();
+      var item=null; for(var i=0;i<list.length;i++){ if(list[i].id===editingShortcutId){ item=list[i]; break; } }
+      if(title) title.textContent='Edit Shortcut';
+      if(name) name.value=item?item.name:'';
+      if(url) url.value=item?item.url:'';
+    } else {
+      if(title) title.textContent='Add Shortcut';
+      if(name) name.value='';
+      if(url) url.value='';
+    }
+    if(modal){ modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); }
+    setTimeout(function(){ try{ (name||url||{}).focus && (name||url).focus(); }catch(_){} }, 0);
+  }
+  function closeShortcutModal(){
+    editingShortcutId=null;
+    var modal=document.getElementById('shortcutModal');
+    var err=document.getElementById('shortcutFormError');
+    if(err) err.textContent='';
+    if(modal){ modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); }
+  }
+  function submitShortcutModal(){
+    var nameEl=document.getElementById('shortcutName');
+    var urlEl=document.getElementById('shortcutUrl');
+    var err=document.getElementById('shortcutFormError');
+    var name=String(nameEl?nameEl.value:'').trim();
+    var url=normalizeShortcutUrl(urlEl?urlEl.value:'');
+    if(!name){ if(err) err.textContent='Please enter a name.'; return; }
+    if(!url){ if(err) err.textContent='Please enter a valid website URL (http/https).'; return; }
+    var list=loadCustomShortcuts();
+    if(editingShortcutId){
+      for(var i=0;i<list.length;i++){
+        if(list[i].id===editingShortcutId){ list[i].name=name; list[i].url=url; break; }
+      }
+    } else {
+      list.push({id:makeShortcutId(), name:name, url:url});
+    }
+    if(!saveCustomShortcuts(list)){ if(err) err.textContent='Failed to save shortcut in browser storage.'; return; }
+    closeShortcutModal();
+    renderCustomShortcuts();
+  }
+
   function renderInstalledApps(apps){
     try{
-      var grid=document.getElementById('appGrid'); if(!grid) return;
-      var old=grid.querySelectorAll('[data-installed-app="1"]');
-      for(var i=0;i<old.length;i++){ try{ old[i].parentNode.removeChild(old[i]); }catch(_){} }
+      var grid=document.getElementById('installedAppsGrid'); if(!grid) return;
+      grid.innerHTML='';
       if(!apps || !apps.length){ applyFilter(); return; }
       for(var j=0;j<apps.length;j++){
         var app=apps[j]||{};
@@ -251,6 +452,7 @@
         var a=document.createElement('a');
         a.className='app';
         a.setAttribute('data-installed-app','1');
+        a.setAttribute('data-kind','app');
         a.setAttribute('href', route);
         a.setAttribute('data-name', (name+' '+desc+' '+id+' installed mod app').toLowerCase());
         a.innerHTML='<span class="badge">Mod</span><div class="icon appi">'+escText((name||'?').charAt(0).toUpperCase())+'</div><div class="name">'+escText(name)+'</div><div class="desc">'+escText(desc)+'</div>';
@@ -262,6 +464,7 @@
   window.__underNetSetInstalledApps=function(apps){
     try{ renderInstalledApps(apps || []); }catch(_){ }
   };
+
   window.__underNetSetGameTime=function(timeText,dayText){
     try{
       var hasTime = !!(timeText && timeText.indexOf('--')===-1);
@@ -269,17 +472,73 @@
       var day=(dayText||'Time unavailable');
       var igDayText=document.getElementById('igDayText'); if(igDayText) igDayText.textContent=day;
       var dot=document.getElementById('igDot'); if(dot){ dot.classList.toggle('ok', hasTime); dot.classList.toggle('off', !hasTime); }
-      var sig=document.getElementById('sessionIg'); if(sig) sig.textContent=hasTime ? (timeText+' · '+day) : 'Waiting for sync…';
+      var sig=document.getElementById('sessionIg'); if(sig) sig.textContent=hasTime ? (timeText+' • '+day) : 'Waiting for sync…';
       var syncDot=document.getElementById('syncDot'); if(syncDot){ syncDot.classList.toggle('ok', hasTime); syncDot.classList.toggle('off', !hasTime); }
       var syncLabel=document.getElementById('syncLabel'); if(syncLabel) syncLabel.textContent=hasTime ? 'Live' : 'No data';
     }catch(_){ }
   };
+
+  window.__underNetSetNetWorth=function(netWorthText){
+    try{
+      var el=document.getElementById('netWorthValue');
+      if(!el) return;
+      var v = (netWorthText==null ? '' : String(netWorthText)).trim();
+      el.textContent = v ? v : '--';
+    }catch(_){ }
+  };
+
   var input=document.getElementById('appFilter'); if(input){ input.addEventListener('input', applyFilter); }
   var clear=document.getElementById('clearFilter'); if(clear){ clear.addEventListener('click', function(){ if(input) input.value=''; applyFilter(); if(input) input.focus(); }); }
   var saveBtn=document.getElementById('saveNotes'); if(saveBtn){ saveBtn.addEventListener('click', saveNotes); }
   var clrBtn=document.getElementById('clearNotes'); if(clrBtn){ clrBtn.addEventListener('click', clearNotes); }
   var ta=document.getElementById('notes'); if(ta){ ta.addEventListener('keydown', function(e){ if((e.ctrlKey||e.metaKey) && (e.key==='s' || e.key==='S')){ e.preventDefault(); saveNotes(); } }); }
-  tick(); setInterval(tick,1000); loadNotes(); applyFilter();
+
+  var addBtn=document.getElementById('addShortcutBtn'); if(addBtn){ addBtn.addEventListener('click', function(){ openShortcutModal(null); }); }
+  var cancelBtn=document.getElementById('shortcutCancelBtn'); if(cancelBtn){ cancelBtn.addEventListener('click', closeShortcutModal); }
+  var saveShortcutBtn=document.getElementById('shortcutSaveBtn'); if(saveShortcutBtn){ saveShortcutBtn.addEventListener('click', submitShortcutModal); }
+  var modal=document.getElementById('shortcutModal');
+  if(modal){
+    modal.addEventListener('click', function(e){ if(e.target===modal) closeShortcutModal(); });
+  }
+  document.addEventListener('keydown', function(e){
+    var m=document.getElementById('shortcutModal');
+    if(e.key==='Escape' && m && m.classList.contains('open')){ e.preventDefault(); closeShortcutModal(); return; }
+    if(e.key==='Enter' && m && m.classList.contains('open')){
+      var active=document.activeElement;
+      if(active && (active.id==='shortcutName' || active.id==='shortcutUrl')){ e.preventDefault(); submitShortcutModal(); }
+    }
+  });
+
+  var shortcutsGrid=document.getElementById('shortcutsGrid');
+  if(shortcutsGrid){
+    shortcutsGrid.addEventListener('click', function(e){
+      var editBtn=e.target && e.target.closest ? e.target.closest('.edit-shortcut') : null;
+      var removeBtn=e.target && e.target.closest ? e.target.closest('.remove-shortcut') : null;
+      if(editBtn){
+        e.preventDefault(); e.stopPropagation();
+        var card=editBtn.closest('[data-custom="1"][data-shortcut-id]');
+        var id=card ? card.getAttribute('data-shortcut-id') : '';
+        if(id) openShortcutModal(id);
+        return;
+      }
+      if(removeBtn){
+        e.preventDefault(); e.stopPropagation();
+        var card2=removeBtn.closest('[data-custom="1"][data-shortcut-id]');
+        var id2=card2 ? card2.getAttribute('data-shortcut-id') : '';
+        if(!id2) return;
+        var list=loadCustomShortcuts();
+        var next=[]; for(var i=0;i<list.length;i++){ if(list[i].id!==id2) next.push(list[i]); }
+        saveCustomShortcuts(next);
+        renderCustomShortcuts();
+        return;
+      }
+    });
+  }
+
+  tick(); setInterval(tick,1000);
+  loadNotes();
+  renderCustomShortcuts();
+  renderInstalledApps([]); // will be replaced by mod-injected data when available
 })();
 </script>
 </body>

@@ -1,4 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text.Json;
 using MelonLoader;
 
 namespace Firesky.UnderNetBrowser
@@ -24,6 +27,9 @@ namespace Firesky.UnderNetBrowser
 
         public static MelonPreferences_Entry<int>? GpuCompositionRenderWidth { get; private set; }
         public static MelonPreferences_Entry<int>? GpuCompositionRenderHeight { get; private set; }
+
+        // Per-site/page zoom memory (host/key -> zoom factor). Default zoom is 0.90 when no override exists.
+        public static MelonPreferences_Entry<string>? ZoomLevelsByHostJson { get; private set; }
 
         // Keybinds (configurable). Stored as KeyCode names (e.g. F3, F5, F6).
         public static MelonPreferences_Entry<string>? KeyToggleCursor { get; private set; }
@@ -145,6 +151,12 @@ namespace Firesky.UnderNetBrowser
                 "DiagnosticsOutputDirectory", "",
                 "Advanced: Diagnostics Output Folder",
                 "Custom output folder for diagnostics files. Leave empty to use UserData/UnderNetBrowser/Diagnostics.");
+
+            // --- Basic / Browsing ---
+            ZoomLevelsByHostJson = _category.CreateEntry(
+                "ZoomLevelsByHostJson", "{}",
+                "Page Zoom Levels (per site)",
+                "JSON map of remembered zoom factors by site/page key. Default zoom is 90% (0.90) for pages without a saved override. Updated automatically when you change zoom.");
 
             // --- Advanced / WebView2 Browser Arguments (testing) ---
             WebView2ArgDisableBackgroundTimerThrottling = _category.CreateEntry(
@@ -365,6 +377,94 @@ namespace Firesky.UnderNetBrowser
         }
 
         // Chrome height is now fixed internally for a consistent, compact UI.
+
+        public const double DefaultPageZoomFactor = 0.90;
+        private static readonly object _zoomLevelsLock = new object();
+        private static Dictionary<string, double>? _zoomLevelsCache;
+        private static string _zoomLevelsCacheRaw = "\0";
+
+        private static Dictionary<string, double> GetZoomLevelsCache()
+        {
+            lock (_zoomLevelsLock)
+            {
+                var raw = ZoomLevelsByHostJson?.Value ?? "{}";
+                if (_zoomLevelsCache != null && string.Equals(_zoomLevelsCacheRaw, raw, StringComparison.Ordinal))
+                    return _zoomLevelsCache;
+
+                var map = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        using var doc = JsonDocument.Parse(raw);
+                        if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var prop in doc.RootElement.EnumerateObject())
+                            {
+                                try
+                                {
+                                    var key = (prop.Name ?? "").Trim();
+                                    if (key.Length == 0) continue;
+                                    double z;
+                                    if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetDouble(out z)) { }
+                                    else if (prop.Value.ValueKind == JsonValueKind.String && double.TryParse(prop.Value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out z)) { }
+                                    else continue;
+                                    if (z < 0.25) z = 0.25; else if (z > 5.0) z = 5.0;
+                                    map[key] = z;
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    map.Clear();
+                }
+
+                _zoomLevelsCache = map;
+                _zoomLevelsCacheRaw = raw;
+                return _zoomLevelsCache;
+            }
+        }
+
+        public static double GetSavedZoomFactorForKey(string? key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return DefaultPageZoomFactor;
+            try
+            {
+                lock (_zoomLevelsLock)
+                {
+                    var map = GetZoomLevelsCache();
+                    return map.TryGetValue(key.Trim(), out var z) ? z : DefaultPageZoomFactor;
+                }
+            }
+            catch { return DefaultPageZoomFactor; }
+        }
+
+        public static void SetSavedZoomFactorForKey(string? key, double zoomFactor, bool save = true)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            try
+            {
+                if (!(zoomFactor > 0.0)) zoomFactor = DefaultPageZoomFactor;
+                if (zoomFactor < 0.25) zoomFactor = 0.25; else if (zoomFactor > 5.0) zoomFactor = 5.0;
+                lock (_zoomLevelsLock)
+                {
+                    var map = new Dictionary<string, double>(GetZoomLevelsCache(), StringComparer.OrdinalIgnoreCase);
+                    map[key.Trim()] = zoomFactor;
+                    var json = JsonSerializer.Serialize(map);
+                    _zoomLevelsCache = map;
+                    _zoomLevelsCacheRaw = json;
+                    if (ZoomLevelsByHostJson != null) ZoomLevelsByHostJson.Value = json;
+                }
+                if (save)
+                {
+                    try { MelonPreferences.Save(); } catch { }
+                }
+            }
+            catch { }
+        }
 
         /// <summary>
         /// Builds AdditionalBrowserArguments for WebView2 environment creation from testing toggles and custom args.
