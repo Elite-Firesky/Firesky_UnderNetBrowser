@@ -40,6 +40,7 @@ namespace Firesky.UnderNetBrowser
         private string _hintBaseMessage = "";
         private float _hintAnimTime;
         private bool _uiBuilt;
+        private GameObject? _uiContainer;
         private bool _browserPointerDown;
         private bool _browserPointerRightDown;
         private bool _isPageFullscreen;
@@ -152,6 +153,7 @@ namespace Firesky.UnderNetBrowser
         protected override void OnCreatedUI(GameObject container)
         {
             _activeInstance = this;
+            _uiContainer = container;
             if (_uiBuilt) return;
             try
             {
@@ -321,7 +323,7 @@ namespace Firesky.UnderNetBrowser
             UnderNetBrowserConfig.Log("[UnderNetBrowser] OnOpened");
             try { UnderNetBrowserDiagnostics.OnBrowserVisible(); } catch { }
 
-            var diagGo = _videoDisplay != null ? (_videoDisplay.transform.parent?.gameObject ?? _videoDisplay.gameObject) : null;
+            var diagGo = _uiContainer ?? (_videoDisplay != null ? (_videoDisplay.transform.parent?.gameObject ?? _videoDisplay.gameObject) : null);
             if (diagGo != null)
             {
                 RepairS1APICanvasState(diagGo, "OnOpened");
@@ -680,9 +682,10 @@ namespace Firesky.UnderNetBrowser
                     }
                 }
 
-                if (Time.realtimeSinceStartup >= _repairNextAllowedRealtime)
+                // Detached/background TV UI can be legitimately hidden/scaled by upstream game/S1API state; don't "repair" it.
+                if (!_detachedToGameplay && Time.realtimeSinceStartup >= _repairNextAllowedRealtime)
                 {
-                    var diagGo = _videoDisplay != null ? (_videoDisplay.transform.parent?.gameObject ?? _videoDisplay.gameObject) : null;
+                    var diagGo = _uiContainer ?? (_videoDisplay != null ? (_videoDisplay.transform.parent?.gameObject ?? _videoDisplay.gameObject) : null);
                     if (diagGo != null) RepairS1APICanvasState(diagGo, "OnUpdate");
                 }
 
@@ -3689,7 +3692,13 @@ namespace Firesky.UnderNetBrowser
 
                 var cur = "";
                 try { cur = app._gpuCompositionCapture?.CurrentUrl ?? ""; } catch { cur = ""; }
-                if (!IsHomepageUrl(cur)) return;
+                if (!IsHomepageUrl(cur))
+                {
+                    // Reset so returning to homepage (including same URL) always reinjects into the fresh page DOM.
+                    _lastHomepageInstalledAppsUrl = string.Empty;
+                    _lastHomepageInstalledAppsPayload = string.Empty;
+                    return;
+                }
 
                 if (!string.Equals(cur, _lastHomepageInstalledAppsUrl, StringComparison.Ordinal))
                 {
@@ -3698,7 +3707,8 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 var payload = BuildInstalledAppsPayloadJson(forceRebuild: force);
-                if (!force && string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal)) return;
+                // Always reinject while on homepage (throttled above): page reloads/revisits/browser restarts can reset DOM/JS state
+                // even when URL/payload are unchanged, so skipping here can make installed app shortcuts disappear.
                 _lastHomepageInstalledAppsPayload = payload;
                 var script = "(function(){try{var p=" + payload + ";function go(){try{if(window.__underNetSetInstalledApps){window.__underNetSetInstalledApps(p);return true;}}catch(e){}return false;}if(!go()){var n=0,t=setInterval(function(){n++;if(go()||n>20)clearInterval(t);},250);}}catch(e){}})();";
                 try { app._gpuCompositionCapture?.ExecuteScript(script); } catch { }
@@ -9334,13 +9344,14 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 if (from == null) { UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: from=null"); return; }
-                var go = from;
-                var appRoot = go.transform.parent != null ? go.transform.parent.gameObject : go;
-                var canvas = appRoot.GetComponent<Canvas>() ?? go.GetComponentInParent<Canvas>();
-                var cg = appRoot.GetComponent<CanvasGroup>() ?? go.GetComponentInParent<CanvasGroup>();
+                var appRoot = from;
+                var canvas = appRoot.GetComponent<Canvas>() ?? appRoot.GetComponentInParent<Canvas>();
+                var cg = appRoot.GetComponent<CanvasGroup>() ?? appRoot.GetComponentInParent<CanvasGroup>();
                 var rootRt = appRoot.GetComponent<RectTransform>();
-                UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: from='{go.name}' active={go.activeInHierarchy} path={GetTransformPath(go.transform)}");
-                UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: appRoot='{appRoot.name}' active={appRoot.activeInHierarchy} pos={appRoot.transform.position} lscale={appRoot.transform.localScale} lossy={appRoot.transform.lossyScale}");
+                Vector3 parentLossy = Vector3.one;
+                try { var p = appRoot.transform.parent; if (p != null) parentLossy = p.lossyScale; } catch { }
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: root='{appRoot.name}' active={appRoot.activeInHierarchy} path={GetTransformPath(appRoot.transform)}");
+                UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: pos={appRoot.transform.position} lscale={appRoot.transform.localScale} lossy={appRoot.transform.lossyScale} parentLossy={parentLossy}");
                 if (rootRt != null) UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: rootRT size={rootRt.rect.size} sd={rootRt.sizeDelta}");
                 if (canvas != null) UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: canvas renderMode={canvas.renderMode} sortingOrder={canvas.sortingOrder} worldCamera={(canvas.worldCamera != null ? canvas.worldCamera.name : "null")}");
                 if (cg != null) UnderNetBrowserConfig.Log($"[UnderNetBrowser] UI diag {label}: canvasGroup alpha={cg.alpha} interact={cg.interactable} blocks={cg.blocksRaycasts}");
@@ -9388,34 +9399,65 @@ namespace Firesky.UnderNetBrowser
             try
             {
                 float nowRt = Time.realtimeSinceStartup;
-                // Throttle checks to reduce per-update overhead/log spam on degenerate upstream transforms.
-                // OnOpened should run immediately so initial UI state can be repaired promptly.
+                // Throttle checks to reduce overhead. OnOpened runs immediately so initial UI state can be repaired promptly.
                 if (!string.Equals(label, "OnOpened", StringComparison.Ordinal) && nowRt < _repairNextAllowedRealtime)
                     return;
-                // Default healthy-state throttle; bad-state paths below may extend this.
                 _repairNextAllowedRealtime = nowRt + (_repairBackoffActive ? 5f : 1f);
 
                 if (from == null) return;
-                var go = from;
-                var appRoot = go.transform.parent != null ? go.transform.parent.gameObject : go;
-                var canvas = appRoot.GetComponent<Canvas>() ?? go.GetComponentInParent<Canvas>();
-                var rootRt = appRoot.GetComponent<RectTransform>();
 
-                float scaleMag = appRoot.transform.lossyScale.sqrMagnitude;
-                bool badScale = scaleMag < 0.0001f;
+                // Repair the app-owned UI root we control (S1API container / our subtree), not upstream TV/game containers.
+                var appRoot = from;
+                var canvas = appRoot.GetComponent<Canvas>() ?? appRoot.GetComponentInParent<Canvas>();
+                var rootRt = appRoot.GetComponent<RectTransform>();
+                var t = appRoot.transform;
+
+                Vector3 parentLossy = Vector3.one;
+                try { var p = t.parent; if (p != null) parentLossy = p.lossyScale; } catch { }
+
+                Vector3 local = t.localScale;
+                float scaleMag = t.lossyScale.sqrMagnitude;
+                bool localZeroish = Math.Abs(local.x) < 0.0001f || Math.Abs(local.y) < 0.0001f || Math.Abs(local.z) < 0.0001f;
+                bool lossyZeroish = scaleMag < 0.0001f;
+                // Repair only locally-owned defects. A zero/near-zero world scale with a valid local scale indicates
+                // upstream game/S1API hierarchy scaling/visibility (possibly above the immediate parent) and must not be "fixed" here.
+                bool badLocalScale = localZeroish;
+                bool badScale = false;
                 bool badSize = rootRt != null && rootRt.rect.width < 1f && rootRt.rect.height < 1f;
                 bool badCam = canvas != null && canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null;
 
-                // S1API TVApp spawns UI with correct TV sizing; avoid donor-based overrides that can break fit.
-                // Only fix critical cases (missing world camera, or truly degenerate scale/size).
+                // Fix critical local/canvas issues we own.
                 if (badCam && canvas != null && Camera.main != null)
                 {
                     try { canvas.worldCamera = Camera.main; } catch { }
                     if (UnderNetBrowserConfig.DebugLogging?.Value == true)
                         UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: set worldCamera=Camera.main");
                 }
+                if (badLocalScale)
+                {
+                    try { t.localScale = Vector3.one; } catch { }
+                }
+                if (badSize && rootRt != null)
+                {
+                    try
+                    {
+                        if (rootRt.rect.width < 1f || rootRt.rect.height < 1f)
+                            rootRt.sizeDelta = new Vector2(685f, 400f);
+                    }
+                    catch { }
+                }
 
-                if (!badScale && !badSize)
+                // Re-evaluate after local repairs.
+                local = t.localScale;
+                scaleMag = t.lossyScale.sqrMagnitude;
+                localZeroish = Math.Abs(local.x) < 0.0001f || Math.Abs(local.y) < 0.0001f || Math.Abs(local.z) < 0.0001f;
+                lossyZeroish = scaleMag < 0.0001f;
+                badLocalScale = localZeroish;
+                badScale = false; // upstream/world-scale-only degeneracy is not actionable locally
+                badSize = rootRt != null && rootRt.rect.width < 1f && rootRt.rect.height < 1f;
+
+                // Nothing locally broken/relevant to repair. (Upstream-hidden hierarchies are expected in some game/S1API states.)
+                if (!badLocalScale && !badScale && !badSize)
                 {
                     if (_repairStateLoggedBad || _repairBackoffActive)
                     {
@@ -9429,117 +9471,23 @@ namespace Firesky.UnderNetBrowser
                     return;
                 }
 
-                // Bad state: apply conservative repairs, then back off if upstream/parent transform remains irrecoverably degenerate.
                 bool verbose = UnderNetBrowserConfig.DebugLogging?.Value == true;
                 string path = "";
-                Vector3 pLossy = Vector3.one;
                 try { path = GetTransformPath(appRoot.transform); } catch { path = appRoot.name; }
-                try { var p = appRoot.transform.parent; pLossy = p != null ? p.lossyScale : Vector3.one; } catch { }
 
-                bool parentZeroish = Math.Abs(pLossy.x) < 0.0001f || Math.Abs(pLossy.y) < 0.0001f || Math.Abs(pLossy.z) < 0.0001f;
-                string sig = $"{(badScale ? 1 : 0)}:{(badSize ? 1 : 0)}:{path}:{(int)(pLossy.x * 1000f)},{(int)(pLossy.y * 1000f)},{(int)(pLossy.z * 1000f)}";
+                string sig = $"{(badLocalScale ? 1 : 0)}:{(badScale ? 1 : 0)}:{(badSize ? 1 : 0)}:{path}:{(int)(parentLossy.x * 1000f)},{(int)(parentLossy.y * 1000f)},{(int)(parentLossy.z * 1000f)}";
                 bool sigChanged = !string.Equals(sig, _lastRepairStateSignature, StringComparison.Ordinal);
                 _lastRepairStateSignature = sig;
 
-                // Throttle repetitive debug logging for persistent known-degenerate states (especially when upstream parent scale is zero),
-                // while still surfacing state transitions and periodic status.
-                float logMinInterval = 30f;
-                if (verbose && !(badScale && parentZeroish && _repairBackoffActive && !sigChanged)) logMinInterval = 5f;
+                // Local defect remains (not explained by upstream parent scale). Log and back off; avoid mutating ancestor/game transforms.
+                float logMinInterval = verbose ? 5f : 30f;
+                _repairBackoffActive = true;
+                _repairNextAllowedRealtime = nowRt + 5f;
                 if (!_repairStateLoggedBad || sigChanged || (nowRt - _lastRepairStateLogRealtime >= logMinInterval))
                 {
                     _lastRepairStateLogRealtime = nowRt;
                     _repairStateLoggedBad = true;
-                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: badScale={badScale}(mag={scaleMag:F6}) badSize={badSize} rootRT={(rootRt != null ? rootRt.rect.size.ToString() : "null")} rootLocal={appRoot.transform.localScale} rootLossy={appRoot.transform.lossyScale} parentLossy={pLossy} path='{path}'");
-                }
-
-                if (badSize && rootRt != null)
-                {
-                    try
-                    {
-                        if (rootRt.rect.width < 1f || rootRt.rect.height < 1f)
-                            rootRt.sizeDelta = new Vector2(685f, 400f);
-                    }
-                    catch { }
-                }
-
-                int fixedAncestors = 0;
-                bool stillDegenerate = false;
-
-                if (badScale)
-                {
-                    try { appRoot.transform.localScale = Vector3.one; } catch { }
-                    try
-                    {
-                        var p = appRoot.transform.parent;
-                        int depth = 0;
-                        while (p != null && depth++ < 4 && fixedAncestors < 2)
-                        {
-                            Vector3 pLossyNow = Vector3.one;
-                            try { pLossyNow = p.lossyScale; } catch { pLossyNow = Vector3.one; }
-                            bool nodeZeroish = Math.Abs(pLossyNow.x) < 0.0001f || Math.Abs(pLossyNow.y) < 0.0001f || Math.Abs(pLossyNow.z) < 0.0001f;
-                            if (!nodeZeroish) break;
-
-                            string pn = p.name ?? "";
-                            bool allowAncestorFix = pn.IndexOf("UnderNetBrowser", StringComparison.OrdinalIgnoreCase) >= 0
-                                || string.Equals(pn, "Container", StringComparison.OrdinalIgnoreCase)
-                                || fixedAncestors == 0;
-
-                            if (!allowAncestorFix) break;
-                            try
-                            {
-                                var ls = p.localScale;
-                                bool localZeroish = Math.Abs(ls.x) < 0.0001f || Math.Abs(ls.y) < 0.0001f || Math.Abs(ls.z) < 0.0001f;
-                                if (localZeroish || nodeZeroish)
-                                {
-                                    p.localScale = Vector3.one;
-                                    fixedAncestors++;
-                                }
-                            }
-                            catch { break; }
-                            p = p.parent;
-                        }
-                    }
-                    catch { }
-
-                    try
-                    {
-                        var lossy = appRoot.transform.lossyScale;
-                        var parentNow = appRoot.transform.parent;
-                        var pLossyNow = parentNow != null ? parentNow.lossyScale : Vector3.one;
-                        bool rootZeroish = Math.Abs(lossy.x) < 0.0001f || Math.Abs(lossy.y) < 0.0001f || Math.Abs(lossy.z) < 0.0001f;
-                        bool parentStillZeroish = Math.Abs(pLossyNow.x) < 0.0001f || Math.Abs(pLossyNow.y) < 0.0001f || Math.Abs(pLossyNow.z) < 0.0001f;
-                        stillDegenerate = rootZeroish;
-                        // If upstream parent remains degenerate, local fixes cannot restore a valid lossy scale; back off aggressively.
-                        if (stillDegenerate && (parentStillZeroish || parentZeroish))
-                        {
-                            _repairBackoffActive = true;
-                            _repairNextAllowedRealtime = nowRt + 5f;
-                            if (sigChanged || (nowRt - _lastRepairStateLogRealtime >= 30f))
-                            {
-                                _lastRepairStateLogRealtime = nowRt;
-                                _repairStateLoggedBad = true;
-                                UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: badScale persists (rootLossy={lossy} parentLossy={pLossyNow} fixedAncestors={fixedAncestors}); upstream transform remains degenerate, backing off checks.");
-                            }
-                            return;
-                        }
-                    }
-                    catch { stillDegenerate = badScale; }
-
-                    if (stillDegenerate)
-                    {
-                        _repairBackoffActive = true;
-                        _repairNextAllowedRealtime = nowRt + 5f;
-                    }
-                    else
-                    {
-                        _repairBackoffActive = false;
-                        _repairNextAllowedRealtime = nowRt + 1f;
-                    }
-                }
-                else
-                {
-                    _repairBackoffActive = false;
-                    _repairNextAllowedRealtime = nowRt + 1f;
+                    UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label}: badLocalScale={badLocalScale} badScale={badScale}(mag={scaleMag:F6}) badSize={badSize} rootRT={(rootRt != null ? rootRt.rect.size.ToString() : "null")} rootLocal={local} rootLossy={t.lossyScale} parentLossy={parentLossy} path='{path}'");
                 }
             }
             catch (Exception ex) { try { UnderNetBrowserConfig.Log($"[UnderNetBrowser] Repair {label} failed: {ex.Message}"); } catch { } }
