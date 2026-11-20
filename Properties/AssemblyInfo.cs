@@ -7,9 +7,9 @@ using System.Reflection;
 [assembly: AssemblyCompany("Firesky")]
 [assembly: AssemblyProduct("Firesky_UnderNetBrowser")]
 [assembly: AssemblyCopyright("Copyright Firesky  2026")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
-[assembly: MelonInfo(typeof(Firesky.UnderNetBrowser.UnderNetBrowserMod), "UnderNetBrowser", "1.0.1", "Firesky")]
+[assembly: AssemblyVersion("1.0.2.0")]
+[assembly: AssemblyFileVersion("1.0.2.0")]
+[assembly: MelonInfo(typeof(Firesky.UnderNetBrowser.UnderNetBrowserMod), "UnderNetBrowser", "1.0.2", "Firesky")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 // WebView2.Core is shipped/resolved from mod subfolders (e.g. Mods/UnderNetBrowser) via runtime assembly resolution.
 [assembly: MelonOptionalDependencies("Microsoft.Web.WebView2.Core")]

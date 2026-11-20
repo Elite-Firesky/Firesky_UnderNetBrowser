@@ -351,7 +351,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                             ComPtr<ICoreWebView2Settings> settings;
                             if (SUCCEEDED(impl->core->get_Settings(&settings)) && settings) {
                                 settings->put_IsStatusBarEnabled(FALSE);
-                                settings->put_AreDefaultContextMenusEnabled(TRUE);
+                                settings->put_AreDefaultContextMenusEnabled(FALSE); // embedded in-game browser: avoid default context menu overlay/focus issues
                                 settings->put_IsZoomControlEnabled(FALSE);
                                 settings->put_IsBuiltInErrorPageEnabled(TRUE);
                                 try { settings->put_AreDevToolsEnabled(FALSE); } catch (...) {}
@@ -363,13 +363,23 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                 } catch (...) {}
                             }
 
-                            // Popup/new-window suppression (prevents ad/popups from spawning visible windows).
+                            // Popup/new-window handling: single-surface in-game browser, so open requests in-place
+                            // instead of dropping them. Centralized NavigationStarting policy/route resolution still applies.
                             impl->core->add_NewWindowRequested(
-                                Callback<ICoreWebView2NewWindowRequestedEventHandler>([](ICoreWebView2* sender, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+                                Callback<ICoreWebView2NewWindowRequestedEventHandler>([impl](ICoreWebView2* sender, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
                                     try {
-                                        if (args) {
-                                            args->put_Handled(TRUE);
-                                            // Best-effort: do not open external/new window. (Could navigate current page instead, but keep conservative.)
+                                        if (!args) return S_OK;
+                                        args->put_Handled(TRUE);
+                                        LPWSTR uriW = nullptr;
+                                        if (SUCCEEDED(args->get_Uri(&uriW)) && uriW) {
+                                            std::wstring uri(uriW);
+                                            CoTaskMemFree(uriW);
+                                            if (!uri.empty()) {
+                                                ICoreWebView2* nav = sender ? sender : impl->core.Get();
+                                                if (nav) {
+                                                    try { nav->Navigate(uri.c_str()); } catch (...) {}
+                                                }
+                                            }
                                         }
                                     } catch (...) {}
                                     return S_OK;
@@ -742,7 +752,7 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                     L"try{document.addEventListener('yt-page-data-updated',function(){schedule(true);},true);}catch(_){ }"
                                     L"try{window.addEventListener('load',function(){schedule(true);},true);}catch(_){ }"
                                     L"}catch(e){}})();";
-                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);
+                                impl->core->AddScriptToExecuteOnDocumentCreated(script, nullptr);
 
                                 // Track HTML fullscreen (e.g. YouTube player fullscreen) so managed UI can hide chrome/expand.
                                 try {
@@ -760,6 +770,40 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                                                 return S_OK;
                                             }).Get(), nullptr);
                                 } catch(...) {}
+                            } catch (...) {}
+
+                            // Runtime resilience: observe process failures for diagnostics and best-effort recovery signaling.
+                            try {
+                                impl->core->add_ProcessFailed(
+                                    Callback<ICoreWebView2ProcessFailedEventHandler>([this, impl](ICoreWebView2* sender, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
+                                        try {
+                                            COREWEBVIEW2_PROCESS_FAILED_KIND kind = COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
+                                            if (args) {
+                                                try { args->get_ProcessFailedKind(&kind); } catch (...) {}
+                                            }
+
+                                            char msg[192];
+                                            sprintf_s(msg, "WebView2 ProcessFailed kind=%d", (int)kind);
+                                            try { SetDiag(msg); } catch (...) {}
+
+                                            if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+                                                // Browser process death invalidates this WebView/controller instance; signal fatal state for managed recovery/recreate.
+                                                try { m_running.store(false); } catch (...) {}
+                                                try {
+                                                    SetError(std::string("Browser process exited (WebView2 ProcessFailed kind=") +
+                                                             std::to_string((int)kind) + ")");
+                                                } catch (...) {}
+                                            } else if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED ||
+                                                       kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED) {
+                                                // Best-effort recovery for renderer/frame process exits. (Avoid auto-reload on unresponsive events to reduce loop risk.)
+                                                try {
+                                                    ICoreWebView2* core = sender ? sender : (impl ? impl->core.Get() : nullptr);
+                                                    if (core) core->Reload();
+                                                } catch (...) {}
+                                            }
+                                        } catch (...) {}
+                                        return S_OK;
+                                    }).Get(), nullptr);
                             } catch (...) {}
                         }
 
