@@ -1291,12 +1291,18 @@ bool CompositionBrowser::Start(ID3D11Device* device, ID3D11DeviceContext* contex
                             std::wstring script = L"(function(){try{var t='";
                             script += esc;
                             script += L"';var e=document.activeElement; if(!e) return;"
-                                      L"function fire(el,ev,init){try{el.dispatchEvent(new ev(''+init.type,init));}catch(_){}}"
                                       L"function fireInput(el,data){try{el.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:data}));}catch(_){ }"
                                       L"try{el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:data}));}catch(_){try{el.dispatchEvent(new Event('input',{bubbles:true}));}catch(__){}}}"
                                       L"if(e.isContentEditable){try{document.execCommand('insertText',false,t);}catch(_){try{e.textContent=(e.textContent||'')+t;}catch(__){}} fireInput(e,t); return;}"
-                                      L"var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=(e.value==null?'':(''+e.value)); var s=(e.selectionStart==null?v.length:e.selectionStart); var n=(e.selectionEnd==null?s:e.selectionEnd);"
-                                      L"try{if(typeof e.setRangeText==='function'){e.setRangeText(t,s,n,'end');}else{e.value=v.slice(0,s)+t+v.slice(n); var p=s+t.length; e.selectionStart=p; e.selectionEnd=p;}}catch(_){try{e.value=v+t;}catch(__){}}"
+                                      L"var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){"
+                                      L"var v=(e.value==null?'':(''+e.value));"
+                                      L"var selOk=(typeof e.selectionStart==='number'&&typeof e.selectionEnd==='number');"
+                                      L"if(!selOk){try{if(document.execCommand('insertText',false,t)) return;}catch(_){ } var s=v.length; var n=v.length; }"
+                                      L"else{var s=e.selectionStart; var n=e.selectionEnd;}"
+                                      L"try{if(selOk && typeof e.setRangeText==='function'){e.setRangeText(t,s,n,'end');}"
+                                      L"else if(selOk){e.value=v.slice(0,s)+t+v.slice(n); var p=s+t.length; e.selectionStart=p; e.selectionEnd=p;}"
+                                      L"else{e.value=v.slice(0,s)+t+v.slice(n); try{e.selectionStart=e.selectionEnd=v.length+t.length;}catch(__){} }}"
+                                      L"catch(_){try{e.value=v+t;}catch(__){}}"
                                       L"fireInput(e,t); try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){ } }"
                                       L"}catch(_){}})();";
                             try {

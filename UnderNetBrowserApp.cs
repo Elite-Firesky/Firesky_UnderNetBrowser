@@ -132,6 +132,8 @@ namespace Firesky.UnderNetBrowser
         private float _nextMediaArrowRepeatRight = -1f;
         private float _nextMediaArrowRepeatUp = -1f;
         private float _nextMediaArrowRepeatDown = -1f;
+        private float _nextBackspaceRepeat = -1f;
+        private float _nextDeleteRepeat = -1f;
         private float _nextUrlBarPasteRepeatTime = -1f;
         private readonly UnderNetBrowserSync _sync = new UnderNetBrowserSync();
         private readonly List<(GameObject go, bool wasActive)> _hiddenHudObjects = new List<(GameObject, bool)>();
@@ -930,7 +932,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 13;
+        private const int ManagedHomepageVersion = 17;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1635,6 +1637,30 @@ namespace Firesky.UnderNetBrowser
                         break;
                     case "GpuCompositionRenderHeight":
                         if (UnderNetBrowserConfig.GpuCompositionRenderHeight != null && ParseInt(trimmed, out var iRh)) { UnderNetBrowserConfig.GpuCompositionRenderHeight.Value = Mathf.Clamp(iRh, 480, 2160); Save(); message = "Render height updated (restart/reopen required to apply)."; return true; }
+                        break;
+                    case "TextureFilterMode":
+                        if (UnderNetBrowserConfig.TextureFilterMode != null)
+                        {
+                            var m = (trimmed ?? "").Trim();
+                            if (m.Equals("Point", StringComparison.OrdinalIgnoreCase)) m = "Point";
+                            else if (m.Equals("Trilinear", StringComparison.OrdinalIgnoreCase)) m = "Trilinear";
+                            else m = "Bilinear";
+                            UnderNetBrowserConfig.TextureFilterMode.Value = m;
+                            Save();
+                            try { _activeInstance?._gpuCompositionCapture?.ApplyConfiguredTextureSampling(); } catch { }
+                            message = "Texture filter mode updated and applied.";
+                            return true;
+                        }
+                        break;
+                    case "TextureAnisoLevel":
+                        if (UnderNetBrowserConfig.TextureAnisoLevel != null && ParseInt(trimmed, out var iAniso))
+                        {
+                            UnderNetBrowserConfig.TextureAnisoLevel.Value = Mathf.Clamp(iAniso, 0, 16);
+                            Save();
+                            try { _activeInstance?._gpuCompositionCapture?.ApplyConfiguredTextureSampling(); } catch { }
+                            message = "Texture anisotropic level updated and applied.";
+                            return true;
+                        }
                         break;
                     case "DebugLogging":
                         if (UnderNetBrowserConfig.DebugLogging != null && ParseBool(raw, out var bDbg)) { UnderNetBrowserConfig.DebugLogging.Value = bDbg; Save(); message = "Verbose debug logging updated."; return true; }
@@ -2534,19 +2560,29 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 // Non-char/navigation keys (ensure they reach web content)
-                if (Input.GetKeyDown(KeyCode.Backspace))
                 {
-                    SendVk(0x08);
-                    try
+                    bool bsDown = Input.GetKey(KeyCode.Backspace);
+                    bool bsEdge = Input.GetKeyDown(KeyCode.Backspace);
+                    if (!bsDown) { _nextBackspaceRepeat = -1f; }
+                    else
                     {
-                        // Fallback for composition key delivery: mutate focused editable element and emit events.
-                        _gpuCompositionCapture?.ExecuteScript(
-                            "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Backspace',code:'Backspace',keyCode:8,which:8,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
-                            "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} " +
-                            "else if(e.isContentEditable){try{document.execCommand('deleteBackward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
-                            "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
+                        float nowKey = Time.realtimeSinceStartup;
+                        bool fireBs = bsEdge || _nextBackspaceRepeat < 0f || nowKey >= _nextBackspaceRepeat;
+                        if (fireBs)
+                        {
+                            _nextBackspaceRepeat = bsEdge || _nextBackspaceRepeat < 0f ? nowKey + 0.35f : nowKey + 0.05f;
+                            SendVk(0x08);
+                            try
+                            {
+                                _gpuCompositionCapture?.ExecuteScript(
+                                    "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Backspace',code:'Backspace',keyCode:8,which:8,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
+                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){try{document.execCommand('deleteBackward');}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
+                                    "else if(e.isContentEditable){try{document.execCommand('deleteBackward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
+                                    "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
+                            }
+                            catch { }
+                        }
                     }
-                    catch { }
                 }
                 if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
                 {
@@ -2618,16 +2654,30 @@ namespace Firesky.UnderNetBrowser
                     Input.GetKey(KeyCode.LeftArrow), Input.GetKey(KeyCode.RightArrow),
                     Input.GetKey(KeyCode.UpArrow), Input.GetKey(KeyCode.DownArrow),
                     sendVkTaps: true, sendScriptFallbacks: true);
-                if (Input.GetKeyDown(KeyCode.Delete)) { SendVk(0x2E); MarkWebTextEntryActivity("deleteKey");
-                    try
+                {
+                    bool delDown = Input.GetKey(KeyCode.Delete);
+                    bool delEdge = Input.GetKeyDown(KeyCode.Delete);
+                    if (!delDown) { _nextDeleteRepeat = -1f; }
+                    else
                     {
-                        _gpuCompositionCapture?.ExecuteScript(
-                            "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Delete',code:'Delete',keyCode:46,which:46,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
-                            "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} " +
-                            "else if(e.isContentEditable){try{document.execCommand('deleteForward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
-                            "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
+                        float nowKey = Time.realtimeSinceStartup;
+                        bool fireDel = delEdge || _nextDeleteRepeat < 0f || nowKey >= _nextDeleteRepeat;
+                        if (fireDel)
+                        {
+                            _nextDeleteRepeat = delEdge || _nextDeleteRepeat < 0f ? nowKey + 0.35f : nowKey + 0.05f;
+                            SendVk(0x2E);
+                            MarkWebTextEntryActivity("deleteKey");
+                            try
+                            {
+                                _gpuCompositionCapture?.ExecuteScript(
+                                    "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Delete',code:'Delete',keyCode:46,which:46,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
+                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){try{document.execCommand('deleteForward');}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
+                                    "else if(e.isContentEditable){try{document.execCommand('deleteForward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
+                                    "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
+                            }
+                            catch { }
+                        }
                     }
-                    catch { }
                 }
                 if (Input.GetKeyDown(KeyCode.Space))
                 {
@@ -2731,9 +2781,8 @@ namespace Firesky.UnderNetBrowser
                 if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
                 string script = dir switch
                 {
-                    // Left/right: dispatch keys and keep direct seek fallback for reliable media control.
-                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
-                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
+                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof ae.selectionStart==='number'){var s=ae.selectionStart,n=ae.selectionEnd; var p=(s!==n)?Math.min(s,n):Math.max(0,s-1); try{ae.setSelectionRange(p,p);}catch(_){} } else {try{document.execCommand('insertText',false,'');}catch(_){}}} else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','left','character');}catch(_){}} return;} var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
+                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof ae.selectionStart==='number'){var s=ae.selectionStart,n=ae.selectionEnd,len=(ae.value||'').length; var p=(s!==n)?Math.max(s,n):Math.min(len,s+1); try{ae.setSelectionRange(p,p);}catch(_){} } } else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','right','character');}catch(_){}} return;} var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
                     "up" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowUp',code:'ArrowUp',keyCode:38,which:38,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     "down" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowDown',code:'ArrowDown',keyCode:40,which:40,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     _ => ""
@@ -3527,6 +3576,8 @@ namespace Firesky.UnderNetBrowser
                     + "KeyGameInputMode:" + s(UnderNetBrowserConfig.KeyGameInputMode?.Value ?? "F6") + ","
                     + "GpuCompositionRenderWidth:" + i(UnderNetBrowserConfig.GpuCompositionRenderWidth?.Value ?? 1920) + ","
                     + "GpuCompositionRenderHeight:" + i(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080) + ","
+                    + "TextureFilterMode:" + s(UnderNetBrowserConfig.TextureFilterMode?.Value ?? "Bilinear") + ","
+                    + "TextureAnisoLevel:" + i(UnderNetBrowserConfig.TextureAnisoLevel?.Value ?? 16) + ","
                     + "DebugLogging:" + b(UnderNetBrowserConfig.DebugLogging?.Value ?? false) + ","
                     + "AlwaysLogDiagnostics:" + b(UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value ?? false) + ","
                     + "PerformanceDiagnosticsEnabled:" + b(UnderNetBrowserConfig.PerformanceDiagnosticsEnabled?.Value ?? false) + ","

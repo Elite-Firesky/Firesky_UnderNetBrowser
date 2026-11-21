@@ -27,6 +27,8 @@ namespace Firesky.UnderNetBrowser
 
         public static MelonPreferences_Entry<int>? GpuCompositionRenderWidth { get; private set; }
         public static MelonPreferences_Entry<int>? GpuCompositionRenderHeight { get; private set; }
+        public static MelonPreferences_Entry<string>? TextureFilterMode { get; private set; }
+        public static MelonPreferences_Entry<int>? TextureAnisoLevel { get; private set; }
 
         // Per-site/page zoom memory (host/key -> zoom factor). Default zoom is 0.90 when no override exists.
         public static MelonPreferences_Entry<string>? ZoomLevelsByHostJson { get; private set; }
@@ -64,9 +66,9 @@ namespace Firesky.UnderNetBrowser
 
         public static void Initialize()
         {
-            // Keep stable identifier for Mod Manager & Phone App settings discovery/compatibility.
-            // (UserData/runtime paths use UnderNetBrowser; prefs category ID remains FireskyUnderNetBrowser.)
-            _category = MelonPreferences.CreateCategory("FireskyUnderNetBrowser", "Firesky UnderNet Browser");
+            // Use MelonInfo/mod-aligned category identifier for Mod Manager & Phone App discovery.
+            // (UserData/runtime paths use UnderNetBrowser.)
+            _category = MelonPreferences.CreateCategory("UnderNetBrowser", "Firesky UnderNet Browser");
 
             // --- Basic ---
             HomeUrl = _category.CreateEntry(
@@ -125,6 +127,16 @@ namespace Firesky.UnderNetBrowser
                 "GpuCompositionRenderHeight", 1080,
                 "Advanced: Render Height",
                 "Internal WebView2 composition render height (e.g. 1080, 1440, 2160). Used as the render quality target/cap (fitted to viewport aspect), independent of game display resolution. Restart/reopen required to apply.");
+
+            TextureFilterMode = _category.CreateEntry(
+                "TextureFilterMode", "Bilinear",
+                "Advanced: Texture Filter Mode",
+                "Browser render texture filtering: Point, Bilinear, or Trilinear. Point is sharper but can alias when scaled; Bilinear/Trilinear are smoother. Applied to new/recreated browser textures (and to existing textures when reapplied).");
+
+            TextureAnisoLevel = _category.CreateEntry(
+                "TextureAnisoLevel", 16,
+                "Advanced: Texture Anisotropic Level",
+                "Browser render texture anisotropic filtering level (0-16). Higher values can improve clarity at oblique angles. Applied to new/recreated browser textures (and to existing textures when reapplied).");
 
             // --- Advanced / Diagnostics & Developer ---
             DebugLogging = _category.CreateEntry(
@@ -377,6 +389,42 @@ namespace Firesky.UnderNetBrowser
         }
 
         // Chrome height is now fixed internally for a consistent, compact UI.
+
+        public static UnityEngine.FilterMode GetConfiguredTextureFilterMode()
+        {
+            try
+            {
+                var raw = (TextureFilterMode?.Value ?? "Bilinear").Trim();
+                if (raw.Equals("Point", StringComparison.OrdinalIgnoreCase)) return UnityEngine.FilterMode.Point;
+                if (raw.Equals("Trilinear", StringComparison.OrdinalIgnoreCase)) return UnityEngine.FilterMode.Trilinear;
+                return UnityEngine.FilterMode.Bilinear;
+            }
+            catch { return UnityEngine.FilterMode.Bilinear; }
+        }
+
+        public static int GetConfiguredTextureAnisoLevel()
+        {
+            try
+            {
+                int v = TextureAnisoLevel?.Value ?? 16;
+                if (v < 0) v = 0;
+                if (v > 16) v = 16;
+                return v;
+            }
+            catch { return 16; }
+        }
+
+        public static void ApplyTextureSamplingSettings(UnityEngine.Texture2D? texture)
+        {
+            try
+            {
+                if (texture == null) return;
+                texture.filterMode = GetConfiguredTextureFilterMode();
+                texture.anisoLevel = GetConfiguredTextureAnisoLevel();
+                texture.wrapMode = UnityEngine.TextureWrapMode.Clamp;
+            }
+            catch { }
+        }
 
         public const double DefaultPageZoomFactor = 0.90;
         private static readonly object _zoomLevelsLock = new object();

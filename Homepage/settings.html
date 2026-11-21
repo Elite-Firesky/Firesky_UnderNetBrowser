@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=11 -->
+<!-- UnderNetBrowser:managed-homepage version=17 -->
 <title>UnderNet Settings</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -38,6 +38,11 @@
   .cfg-label small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
   .cfg-input,.cfg-select{width:100%;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#0b1310;color:#eefbf3;font:inherit}
   .cfg-input[type="number"]{max-width:170px}
+  .cfg-seg{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+  .cfg-seg-opt{appearance:none;-webkit-appearance:none;cursor:pointer;padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:#111916;color:#dcecdf;font:inherit;font-size:13px;font-weight:600;min-width:72px}
+  .cfg-seg-opt:hover{border-color:rgba(124,255,107,.45);background:rgba(124,255,107,.10);color:#eaffea}
+  .cfg-seg-opt.active,.cfg-seg-opt[aria-checked="true"]{border-color:rgba(124,255,107,.75);background:rgba(124,255,107,.22);color:#ffffff;box-shadow:inset 0 0 0 1px rgba(124,255,107,.25)}
+  .cfg-seg-opt:focus-visible{outline:2px solid rgba(124,255,107,.85);outline-offset:2px}
   .cfg-check{width:18px;height:18px;accent-color:#7cff6b}
   .cfg-actions{display:flex;gap:8px;flex-wrap:wrap}
   .cfg-btn{appearance:none;cursor:pointer;padding:8px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;font:inherit;font-size:13px;font-weight:600}
@@ -119,7 +124,9 @@
     ]},
     { group:'Display / UI', items:[
       { key:'GpuCompositionRenderWidth', label:'Render Width', type:'int', desc:'Internal composition width/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 3840 for 4K). Restart/reopen required to apply.' },
-      { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 2160 for 4K). Restart/reopen required to apply.' }
+      { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 2160 for 4K). Restart/reopen required to apply.' },
+      { key:'TextureFilterMode', label:'Texture Filter Mode', type:'select', options:['Point','Bilinear','Trilinear'], desc:'Browser texture sampling: Point (sharp/aliased when scaled), Bilinear (smooth), or Trilinear. Applied on texture create/reapply; browser reopen/resize may be needed for full effect.' },
+      { key:'TextureAnisoLevel', label:'Texture Anisotropic Level', type:'int', desc:'Anisotropic filtering level (0-16). Applied on texture create/reapply; browser reopen/resize may be needed for full effect.' }
     ]},
     { group:'Diagnostics', items:[
       { key:'DebugLogging', label:'Verbose Debug Logging', type:'bool', desc:'Verbose troubleshooting logs.' },
@@ -182,6 +189,47 @@
     if (typeof v === 'boolean') return v ? 'true' : 'false';
     if (v === null || v === undefined) return '';
     return String(v);
+  }
+
+  function createCustomSelect(item, curVal){
+    const wrap = document.createElement('div');
+    wrap.className = 'cfg-seg';
+    wrap.setAttribute('data-key', item.key);
+    wrap.setAttribute('role', 'radiogroup');
+
+    let selected = String(curVal || '');
+    const opts = Array.isArray(item.options) ? item.options.map(o => String(o)) : [];
+    if (!opts.some(o => o.toLowerCase() === selected.toLowerCase())) selected = opts[0] || '';
+
+    function setSelected(val){
+      selected = String(val);
+      state[item.key] = selected;
+      wrap.querySelectorAll('.cfg-seg-opt').forEach(o => {
+        const on = o.getAttribute('data-value') === selected;
+        o.classList.toggle('active', on);
+        o.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+    }
+
+    opts.forEach(opt => {
+      const o = document.createElement('button');
+      o.type = 'button';
+      o.className = 'cfg-seg-opt';
+      o.setAttribute('role', 'radio');
+      o.setAttribute('data-value', opt);
+      o.textContent = opt;
+      o.addEventListener('click', () => setSelected(opt));
+      o.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); const i = opts.indexOf(selected); setSelected(opts[Math.min(opts.length - 1, i + 1)]); wrap.querySelector('.cfg-seg-opt.active')?.focus(); }
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); const i = opts.indexOf(selected); setSelected(opts[Math.max(0, i - 1)]); wrap.querySelector('.cfg-seg-opt.active')?.focus(); }
+      });
+      wrap.appendChild(o);
+    });
+
+    setSelected(selected);
+    wrap.getValue = () => selected;
+    wrap.setValue = (v) => setSelected(v);
+    return wrap;
   }
 
   function render(){
@@ -265,7 +313,7 @@
           g.appendChild(row);
         }
 
-        // Render any other Display/UI items normally (none currently), skipping the paired keys.
+        // Render any other Display/UI items normally, skipping the paired resolution keys.
         group.items.forEach(item => {
           if (item.key === 'GpuCompositionRenderWidth' || item.key === 'GpuCompositionRenderHeight') return;
           const row = document.createElement('div');
@@ -273,26 +321,56 @@
           const label = document.createElement('div');
           label.className = 'cfg-label';
           label.innerHTML = '<b>' + item.label + '</b><small><code>' + item.key + '</code> - ' + esc(item.desc) + '</small>';
-          const controlWrap = document.createElement('div');
-          controlWrap.className = 'cfg-inline';
           const cur = state[item.key];
-          const input = document.createElement('input');
-          input.className = 'cfg-input';
-          input.type = item.type === 'int' ? 'number' : (item.type === 'float' ? 'number' : 'text');
-          if (item.type === 'int') input.step = '1';
-          if (item.type === 'float') input.step = 'any';
-          input.value = valueToString(item.key, cur);
-          input.setAttribute('data-key', item.key);
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'cfg-btn';
-          btn.textContent = 'Apply';
-          btn.addEventListener('click', () => { state[item.key] = input.value; applySetting(item.key, input.value); });
-          input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
-          controlWrap.appendChild(input);
-          controlWrap.appendChild(btn);
-          row.appendChild(label);
-          row.appendChild(controlWrap);
+
+          if (item.type === 'bool') {
+            const controlWrap = document.createElement('div');
+            controlWrap.className = 'cfg-inline';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.className = 'cfg-check';
+            input.checked = !!cur;
+            input.setAttribute('data-key', item.key);
+            input.addEventListener('change', () => { state[item.key] = input.checked; applySetting(item.key, input.checked ? 'true' : 'false'); });
+            controlWrap.appendChild(input);
+            row.appendChild(label);
+            row.appendChild(controlWrap);
+          } else if (item.type === 'select' && Array.isArray(item.options)) {
+            const controlWrap = document.createElement('div');
+            controlWrap.className = 'cfg-inline';
+            const curVal = valueToString(item.key, cur);
+            const sel = createCustomSelect(item, curVal);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cfg-btn';
+            btn.textContent = 'Apply';
+            btn.addEventListener('click', () => { const v = sel.getValue(); state[item.key] = v; applySetting(item.key, v); });
+            controlWrap.appendChild(sel);
+            controlWrap.appendChild(btn);
+            row.appendChild(label);
+            row.appendChild(controlWrap);
+          } else {
+            const controlWrap = document.createElement('div');
+            controlWrap.className = 'cfg-inline';
+            const input = document.createElement('input');
+            input.className = 'cfg-input';
+            input.type = item.type === 'int' ? 'number' : (item.type === 'float' ? 'number' : 'text');
+            if (item.type === 'int') input.step = '1';
+            if (item.type === 'float') input.step = 'any';
+            if (item.type === 'int' && item.key === 'TextureAnisoLevel') { input.min = '0'; input.max = '16'; }
+            input.value = valueToString(item.key, cur);
+            input.setAttribute('data-key', item.key);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cfg-btn';
+            btn.textContent = 'Apply';
+            btn.addEventListener('click', () => { state[item.key] = input.value; applySetting(item.key, input.value); });
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+            controlWrap.appendChild(input);
+            controlWrap.appendChild(btn);
+            row.appendChild(label);
+            row.appendChild(controlWrap);
+          }
           g.appendChild(row);
         });
 
@@ -318,6 +396,18 @@
           input.setAttribute('data-key', item.key);
           input.addEventListener('change', () => { state[item.key] = input.checked; applySetting(item.key, input.checked ? 'true' : 'false'); });
           controlWrap.appendChild(input);
+          row.appendChild(label);
+          row.appendChild(controlWrap);
+        } else if (item.type === 'select' && Array.isArray(item.options)) {
+          const curVal = valueToString(item.key, cur);
+          const sel = createCustomSelect(item, curVal);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'cfg-btn';
+          btn.textContent = 'Apply';
+          btn.addEventListener('click', () => { const v = sel.getValue(); state[item.key] = v; applySetting(item.key, v); });
+          controlWrap.appendChild(sel);
+          controlWrap.appendChild(btn);
           row.appendChild(label);
           row.appendChild(controlWrap);
         } else {
@@ -382,7 +472,9 @@
         var el = document.querySelector('[data-key="'+item.key+'"]');
         if (el){
           if (item.type === 'bool') v = !!el.checked;
-          else v = el.value;
+          else if (item.type === 'select' && typeof el.getValue === 'function') v = el.getValue();
+          else if (typeof el.value !== 'undefined') v = el.value;
+          else if (el.getAttribute && el.getAttribute('data-value') != null) v = el.getAttribute('data-value');
         }
         if (item.type === 'bool') v = v ? 'true' : 'false';
         if (v === undefined || v === null) v = '';
