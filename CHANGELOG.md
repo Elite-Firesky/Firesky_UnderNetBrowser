@@ -17,6 +17,7 @@
 - Fixed number-input selection replace in composition mode (native `CompSendText` fallback uses `execCommand('insertText')` when `selectionStart/selectionEnd` are unavailable, e.g. `<input type="number">`).
 - Added hold-repeat for Backspace/Delete and improved left/right arrow caret-movement fallbacks in editable fields; fixed number-input backspace/delete/arrows via temporary `type="text"` selection workaround.
 - Reduced composition input double-actions by preferring script fallbacks over extra WM key taps for repeat/edit keys where both could apply.
+- Fixed up/down arrow video volume control outside fullscreen by adding direct `video.volume` fallback in composition arrow script handling.
 - Bumped managed homepage content to **v19** so the updated layout/features deploy to existing installs.
 
 ## v1.0.2 - 2026-11-20
