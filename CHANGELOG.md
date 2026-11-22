@@ -8,13 +8,16 @@
 - Added player/save **Net Worth** display on the homepage (System Status), synced from the game via S1API (`S1API.Money.Money.GetNetWorth()`) with periodic updates similar to in-game time sync.
 - Set default WebView zoom to **90%** for pages without a saved override and remember per-site/page zoom levels when changed by the user (applied automatically on navigation).
 - Added configurable browser texture sampling: `TextureFilterMode` (`Point`/`Bilinear`/`Trilinear`, default `Bilinear`) and `TextureAnisoLevel` (`0-16`, default `16`), applied to composition/GPU capture textures, exposed in in-app settings, and applied live on setting changes.
+- Added configurable post-process `SharpenStrength` (`0..1`, default `1`) for the composition browser texture (native D3D11 4-tap unsharp mask in linear space), with live apply and in-app settings UI.
+- Bumped small font sizes in managed homepage HTML pages to improve readability on in-game TV texture/bloom.
 - Fixed Mod Manager & Phone App settings detection by aligning the MelonPreferences category ID to `UnderNetBrowser` (MelonInfo name) and updating the Mod Manager ordering patch lookup; removed legacy `FireskyUnderNetBrowser` category migration.
-- Updated Mod Manager ordering patch list to include missing config keys (`TextureFilterMode`, `TextureAnisoLevel`, `ZoomLevelsByHostJson`).
+- Updated Mod Manager ordering patch list to include missing config keys (`TextureFilterMode`, `TextureAnisoLevel`, `ZoomLevelsByHostJson`, `SharpenStrength`).
 - Fixed in-app settings `select` controls not opening in WebView2 CompositionController by replacing native `<select>` popups with segmented DOM controls.
 - Fixed settings Save/Apply form payload to read segmented select values correctly (prevents `TextureFilterMode` from resetting on Save).
-- Fixed number-input selection replace in composition mode (native `CompSendText` fallback now uses `execCommand('insertText')` when `selectionStart/selectionEnd` are unavailable, e.g. `<input type="number">`) and hardened number-input backspace/delete fallbacks.
-- Added hold-repeat for Backspace/Delete and improved left/right arrow caret-movement fallbacks in editable fields for composition-mode input.
-- Bumped managed homepage content to **v17** so the updated layout/features deploy to existing installs.
+- Fixed number-input selection replace in composition mode (native `CompSendText` fallback uses `execCommand('insertText')` when `selectionStart/selectionEnd` are unavailable, e.g. `<input type="number">`).
+- Added hold-repeat for Backspace/Delete and improved left/right arrow caret-movement fallbacks in editable fields; fixed number-input backspace/delete/arrows via temporary `type="text"` selection workaround.
+- Reduced composition input double-actions by preferring script fallbacks over extra WM key taps for repeat/edit keys where both could apply.
+- Bumped managed homepage content to **v19** so the updated layout/features deploy to existing installs.
 
 ## v1.0.2 - 2026-11-20
 

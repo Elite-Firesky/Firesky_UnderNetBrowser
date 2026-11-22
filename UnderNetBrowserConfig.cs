@@ -29,6 +29,7 @@ namespace Firesky.UnderNetBrowser
         public static MelonPreferences_Entry<int>? GpuCompositionRenderHeight { get; private set; }
         public static MelonPreferences_Entry<string>? TextureFilterMode { get; private set; }
         public static MelonPreferences_Entry<int>? TextureAnisoLevel { get; private set; }
+        public static MelonPreferences_Entry<float>? SharpenStrength { get; private set; }
 
         // Per-site/page zoom memory (host/key -> zoom factor). Default zoom is 0.90 when no override exists.
         public static MelonPreferences_Entry<string>? ZoomLevelsByHostJson { get; private set; }
@@ -137,6 +138,11 @@ namespace Firesky.UnderNetBrowser
                 "TextureAnisoLevel", 16,
                 "Advanced: Texture Anisotropic Level",
                 "Browser render texture anisotropic filtering level (0-16). Higher values can improve clarity at oblique angles. Applied to new/recreated browser textures (and to existing textures when reapplied).");
+
+            SharpenStrength = _category.CreateEntry(
+                "SharpenStrength", 1.0f,
+                "Advanced: Sharpen Strength",
+                "Post-process sharpening for the browser texture (0 = off, 1 = max). Can improve perceived text clarity, but too high may cause halos/ringing. Applied live.");
 
             // --- Advanced / Diagnostics & Developer ---
             DebugLogging = _category.CreateEntry(
@@ -412,6 +418,18 @@ namespace Firesky.UnderNetBrowser
                 return v;
             }
             catch { return 16; }
+        }
+
+        public static float GetConfiguredSharpenStrength()
+        {
+            try
+            {
+                float v = SharpenStrength?.Value ?? 1f;
+                if (v < 0f) v = 0f;
+                if (v > 1f) v = 1f;
+                return v;
+            }
+            catch { return 1f; }
         }
 
         public static void ApplyTextureSamplingSettings(UnityEngine.Texture2D? texture)

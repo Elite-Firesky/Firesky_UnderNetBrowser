@@ -743,6 +743,11 @@ UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float
     g_comp.SetDistanceAudioVolume(enabled != 0, volume01);
 }
 
+UN_EXPORT void __stdcall UnGpu_CompSetSharpenStrength(float strength01) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_comp.SetSharpenStrength(strength01);
+}
+
 UN_EXPORT void __stdcall UnGpu_ClearTargetTexture() {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_comp.Shutdown();

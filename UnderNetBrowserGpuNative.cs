@@ -237,6 +237,9 @@ namespace Firesky.UnderNetBrowser
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetDistanceAudioVolume")]
         public static extern void CompSetDistanceAudioVolume(int enabled, float volume01);
 
+        [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_CompSetSharpenStrength")]
+        public static extern void CompSetSharpenStrength(float strength01);
+
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, EntryPoint = "UnGpu_GetRenderEventFuncPtr")]
         public static extern IntPtr GetRenderEventFuncPtr();
 

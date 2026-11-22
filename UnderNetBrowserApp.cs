@@ -404,6 +404,7 @@ namespace Firesky.UnderNetBrowser
                     {
                         try { ResetAdaptiveRenderingState("cold_start"); } catch { }
                         try { UnderNetBrowserDiagnostics.OnWebViewInitDone(); } catch { } // start request issued; async init continues natively
+                        try { UnderNetBrowserGpuNative.CompSetSharpenStrength(UnderNetBrowserConfig.GetConfiguredSharpenStrength()); } catch { }
                         SetHint("Starting UnderNet browser (initializing...)");
                         _compositionWebFocused = true; // default to web interaction; URL bar focus will override when activated
                     }
@@ -932,7 +933,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 17;
+        private const int ManagedHomepageVersion = 19;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1659,6 +1660,16 @@ namespace Firesky.UnderNetBrowser
                             Save();
                             try { _activeInstance?._gpuCompositionCapture?.ApplyConfiguredTextureSampling(); } catch { }
                             message = "Texture anisotropic level updated and applied.";
+                            return true;
+                        }
+                        break;
+                    case "SharpenStrength":
+                        if (UnderNetBrowserConfig.SharpenStrength != null && ParseFloat(trimmed, out var fSharp))
+                        {
+                            UnderNetBrowserConfig.SharpenStrength.Value = Mathf.Clamp(fSharp, 0f, 1f);
+                            Save();
+                            try { UnderNetBrowserGpuNative.CompSetSharpenStrength(UnderNetBrowserConfig.GetConfiguredSharpenStrength()); } catch { }
+                            message = "Sharpen strength updated and applied.";
                             return true;
                         }
                         break;
@@ -2571,12 +2582,12 @@ namespace Firesky.UnderNetBrowser
                         if (fireBs)
                         {
                             _nextBackspaceRepeat = bsEdge || _nextBackspaceRepeat < 0f ? nowKey + 0.35f : nowKey + 0.05f;
-                            SendVk(0x08);
                             try
                             {
+                                // JS fallback only: avoids double-delete when both WM and script apply in composition mode.
                                 _gpuCompositionCapture?.ExecuteScript(
                                     "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Backspace',code:'Backspace',keyCode:8,which:8,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
-                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){try{document.execCommand('deleteBackward');}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
+                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){var ot=e.type; try{e.type='text';}catch(_){ } var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.type=ot;}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s>0){e.value=v.slice(0,s-1)+v.slice(en); try{e.setSelectionRange(s-1,s-1);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
                                     "else if(e.isContentEditable){try{document.execCommand('deleteBackward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
                                     "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
                             }
@@ -2665,13 +2676,13 @@ namespace Firesky.UnderNetBrowser
                         if (fireDel)
                         {
                             _nextDeleteRepeat = delEdge || _nextDeleteRepeat < 0f ? nowKey + 0.35f : nowKey + 0.05f;
-                            SendVk(0x2E);
                             MarkWebTextEntryActivity("deleteKey");
                             try
                             {
+                                // JS fallback only: avoids double-delete when both WM and script apply in composition mode.
                                 _gpuCompositionCapture?.ExecuteScript(
                                     "(function(){try{var e=document.activeElement; if(!e||e===document.body||e===document.documentElement)return; var k={key:'Delete',code:'Delete',keyCode:46,which:46,bubbles:true,cancelable:true}; try{e.dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} " +
-                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){try{document.execCommand('deleteForward');}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
+                                    "var tag=(e.tagName||'').toUpperCase(); if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof e.selectionStart!=='number'){var ot=e.type; try{e.type='text';}catch(_){ } var v=e.value||''; var s=(typeof e.selectionStart==='number')?e.selectionStart:v.length; var en=(typeof e.selectionEnd==='number')?e.selectionEnd:s; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.type=ot;}catch(_){ } try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} else {var v=e.value||''; var s=e.selectionStart; var en=e.selectionEnd; if(s!==en){e.value=v.slice(0,s)+v.slice(en); try{e.setSelectionRange(s,s);}catch(_){}} else if(s<v.length){e.value=v.slice(0,s)+v.slice(s+1); try{e.setSelectionRange(s,s);}catch(_){}} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){} try{e.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}} } " +
                                     "else if(e.isContentEditable){try{document.execCommand('deleteForward');}catch(_){} try{e.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}} " +
                                     "try{e.dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){}}catch(_){}})();");
                             }
@@ -2781,8 +2792,8 @@ namespace Firesky.UnderNetBrowser
                 if (!_gpuCompositionMode || _gpuCompositionCapture == null) return;
                 string script = dir switch
                 {
-                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof ae.selectionStart==='number'){var s=ae.selectionStart,n=ae.selectionEnd; var p=(s!==n)?Math.min(s,n):Math.max(0,s-1); try{ae.setSelectionRange(p,p);}catch(_){} } else {try{document.execCommand('insertText',false,'');}catch(_){}}} else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','left','character');}catch(_){}} return;} var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
-                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){if(typeof ae.selectionStart==='number'){var s=ae.selectionStart,n=ae.selectionEnd,len=(ae.value||'').length; var p=(s!==n)?Math.max(s,n):Math.min(len,s+1); try{ae.setSelectionRange(p,p);}catch(_){} } } else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','right','character');}catch(_){}} return;} var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
+                    "left" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){var ot=ae.type; var needsType=typeof ae.selectionStart!=='number'; if(needsType){try{ae.type='text';}catch(_){}} var s=(typeof ae.selectionStart==='number')?ae.selectionStart:(ae.value||'').length; var n=(typeof ae.selectionEnd==='number')?ae.selectionEnd:s; var p=(s!==n)?Math.min(s,n):Math.max(0,s-1); try{ae.setSelectionRange(p,p);}catch(_){} if(needsType){try{ae.type=ot;}catch(_){}}} else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','left','character');}catch(_){}} return;} var k={key:'ArrowLeft',code:'ArrowLeft',keyCode:37,which:37,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{v.currentTime=Math.max(0,(v.currentTime||0)-5);}catch(_){}} }catch(_){}})();",
+                    "right" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT')){if(tag==='INPUT'||tag==='TEXTAREA'){var ot=ae.type; var needsType=typeof ae.selectionStart!=='number'; if(needsType){try{ae.type='text';}catch(_){}} var s=(typeof ae.selectionStart==='number')?ae.selectionStart:(ae.value||'').length; var n=(typeof ae.selectionEnd==='number')?ae.selectionEnd:s; var len=(ae.value||'').length; var p=(s!==n)?Math.max(s,n):Math.min(len,s+1); try{ae.setSelectionRange(p,p);}catch(_){} if(needsType){try{ae.type=ot;}catch(_){}}} else {try{var sel=window.getSelection(); if(sel&&sel.modify) sel.modify('move','right','character');}catch(_){}} return;} var k={key:'ArrowRight',code:'ArrowRight',keyCode:39,which:39,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} var v=d.querySelector('video'); if(v){try{var dur=isFinite(v.duration)?v.duration:(v.currentTime||0)+5; v.currentTime=Math.min(dur,(v.currentTime||0)+5);}catch(_){}} }catch(_){}})();",
                     "up" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowUp',code:'ArrowUp',keyCode:38,which:38,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     "down" => "(function(){try{var d=document,ae=d.activeElement,tag=ae&&ae.tagName?ae.tagName.toUpperCase():''; if(ae&&(ae.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'))return; var k={key:'ArrowDown',code:'ArrowDown',keyCode:40,which:40,bubbles:true,cancelable:true,composed:true}; try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keydown',k));}catch(_){} try{(ae||d.body||d).dispatchEvent(new KeyboardEvent('keyup',k));}catch(_){} }catch(_){}})();",
                     _ => ""
@@ -2882,10 +2893,11 @@ namespace Firesky.UnderNetBrowser
                     handled = true;
                     try
                     {
-                        if (sendVkTaps && _gpuCompositionCapture != null)
-                            SendDetachedWebVkTap(vk);
+                        // Prefer script fallback to avoid double-move/double-seek in composition mode (WM delivery + JS can both apply).
                         if (sendScriptFallbacks)
                             SendArrowMediaKeyFallback(dir);
+                        else if (sendVkTaps && _gpuCompositionCapture != null)
+                            SendDetachedWebVkTap(vk);
                     }
                     catch { }
                 }
@@ -3578,6 +3590,7 @@ namespace Firesky.UnderNetBrowser
                     + "GpuCompositionRenderHeight:" + i(UnderNetBrowserConfig.GpuCompositionRenderHeight?.Value ?? 1080) + ","
                     + "TextureFilterMode:" + s(UnderNetBrowserConfig.TextureFilterMode?.Value ?? "Bilinear") + ","
                     + "TextureAnisoLevel:" + i(UnderNetBrowserConfig.TextureAnisoLevel?.Value ?? 16) + ","
+                    + "SharpenStrength:" + f(UnderNetBrowserConfig.SharpenStrength?.Value ?? 1f) + ","
                     + "DebugLogging:" + b(UnderNetBrowserConfig.DebugLogging?.Value ?? false) + ","
                     + "AlwaysLogDiagnostics:" + b(UnderNetBrowserConfig.AlwaysLogDiagnostics?.Value ?? false) + ","
                     + "PerformanceDiagnosticsEnabled:" + b(UnderNetBrowserConfig.PerformanceDiagnosticsEnabled?.Value ?? false) + ","
@@ -11000,6 +11013,7 @@ namespace Firesky.UnderNetBrowser
                 if (ok)
                 {
                     _gpuCompositionMode = true;
+                    try { UnderNetBrowserGpuNative.CompSetSharpenStrength(UnderNetBrowserConfig.GetConfiguredSharpenStrength()); } catch { }
                     try { if (_videoDisplay != null && _gpuCompositionCapture.Texture != null) _videoDisplay.texture = _gpuCompositionCapture.Texture; } catch { }
                     try { SetHint(""); } catch { }
                 }

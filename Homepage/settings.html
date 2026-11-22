@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=17 -->
+<!-- UnderNetBrowser:managed-homepage version=19 -->
 <title>UnderNet Settings</title>
 <style>
   :root{--bg0:#050806;--bg1:#08110d;--bg2:#0b1712;--panel:#0c1411;--edge:#1b2b23;--text:#eefbf3;--muted:#9db6ab;--muted2:#7d968b;--accent:#7cff6b}
@@ -13,42 +13,42 @@
   .glass{border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg,rgba(14,22,18,.95),rgba(8,13,10,.97));box-shadow:0 14px 34px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.03)}
   .hero{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   h1{margin:0;font-size:26px;letter-spacing:1.4px;text-transform:uppercase}
-  .sub{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .sub{margin:4px 0 0;color:var(--muted);font-size:14px}
   .actions{display:flex;gap:8px;flex-wrap:wrap}
-  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;text-decoration:none;font-size:13px;font-weight:600}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;text-decoration:none;font-size:14px;font-weight:600}
   .btn:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
   .card{padding:14px}
   .card h2{margin:0 0 8px;font-size:14px;letter-spacing:1.2px;text-transform:uppercase;color:#d9ecdf}
-  p,li{margin:0;color:var(--muted);font-size:13.5px;line-height:1.55}
+  p,li{margin:0;color:var(--muted);font-size:14.5px;line-height:1.55}
   ul{margin:0;padding-left:18px;display:grid;gap:6px}
   code{color:#dfffe3}
-  .note{margin-top:8px;padding:10px;border-radius:10px;border:1px solid rgba(124,255,107,.18);background:rgba(124,255,107,.05);color:#dfffe3;font-size:13px}
+  .note{margin-top:8px;padding:10px;border-radius:10px;border:1px solid rgba(124,255,107,.18);background:rgba(124,255,107,.05);color:#dfffe3;font-size:14px}
   .cfg-card{padding:14px;display:flex;flex-direction:column;gap:12px}
   .cfg-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
   .cfg-head h2{margin:0 0 4px}
-  .cfg-status{min-height:20px;font-size:13px;color:#dfffe3}
+  .cfg-status{min-height:20px;font-size:14px;color:#dfffe3}
   .cfg-status.err{color:#ffb3b3}
   .cfg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
   .cfg-group{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:10px}
-  .cfg-group h3{margin:0;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:#d9ecdf}
+  .cfg-group h3{margin:0;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:#d9ecdf}
   .cfg-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
   .cfg-row.stack{grid-template-columns:1fr}
-  .cfg-label{font-size:13px;color:#dcecdf;line-height:1.35}
-  .cfg-label small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+  .cfg-label{font-size:14px;color:#dcecdf;line-height:1.35}
+  .cfg-label small{display:block;color:var(--muted);font-size:14px;margin-top:2px}
   .cfg-input,.cfg-select{width:100%;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#0b1310;color:#eefbf3;font:inherit}
   .cfg-input[type="number"]{max-width:170px}
   .cfg-seg{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
-  .cfg-seg-opt{appearance:none;-webkit-appearance:none;cursor:pointer;padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:#111916;color:#dcecdf;font:inherit;font-size:13px;font-weight:600;min-width:72px}
+  .cfg-seg-opt{appearance:none;-webkit-appearance:none;cursor:pointer;padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:#111916;color:#dcecdf;font:inherit;font-size:14px;font-weight:600;min-width:72px}
   .cfg-seg-opt:hover{border-color:rgba(124,255,107,.45);background:rgba(124,255,107,.10);color:#eaffea}
   .cfg-seg-opt.active,.cfg-seg-opt[aria-checked="true"]{border-color:rgba(124,255,107,.75);background:rgba(124,255,107,.22);color:#ffffff;box-shadow:inset 0 0 0 1px rgba(124,255,107,.25)}
   .cfg-seg-opt:focus-visible{outline:2px solid rgba(124,255,107,.85);outline-offset:2px}
   .cfg-check{width:18px;height:18px;accent-color:#7cff6b}
   .cfg-actions{display:flex;gap:8px;flex-wrap:wrap}
-  .cfg-btn{appearance:none;cursor:pointer;padding:8px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;font:inherit;font-size:13px;font-weight:600}
+  .cfg-btn{appearance:none;cursor:pointer;padding:8px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcecdf;font:inherit;font-size:14px;font-weight:600}
   .cfg-btn:hover{border-color:rgba(124,255,107,.35);background:rgba(124,255,107,.08);color:#eaffea}
   .cfg-inline{display:flex;gap:8px;align-items:center;justify-content:flex-end}
-  .cfg-note{font-size:12.5px;color:var(--muted);line-height:1.5}
+  .cfg-note{font-size:14.5px;color:var(--muted);line-height:1.5}
   a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid rgba(124,255,107,.85);outline-offset:2px}
   .btn:focus-visible,.cfg-btn:focus-visible,.cfg-input:focus-visible,.cfg-check:focus-visible{box-shadow:0 0 0 3px rgba(124,255,107,.18)}
 </style>
@@ -126,7 +126,8 @@
       { key:'GpuCompositionRenderWidth', label:'Render Width', type:'int', desc:'Internal composition width/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 3840 for 4K). Restart/reopen required to apply.' },
       { key:'GpuCompositionRenderHeight', label:'Render Height', type:'int', desc:'Internal composition height/quality target (fitted to viewport aspect). Can be set above game display resolution (e.g. 2160 for 4K). Restart/reopen required to apply.' },
       { key:'TextureFilterMode', label:'Texture Filter Mode', type:'select', options:['Point','Bilinear','Trilinear'], desc:'Browser texture sampling: Point (sharp/aliased when scaled), Bilinear (smooth), or Trilinear. Applied on texture create/reapply; browser reopen/resize may be needed for full effect.' },
-      { key:'TextureAnisoLevel', label:'Texture Anisotropic Level', type:'int', desc:'Anisotropic filtering level (0-16). Applied on texture create/reapply; browser reopen/resize may be needed for full effect.' }
+      { key:'TextureAnisoLevel', label:'Texture Anisotropic Level', type:'int', desc:'Anisotropic filtering level (0-16). Applied on texture create/reapply; browser reopen/resize may be needed for full effect.' },
+      { key:'SharpenStrength', label:'Sharpen Strength', type:'float', desc:'Post-process sharpening (0 = off, 1 = max). Can improve perceived text clarity; too high may cause halos/ringing. Applied live.' }
     ]},
     { group:'Diagnostics', items:[
       { key:'DebugLogging', label:'Verbose Debug Logging', type:'bool', desc:'Verbose troubleshooting logs.' },
@@ -358,6 +359,7 @@
             if (item.type === 'int') input.step = '1';
             if (item.type === 'float') input.step = 'any';
             if (item.type === 'int' && item.key === 'TextureAnisoLevel') { input.min = '0'; input.max = '16'; }
+            if (item.type === 'float' && item.key === 'SharpenStrength') { input.min = '0'; input.max = '1'; input.step = '0.05'; }
             input.value = valueToString(item.key, cur);
             input.setAttribute('data-key', item.key);
             const btn = document.createElement('button');

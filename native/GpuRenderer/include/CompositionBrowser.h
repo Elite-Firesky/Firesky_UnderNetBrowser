@@ -69,6 +69,9 @@ public:
     // volume01 is clamped to [0,1]. When disabled, restores affected sessions to 1.0.
     void SetDistanceAudioVolume(bool enabled, float volume01);
 
+    // Post-process sharpen strength in [0,1]. 0 disables sharpening.
+    void SetSharpenStrength(float strength01);
+
     struct Impl;
 private:
     Impl* m_impl = nullptr;

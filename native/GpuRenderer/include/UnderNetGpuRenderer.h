@@ -93,6 +93,7 @@ UN_EXPORT double __stdcall UnGpu_CompGetZoomFactor();
 
 // Best-effort distance-based attenuation for WebView2 browser process-tree audio sessions (volume01 in [0,1]).
 UN_EXPORT void __stdcall UnGpu_CompSetDistanceAudioVolume(int32_t enabled, float volume01);
+UN_EXPORT void __stdcall UnGpu_CompSetSharpenStrength(float strength01);
 
 // Unity plugin exports are defined in .cpp (UnityPluginLoad/Unload, GetRenderEventFunc)
 UN_EXPORT void* __stdcall UnGpu_GetRenderEventFuncPtr();

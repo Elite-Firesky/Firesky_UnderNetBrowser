@@ -412,6 +412,7 @@ namespace Firesky.UnderNetBrowser
             "GpuCompositionRenderHeight",
             "TextureFilterMode",
             "TextureAnisoLevel",
+            "SharpenStrength",
             "DebugLogging",
             "AlwaysLogDiagnostics",
             "PerformanceDiagnosticsEnabled",

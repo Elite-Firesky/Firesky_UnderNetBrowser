@@ -63,12 +63,24 @@ namespace {
     Texture2D srcTex:register(t0); SamplerState samp0:register(s0);
     cbuffer CB:register(b0){ float4 srcRect; float2 dstSize; float2 srcTexSize; float4 flags; }
     struct VSOut{float4 pos:SV_Position; float2 uv:TEXCOORD0;};
-    float3 toLinear(float3 c){return pow(saturate(c),2.2);} float3 toSRGB(float3 c){return pow(saturate(c),1.0/2.2);} 
+    float3 toLinear(float3 c){return pow(saturate(c),2.2);} float3 toSRGB(float3 c){return pow(saturate(c),1.0/2.2);}
     float4 main(VSOut i):SV_Target{ float2 dstPos=i.pos.xy; float srcW=max(1,srcRect.z),srcH=max(1,srcRect.w);
       float scale=min(dstSize.x/srcW,dstSize.y/srcH); float drawW=srcW*scale, drawH=srcH*scale; float offX=(dstSize.x-drawW)*0.5, offY=(dstSize.y-drawH)*0.5;
       if(dstPos.x<offX||dstPos.x>=offX+drawW||dstPos.y<offY||dstPos.y>=offY+drawH) return float4(0,0,0,1);
       float2 local=(dstPos-float2(offX,offY))/float2(drawW,drawH); local.y=1-local.y; float2 srcPx=srcRect.xy+local*float2(srcW,srcH);
-      float2 uv=(srcPx+0.5)/max(srcTexSize,float2(1,1)); float4 c=srcTex.Sample(samp0,uv); if(flags.y<-0.5)c.rgb=toLinear(c.rgb); c.a=1; return c; })";
+      float2 uv=(srcPx+0.5)/max(srcTexSize,float2(1,1)); float4 c=srcTex.Sample(samp0,uv); if(flags.y<-0.5)c.rgb=toLinear(c.rgb);
+      float sharpen=saturate(flags.w);
+      if(sharpen>0.0005){
+        float2 texel=1.0/max(srcTexSize,float2(1,1));
+        float3 n=srcTex.Sample(samp0,uv+float2(0,-texel.y)).rgb;
+        float3 s=srcTex.Sample(samp0,uv+float2(0, texel.y)).rgb;
+        float3 e=srcTex.Sample(samp0,uv+float2( texel.x,0)).rgb;
+        float3 w=srcTex.Sample(samp0,uv+float2(-texel.x,0)).rgb;
+        if(flags.y<-0.5){n=toLinear(n); s=toLinear(s); e=toLinear(e); w=toLinear(w);}
+        float3 blur=(n+s+e+w+c.rgb)*0.2;
+        c.rgb=saturate(c.rgb+(c.rgb-blur)*(sharpen*1.5));
+      }
+      c.a=1; return c; })";
     static DXGI_FORMAT MakeSRV(DXGI_FORMAT f){ if((int)f==87) return (DXGI_FORMAT)87; if((int)f==27) return (DXGI_FORMAT)28; return f; } // B8G8R8A8_TYPELESS->UNORM, R8G8R8A8_TYPELESS->UNORM
     static DXGI_FORMAT MakeRTV(DXGI_FORMAT f){ if((int)f==87) return (DXGI_FORMAT)87; if((int)f==27) return (DXGI_FORMAT)28; return f; }
 }
@@ -190,6 +202,9 @@ struct CompositionBrowser::Impl {
     uint64_t lastDistanceAudioApplyMs = 0;
     int lastDistanceAudioAppliedMilli = -1;
     bool distanceAudioNeedsRestore = false;
+
+    // Post-process sharpen (0..1000). Applied in the composition blit pixel shader.
+    std::atomic<int> sharpenStrengthMilli{0};
 
     // blit
     ID3D11VertexShader* vs=nullptr; ID3D11PixelShader* ps=nullptr; ID3D11SamplerState* samp=nullptr; ID3D11Buffer* cb=nullptr; ID3D11BlendState* blend=nullptr; ID3D11RasterizerState* rs=nullptr; bool blitReady=false;
@@ -1695,7 +1710,10 @@ bool CompositionBrowser::CopyLatestTo(ID3D11DeviceContext* ctx, ID3D11Texture2D*
         // For sRGB RTVs hardware re-encodes on store; for UNORM RTVs Unity/engine sampling expects linear values.
         c->flags[1]=-1.f;
         c->flags[2]=dstSRGB?1.f:0.f; // diagnostic: dst treated as sRGB-capable RTV format
-        c->flags[3]=0; ctx->Unmap(m_impl->cb,0);
+        int sharpenMilli = 0;
+        try { sharpenMilli = m_impl->sharpenStrengthMilli.load(std::memory_order_relaxed); } catch (...) { sharpenMilli = 0; }
+        if (sharpenMilli < 0) sharpenMilli = 0; if (sharpenMilli > 1000) sharpenMilli = 1000;
+        c->flags[3]=(float)sharpenMilli / 1000.0f; ctx->Unmap(m_impl->cb,0);
     } 
     ID3D11RenderTargetView* oldRTV=nullptr; ID3D11DepthStencilView* oldDSV=nullptr; ctx->OMGetRenderTargets(1,&oldRTV,&oldDSV);
     FLOAT clear[4]={0,0,0,1}; ctx->ClearRenderTargetView(rtv,clear); ID3D11RenderTargetView* rtvs[]={rtv}; ctx->OMSetRenderTargets(1,rtvs,nullptr);
@@ -2031,5 +2049,16 @@ void CompositionBrowser::SetDistanceAudioVolume(bool enabled, float volume01)
     try { ApplyDistanceAudioVolumeToProcessTree(m_impl, enabled, (float)milli / 1000.0f); } catch (...) {}
     m_impl->lastDistanceAudioApplyMs = GetTickCount64();
     m_impl->lastDistanceAudioAppliedMilli = enabled ? milli : 1000;
+}
+
+void CompositionBrowser::SetSharpenStrength(float strength01)
+{
+    if (strength01 < 0.0f) strength01 = 0.0f;
+    if (strength01 > 1.0f) strength01 = 1.0f;
+    int milli = (int)(strength01 * 1000.0f + 0.5f);
+    if (milli < 0) milli = 0;
+    if (milli > 1000) milli = 1000;
+    if (!m_impl) return;
+    m_impl->sharpenStrengthMilli.store(milli, std::memory_order_relaxed);
 }
 
