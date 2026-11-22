@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.4 - 2026-11-22
+
+- Added generic app command bridge for other mods: `RegisterAppCommandHandler` / `UnregisterAppCommandHandler` and `undernet:cmd/app?target=...&action=...&req=...` → `window.__underNetAppResponse(...)`.
+- Fixed `#undernetcmd=` hash commands being re-executed by URL polling (30s dedupe + clear hash after handling), preventing duplicate app commands/late duplicate responses.
+- Fixed Chrome Back button on installed app pages (`/Apps/...` / `undernet:app`) to navigate home instead of doing nothing when history is not useful.
+- Homepage polish: app/shortcut descriptions are compact by default and reveal on hover/focus; installed-app list refresh no longer rebuilds unchanged DOM (managed homepage v21).
+- Removed built-in example app auto-creation; existing `Apps/example` folders are ignored/blocked from loading.
+
 ## v1.0.3 - 2026-11-20
 
 - Reworked the homepage desktop layout to separate **Apps** (installed/mod apps) from **Shortcuts** (web/local launch shortcuts) for clearer organization.

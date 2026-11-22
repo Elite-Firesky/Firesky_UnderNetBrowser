@@ -142,6 +142,19 @@ namespace Firesky.UnderNetBrowser
         private static Font? _cachedFont;
         private static UnderNetBrowserApp? _activeInstance;
 
+        // Generic app bridge: other mods can register handlers for undernet:cmd/app?target=<id>&action=<action>&...
+        private static readonly Dictionary<string, Func<string, Dictionary<string, string>, (bool ok, string message, string dataJson)>> _appCommandHandlers = new Dictionary<string, Func<string, Dictionary<string, string>, (bool ok, string message, string dataJson)>>(StringComparer.OrdinalIgnoreCase);
+        public static void RegisterAppCommandHandler(string targetId, Func<string, Dictionary<string, string>, (bool ok, string message, string dataJson)> handler)
+        {
+            if (string.IsNullOrWhiteSpace(targetId) || handler == null) return;
+            lock (_appCommandHandlers) { _appCommandHandlers[targetId.Trim()] = handler; }
+        }
+        public static void UnregisterAppCommandHandler(string targetId)
+        {
+            if (string.IsNullOrWhiteSpace(targetId)) return;
+            lock (_appCommandHandlers) { _appCommandHandlers.Remove(targetId.Trim()); }
+        }
+
         internal static bool HasActiveBrowserSyncContext()
         {
             try
@@ -933,7 +946,7 @@ namespace Firesky.UnderNetBrowser
 
         private static bool _webAppsFoundationEnsured;
         private static string? _cachedHomepageFileUrl;
-        private const int ManagedHomepageVersion = 19;
+        private const int ManagedHomepageVersion = 21;
         private const string ManagedHomepageMarkerPrefix = "UnderNetBrowser:managed-homepage version=";
 
         private static string GetUserDataRoot()
@@ -1010,7 +1023,7 @@ namespace Firesky.UnderNetBrowser
                 if (candidate.Equals("home", StringComparison.OrdinalIgnoreCase) || candidate.Equals("homepage", StringComparison.OrdinalIgnoreCase) ||
                     candidate.Equals("games", StringComparison.OrdinalIgnoreCase) || candidate.Equals("settings", StringComparison.OrdinalIgnoreCase) ||
                     candidate.Equals("notepad", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
-                    candidate.Equals("discord", StringComparison.OrdinalIgnoreCase))
+                    candidate.Equals("discord", StringComparison.OrdinalIgnoreCase) || candidate.Equals("example", StringComparison.OrdinalIgnoreCase))
                     return false;
 
                 appId = candidate.ToLowerInvariant();
@@ -1039,19 +1052,6 @@ namespace Firesky.UnderNetBrowser
             {
                 if (!TryParseLocalAppRoute(routeInput, out var appId)) return null;
                 EnsureWebAppsFoundation();
-                // Safety net: ensure built-in example app exists when requested.
-                if (string.Equals(appId, "example", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        var exampleDir = Path.Combine(GetAppsRootDir(), "example");
-                        Directory.CreateDirectory(exampleDir);
-                        var exampleIndex = Path.Combine(exampleDir, "index.html");
-                        if (!File.Exists(exampleIndex))
-                            File.WriteAllText(exampleIndex, BuildExampleAppHtml());
-                    }
-                    catch { }
-                }
                 var indexPath = TryGetAppIndexPath(appId);
                 if (string.IsNullOrWhiteSpace(indexPath)) return null;
                 return new Uri(indexPath).AbsoluteUri;
@@ -1097,20 +1097,6 @@ namespace Firesky.UnderNetBrowser
                     EnsureHomepageFileFromBundle(Path.Combine(homeDir, "settings.html"), "settings.html");
                     EnsureHomepageFileFromBundle(Path.Combine(homeDir, "notepad.html"), "notepad.html");
                     EnsureHomepageBinaryAssetFromBundle(Path.Combine(homeDir, "UnderNetIcon.png"), "UnderNetIcon.png");
-                }
-                catch { }
-
-                // Ensure built-in example app exists (simple plug-and-play reference).
-                try
-                {
-                    var exampleDir = Path.Combine(GetAppsRootDir(), "example");
-                    Directory.CreateDirectory(exampleDir);
-                    var exampleIndex = Path.Combine(exampleDir, "index.html");
-                    if (!File.Exists(exampleIndex))
-                    {
-                        File.WriteAllText(exampleIndex, BuildExampleAppHtml());
-                        UnderNetBrowserConfig.LogDiagnostic("[UnderNetBrowser] Created example app at root/Apps/example/index.html.");
-                    }
                 }
                 catch { }
 
@@ -1507,54 +1493,6 @@ namespace Firesky.UnderNetBrowser
 
         private static string BuildSettingsPageHtml() => ReadBundledHomepageHtmlOrFallback("settings.html", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!-- " + ManagedHomepageMarkerPrefix + ManagedHomepageVersion + " --><title>UnderNet Settings</title></head><body style=\"font-family:Segoe UI;background:#0b120f;color:#eaf8f0;padding:20px\"><h1>Settings</h1><p>Settings page source file missing. Reinstall mod files or restore <code>Homepage/settings.html</code>.</p><p><a href=\"index.html\" style=\"color:#7cff6b\">Home</a></p></body></html>");
 
-        private static string BuildExampleAppHtml()
-        {
-            // Simple built-in example app to demonstrate plug-and-play local UI hosting.
-            return @"<!DOCTYPE html>
-<html lang=""en"">
-<head>
-<meta charset=""utf-8"" />
-<meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
-<title>UnderNet Example App</title>
-<style>
-  :root { --bg:#07110d; --panel:#0f1b16; --edge:#214033; --text:#e9f7ee; --muted:#9bb7aa; --accent:#7cff6b; }
-  *{box-sizing:border-box} html,body{height:100%;margin:0}
-  body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:radial-gradient(800px 300px at 20% 0%,rgba(124,255,107,.12),transparent 60%),var(--bg);color:var(--text);padding:24px}
-  .card{max-width:900px;margin:0 auto;background:linear-gradient(180deg,rgba(18,29,23,.96),rgba(11,17,14,.96));border:1px solid var(--edge);border-radius:14px;padding:20px;box-shadow:0 16px 40px rgba(0,0,0,.35)}
-  h1{margin:0 0 8px;font-size:28px} .sub{margin:0 0 16px;color:var(--muted)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .box{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)}
-  h2{margin:0 0 8px;font-size:14px;letter-spacing:.8px;text-transform:uppercase;color:#dcecdf}
-  p,li{color:var(--muted);line-height:1.45} code{color:#dfffe3}
-  a.btn{display:inline-block;margin-top:10px;padding:8px 12px;border-radius:8px;border:1px solid rgba(124,255,107,.35);color:#eaffea;text-decoration:none;background:rgba(124,255,107,.08)}
-  a.btn:hover{background:rgba(124,255,107,.14)}
-  @media (max-width:760px){.grid{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
-  <div class=""card"">
-    <h1>Example UnderNet App</h1>
-    <p class=""sub"">This is a simple local HTML page hosted inside UnderNet Browser. Use it as a template for mod/app UIs.</p>
-    <div class=""grid"">
-      <div class=""box"">
-        <h2>How it works</h2>
-        <ul>
-          <li>Folder: <code>UserData/UnderNetBrowser/root/Apps/example/</code></li>
-          <li>Entry file: <code>index.html</code></li>
-          <li>Open with: <code>home:example</code></li>
-        </ul>
-        <a class=""btn"" href=""undernet:home"">Back to Home</a>
-      </div>
-      <div class=""box"">
-        <h2>Make your own</h2>
-        <p>Create <code>root/Apps/&lt;app-id&gt;/index.html</code>, then navigate to <code>home:&lt;app-id&gt;</code>.</p>
-        <p>This is ideal for simple interfaces (dashboards, launchers, tools, mod UIs) built with HTML/CSS/JS.</p>
-      </div>
-    </div>
-  </div>
-</body>
-</html>";
-        }
 
         private static string UrlDecodeLoose(string? s)
         {
@@ -1760,6 +1698,37 @@ namespace Firesky.UnderNetBrowser
                 var args = ParseSimpleQuery(query);
                 string status = "err";
                 string msg = "Unsupported command.";
+                if (action == "app")
+                {
+                    var target = args.TryGetValue("target", out var t) ? (t ?? "") : "";
+                    var appAction = args.TryGetValue("action", out var a) ? (a ?? "") : "";
+                    var reqId = args.TryGetValue("req", out var r) ? (r ?? "") : "";
+                    bool ok = false; string respMsg = "No app handler."; string dataJson = "null";
+                    try
+                    {
+                        Func<string, Dictionary<string, string>, (bool ok, string message, string dataJson)>? handler = null;
+                        lock (_appCommandHandlers) { _appCommandHandlers.TryGetValue(target, out handler); }
+                        if (handler != null)
+                        {
+                            var res = handler(appAction, args);
+                            ok = res.ok; respMsg = res.message ?? ""; dataJson = string.IsNullOrWhiteSpace(res.dataJson) ? "null" : res.dataJson;
+                        }
+                    }
+                    catch (Exception ex) { ok = false; respMsg = ex.Message; dataJson = "null"; }
+                    try
+                    {
+                        var js = "(function(){try{if(window.__underNetAppResponse)window.__underNetAppResponse("
+                            + "'" + EscapeJsSingleQuoted(target) + "',"
+                            + "'" + EscapeJsSingleQuoted(appAction) + "',"
+                            + (ok ? "true" : "false") + ","
+                            + "'" + EscapeJsSingleQuoted(respMsg ?? "") + "',"
+                            + dataJson + ","
+                            + "'" + EscapeJsSingleQuoted(reqId ?? "") + "');}catch(e){}})();";
+                        _gpuCompositionCapture?.ExecuteScript(js);
+                    }
+                    catch { }
+                    return true;
+                }
                 if (action == "set")
                 {
                     var key = args.TryGetValue("key", out var k) ? k : (args.TryGetValue("name", out var n) ? n : "");
@@ -3722,6 +3691,7 @@ namespace Firesky.UnderNetBrowser
                         if (string.IsNullOrWhiteSpace(dir)) continue;
                         var id = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                         if (!IsSafeAppId(id)) continue;
+                        if (string.Equals(id, "example", StringComparison.OrdinalIgnoreCase)) continue;
                         var index = Path.Combine(dir, "index.html");
                         if (!File.Exists(index)) continue;
 
@@ -3796,6 +3766,7 @@ namespace Firesky.UnderNetBrowser
         private static float _nextHomepageInstalledAppsSyncRealtime = -999f;
         private static string _lastHomepageInstalledAppsPayload = string.Empty;
         private static string _lastHomepageInstalledAppsUrl = string.Empty;
+        private static float _lastHomepageInstalledAppsInjectRealtime = -999f;
         private static string _cachedInstalledAppsPayloadJson = "[]";
         private static float _cachedInstalledAppsPayloadRealtime = -999f;
 
@@ -3827,9 +3798,12 @@ namespace Firesky.UnderNetBrowser
                 }
 
                 var payload = BuildInstalledAppsPayloadJson(forceRebuild: force);
-                // Always reinject while on homepage (throttled above): page reloads/revisits/browser restarts can reset DOM/JS state
-                // even when URL/payload are unchanged, so skipping here can make installed app shortcuts disappear.
+                bool payloadChanged = !string.Equals(payload, _lastHomepageInstalledAppsPayload, StringComparison.Ordinal);
+                bool staleInject = (now - _lastHomepageInstalledAppsInjectRealtime) >= 30f;
+                if (!force && !payloadChanged && !staleInject) return;
+
                 _lastHomepageInstalledAppsPayload = payload;
+                _lastHomepageInstalledAppsInjectRealtime = now;
                 var script = "(function(){try{var p=" + payload + ";function go(){try{if(window.__underNetSetInstalledApps){window.__underNetSetInstalledApps(p);return true;}}catch(e){}return false;}if(!go()){var n=0,t=setInterval(function(){n++;if(go()||n>20)clearInterval(t);},250);}}catch(e){}})();";
                 try { app._gpuCompositionCapture?.ExecuteScript(script); } catch { }
             }
@@ -4500,6 +4474,20 @@ namespace Firesky.UnderNetBrowser
                     try { EnsureCompositionBrowserStarted(string.IsNullOrWhiteSpace(ret) ? GetResolvedHomeUrl() : ret); } catch { }
                     return;
                 }
+                try
+                {
+                    string? cur = null;
+                    try { cur = _gpuCompositionCapture?.CurrentUrl; } catch { cur = null; }
+                    var n = (cur ?? string.Empty).Replace('\\', '/');
+                    bool isAppPage = n.IndexOf("/Apps/", StringComparison.OrdinalIgnoreCase) >= 0
+                        || n.IndexOf("undernet:app", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (isAppPage)
+                    {
+                        SetUrl("undernet:home");
+                        return;
+                    }
+                }
+                catch { }
                 _gpuCompositionCapture?.GoBack();
             }, 18);
             _forwardButton = CreateButton(_chromeRoot.transform, "UnderNetBrowser_FwdBtn", "→", new Vector2(26, 24), navBg, () => {
@@ -7996,6 +7984,8 @@ namespace Firesky.UnderNetBrowser
 
         private float _lastUrlSyncTime;
         private string _lastSyncedUrl = "";
+        private string _lastHandledUnderNetCmdTail = "";
+        private float _lastHandledUnderNetCmdTime = -999f;
         private string _lastZoomAppliedKey = "";
         private float _lastZoomApplyTime;
         private float _lastVisualDiagLog;
@@ -8307,7 +8297,15 @@ namespace Firesky.UnderNetBrowser
                                 var tail = Uri.UnescapeDataString(enc ?? string.Empty);
                                 if (!string.IsNullOrWhiteSpace(tail))
                                 {
-                                    try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail, navigateBackToSettings: true); } catch { }
+                                    float nowCmd = Time.realtimeSinceStartup;
+                                    bool duplicate = string.Equals(_lastHandledUnderNetCmdTail, tail, StringComparison.Ordinal) && (nowCmd - _lastHandledUnderNetCmdTime) < 30.0f;
+                                    if (!duplicate)
+                                    {
+                                        _lastHandledUnderNetCmdTail = tail;
+                                        _lastHandledUnderNetCmdTime = nowCmd;
+                                        try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail, navigateBackToSettings: true); } catch { }
+                                    }
+                                    try { _gpuCompositionCapture?.ExecuteScript("try{if(location.hash.indexOf('undernetcmd=')>=0){history.replaceState(null,'',location.pathname+location.search+(location.hash.replace(/(^|&)undernetcmd=[^&]*/i,'').replace(/^#&/,'#').replace(/^#$/,'')));}}catch(e){}"); } catch { }
                                     return;
                                 }
                             }
@@ -8342,7 +8340,15 @@ namespace Firesky.UnderNetBrowser
                                 var tail2 = Uri.UnescapeDataString(enc2 ?? string.Empty);
                                 if (!string.IsNullOrWhiteSpace(tail2))
                                 {
-                                    try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail2, navigateBackToSettings: true); } catch { }
+                                    float nowCmd = Time.realtimeSinceStartup;
+                                    bool duplicate = string.Equals(_lastHandledUnderNetCmdTail, tail2, StringComparison.Ordinal) && (nowCmd - _lastHandledUnderNetCmdTime) < 30.0f;
+                                    if (!duplicate)
+                                    {
+                                        _lastHandledUnderNetCmdTail = tail2;
+                                        _lastHandledUnderNetCmdTime = nowCmd;
+                                        try { TryHandleUnderNetCommandUrl("undernet:cmd/" + tail2, navigateBackToSettings: true); } catch { }
+                                    }
+                                    try { _gpuCompositionCapture?.ExecuteScript("try{if(location.hash.indexOf('undernetcmd=')>=0){history.replaceState(null,'',location.pathname+location.search+(location.hash.replace(/(^|&)undernetcmd=[^&]*/i,'').replace(/^#&/,'#').replace(/^#$/,'')));}}catch(e){}"); } catch { }
                                     return;
                                 }
                             }

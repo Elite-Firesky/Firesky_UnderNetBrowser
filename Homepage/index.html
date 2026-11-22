@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- UnderNetBrowser:managed-homepage version=19 -->
+<!-- UnderNetBrowser:managed-homepage version=21 -->
 <title>UnderNet Home</title>
 <style>
   :root{
@@ -63,8 +63,8 @@
   .cards-grid{padding:4px 4px 2px;display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;align-content:start}
   .cards-grid:empty::before{content:"No items";display:block;padding:10px 8px;color:var(--muted2);font-size:14px}
   .section-empty{margin:0 6px;padding:10px 12px;border:1px dashed rgba(255,255,255,.10);border-radius:10px;color:var(--muted2);font-size:14px;display:none}
-  .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--text);padding:24px 10px 12px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:148px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}
-  .app:hover{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
+  .app{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;text-decoration:none;color:var(--text);padding:22px 10px 14px;border-radius:14px;border:1px solid var(--edge);background:linear-gradient(180deg, rgba(18,29,23,.96), rgba(11,17,14,.96));min-height:126px;text-align:center;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease, min-height .16s ease}
+  .app:hover,.app:focus-within{border-color:rgba(124,255,107,.5);box-shadow:0 0 0 1px rgba(124,255,107,.10) inset, 0 10px 22px rgba(0,0,0,.22);transform:translateY(-1px)}
   .app.hidden{display:none}
   .icon{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;flex:0 0 auto;font-weight:800;font-size:24px;box-shadow:0 10px 20px rgba(0,0,0,.24);overflow:hidden;position:relative}
   .icon.yt{background:linear-gradient(180deg,#ff9a9a,#ff3b3b);color:#fff}
@@ -80,7 +80,8 @@
   .icon .favicon{width:100%;height:100%;object-fit:contain;padding:10px;display:block;background:transparent}
   .icon .icon-fallback{width:100%;height:100%;display:none;place-items:center;font-weight:800;font-size:24px}
   .name{font-size:15px;font-weight:700;line-height:1.2;word-break:break-word}
-  .desc{font-size:14px;color:var(--muted);line-height:1.35;word-break:break-word}
+  .desc{font-size:13px;color:var(--muted);line-height:1.35;word-break:break-word;max-height:0;opacity:0;overflow:hidden;margin-top:0;transform:translateY(4px);transition:opacity .16s ease,max-height .18s ease,margin-top .16s ease,transform .16s ease;pointer-events:none}
+  .app:hover .desc,.app:focus-within .desc{max-height:56px;opacity:1;margin-top:2px;transform:translateY(0)}
   .badge{position:absolute;top:7px;right:7px;z-index:2;font-size:14px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#f4fff6;background:rgba(20,38,28,.92);border:1px solid rgba(124,255,107,.40);padding:4px 7px;border-radius:999px;box-shadow:0 4px 10px rgba(0,0,0,.25)}
   .card-actions{position:absolute;top:6px;left:6px;display:none;gap:4px;z-index:3}
   .app[data-custom="1"]:hover .card-actions,.app[data-custom="1"]:focus-within .card-actions{display:flex}
@@ -440,22 +441,37 @@
   function renderInstalledApps(apps){
     try{
       var grid=document.getElementById('installedAppsGrid'); if(!grid) return;
+      var list=[];
+      if(apps && apps.length){
+        for(var j=0;j<apps.length;j++){
+          var app=apps[j]||{};
+          var id=String(app.id||'').trim(); if(!id) continue;
+          var name=String(app.name||id).trim() || id;
+          var desc=String(app.description||'Installed mod app').trim() || 'Installed mod app';
+          var route=String(app.route||('home:'+id)).trim() || ('home:'+id);
+          list.push({id:id,name:name,desc:desc,route:route});
+        }
+      }
+      var existing=grid.querySelectorAll('.app[data-installed-app="1"]');
+      var same=existing.length===list.length;
+      if(same){
+        for(var k=0;k<list.length;k++){
+          var ex=existing[k], it=list[k];
+          if(ex.getAttribute('data-app-id')!==it.id || ex.getAttribute('href')!==it.route || ex.getAttribute('data-name')!==(it.name+' '+it.desc+' '+it.id+' installed mod app').toLowerCase()){ same=false; break; }
+        }
+      }
+      if(same){ applyFilter(); return; }
       grid.innerHTML='';
-      if(!apps || !apps.length){ applyFilter(); return; }
-      for(var j=0;j<apps.length;j++){
-        var app=apps[j]||{};
-        var id=String(app.id||'').trim();
-        if(!id) continue;
-        var name=String(app.name||id).trim() || id;
-        var desc=String(app.description||'Installed mod app').trim() || 'Installed mod app';
-        var route=String(app.route||('home:'+id)).trim() || ('home:'+id);
+      for(var j2=0;j2<list.length;j2++){
+        var it2=list[j2];
         var a=document.createElement('a');
         a.className='app';
         a.setAttribute('data-installed-app','1');
+        a.setAttribute('data-app-id', it2.id);
         a.setAttribute('data-kind','app');
-        a.setAttribute('href', route);
-        a.setAttribute('data-name', (name+' '+desc+' '+id+' installed mod app').toLowerCase());
-        a.innerHTML='<span class="badge">Mod</span><div class="icon appi">'+escText((name||'?').charAt(0).toUpperCase())+'</div><div class="name">'+escText(name)+'</div><div class="desc">'+escText(desc)+'</div>';
+        a.setAttribute('href', it2.route);
+        a.setAttribute('data-name', (it2.name+' '+it2.desc+' '+it2.id+' installed mod app').toLowerCase());
+        a.innerHTML='<span class="badge">Mod</span><div class="icon appi">'+escText((it2.name||'?').charAt(0).toUpperCase())+'</div><div class="name">'+escText(it2.name)+'</div><div class="desc">'+escText(it2.desc)+'</div>';
         grid.appendChild(a);
       }
       applyFilter();
